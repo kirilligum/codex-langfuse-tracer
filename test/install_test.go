@@ -69,6 +69,15 @@ func TestInstallUninstallScripts(t *testing.T) {
 	if !strings.Contains(string(serviceRaw), ".codex/bin/codex-langfuse-exporter --watch") {
 		t.Fatalf("service does not use Go binary:\n%s", serviceRaw)
 	}
+	systemctlRaw, err := os.ReadFile(systemctlLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemctlText := string(systemctlRaw)
+	if !strings.Contains(systemctlText, "enable codex-langfuse-watch.service") ||
+		!strings.Contains(systemctlText, "restart codex-langfuse-watch.service") {
+		t.Fatalf("install did not enable and restart service:\n%s", systemctlText)
+	}
 
 	uninstall := exec.Command("bash", "../uninstall.sh")
 	uninstall.Env = env

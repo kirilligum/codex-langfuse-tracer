@@ -1166,11 +1166,13 @@ Privacy/data quality constraints:
   - `bash -n install.sh uninstall.sh`: PASS.
   - `systemd-analyze --user verify systemd/codex-langfuse-watch.service`: PASS after building the Go binary at `%h/.codex/bin/codex-langfuse-exporter`.
   - `git diff --check`: PASS.
+  - Live production smoke: PASS. `codex exec --model gpt-5.3-codex-spark -c model_reasoning_effort=low --skip-git-repo-check "Reply exactly: go-tracer-prod-smoke"` produced trace `6298649a7515365ccaf1c9a04ba2bca2`; Langfuse API returned trace input `Reply exactly: go-tracer-prod-smoke`, output `go-tracer-prod-smoke`, and `codex.agent`, `codex.transcript`, and `codex.terminal` observations.
 - Issues/Resolutions:
   - `t.Setenv` cannot run inside `t.Parallel`; removed parallelism only from the environment-mutating config test.
   - Go OTel `WithSyncer` emitted one HTTP POST per span; switched to `WithBatcher` so each turn flushes as one OTLP request.
   - `systemd-analyze --user verify` requires the `ExecStart` binary to exist; built the Go binary to the service path before validation.
   - Install test initially used a temporary `HOME` as `GOMODCACHE`; pointed `GOMODCACHE` at the normal Go module cache to avoid read-only module-cache cleanup failures.
+  - Live smoke found that `install.sh` did not restart an already-running Python watcher; changed install to `daemon-reload`, `enable`, and `restart`, then validated systemd was running `/home/kirill/.codex/bin/codex-langfuse-exporter --watch`.
 - Failed Attempts:
   - Contract fixture test first failed before `testdata/manifest.json` existed.
   - Parser/tool/watch/langfuse tests first failed on missing implementation packages as expected.

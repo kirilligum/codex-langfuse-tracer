@@ -100,13 +100,39 @@ The transcript and supplemental observations carry trace metadata for:
 - `file_change_types`
 - `changed_file_count`
 
+The root trace/`codex.agent` includes compact `codex_insight` metadata for filtering and table scanning:
+
+- `tool_count`
+- `command_count`
+- `failed_command_count`
+- `patch_count`
+- `changed_file_count`
+- `changed_extensions`
+- `touched_test_files`
+- `verification_command_count`
+- `verification_status`
+- `last_verification_command`
+- `last_verification_status`
+
+`verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
+
+`codex.tool.exec_command` metadata includes:
+
+- `command_kind`
+- `status`
+- `exit_code`
+- `duration_ms`
+- `failure_type`
+
+`command_kind` is fixed to `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
+
 ## Limitations To Preserve
 
 Do not weaken these caveats in future docs:
 
 - Codex rollout JSONL is not a stable public tracing API.
 - This is best-effort, not authoritative tracing.
-- It does not export hidden reasoning or encrypted reasoning content.
+- It does not export hidden chain-of-thought or encrypted reasoning content.
 - `codex.terminal` is not a byte-for-byte terminal recording.
 - It cannot guarantee a canonical list of files added to model context.
 - File reads may be visible as recorded tool calls, but that is not the same as structured model-context tracking.

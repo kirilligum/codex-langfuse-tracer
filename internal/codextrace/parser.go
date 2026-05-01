@@ -134,10 +134,14 @@ func parseEventMessage(turn *Turn, payload map[string]any, timestamp string, pen
 			coveredCallIDs[callID] = true
 		}
 		output := commandOutput(payload)
+		metadata := metadataWithoutLargeFields(payload, map[string]bool{
+			"command": true, "stdout": true, "stderr": true, "aggregated_output": true, "formatted_output": true, "parsed_cmd": true, "duration": true,
+		})
+		for key, value := range CommandInsightMetadata(payload) {
+			metadata[key] = value
+		}
 		addTerminalEntry(turn, timestamp, "tool.exec_command", commandTerminalText(payload))
-		addObservation(turn, "codex.tool.exec_command", timestamp, FormatCommand(payload["command"]), output, metadataWithoutLargeFields(payload, map[string]bool{
-			"command": true, "stdout": true, "stderr": true, "aggregated_output": true, "formatted_output": true, "parsed_cmd": true,
-		}), "tool", payload["duration"])
+		addObservation(turn, "codex.tool.exec_command", timestamp, FormatCommand(payload["command"]), output, metadata, "tool", payload["duration"])
 	case "patch_apply_end":
 		callID := stringValue(payload["call_id"])
 		if callID != "" {

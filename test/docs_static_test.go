@@ -52,3 +52,32 @@ func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 		}
 	}
 }
+
+// TEST-108
+func TestDocsTraceInsightMetadata(t *testing.T) {
+	t.Parallel()
+
+	required := []string{
+		"verification_status",
+		"verification_command_count",
+		"changed_file_count",
+		"changed_extensions",
+		"touched_test_files",
+		"command_kind",
+		"duration_ms",
+		"failure_type",
+		"hidden chain-of-thought",
+	}
+	for _, path := range []string{"README.md", "PROJECT_CONTEXT.md"} {
+		raw, err := os.ReadFile(filepath.Join("..", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.ToLower(string(raw))
+		for _, value := range required {
+			if !strings.Contains(text, value) {
+				t.Fatalf("%s missing %q", path, value)
+			}
+		}
+	}
+}

@@ -29,9 +29,10 @@ rm -f "$old_wrapper_dst"
 rm -f "$old_python_dst"
 
 systemctl --user daemon-reload
-systemctl --user enable --now codex-langfuse-watch.service
+systemctl --user enable codex-langfuse-watch.service
+systemctl --user restart codex-langfuse-watch.service
 
 echo "installed exporter: $exporter_dst"
 echo "installed service: $service_dst"
-echo "started service: codex-langfuse-watch.service"
+echo "restarted service: codex-langfuse-watch.service"
 echo "configure Langfuse credentials in ~/.codex/config.toml before expecting traces."

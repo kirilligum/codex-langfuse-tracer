@@ -9,6 +9,21 @@
   "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted.",
   "model": "gpt-5.5",
   "cwd": "/tmp/codex-langfuse-fixture",
+  "metadata": {
+    "changed_extensions": [
+      ".md"
+    ],
+    "changed_file_count": 1,
+    "command_count": 1,
+    "failed_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "patch_count": 1,
+    "tool_count": 5,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_run"
+  },
   "token_usage": {
     "cached_input": 20,
     "input": 100,
@@ -45,7 +60,14 @@
       "name": "codex.tool.exec_command",
       "type": "tool",
       "input": "printf 'ok\\n'",
-      "output": "## stdout\nok\n"
+      "output": "## stdout\nok\n",
+      "metadata": {
+        "command_kind": "other",
+        "duration_ms": 1250,
+        "exit_code": 0,
+        "failure_type": "none",
+        "status": "completed"
+      }
     },
     {
       "name": "codex.tool.apply_patch",

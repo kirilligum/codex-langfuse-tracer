@@ -62,6 +62,32 @@ For `codex.tool.apply_patch`, metadata includes:
 
 This makes file changes filterable and inspectable in Langfuse.
 
+The root trace/`codex.agent` carries compact `codex_insight` metadata for table scanning:
+
+- `tool_count`
+- `command_count`
+- `failed_command_count`
+- `patch_count`
+- `changed_file_count`
+- `changed_extensions`
+- `touched_test_files`
+- `verification_command_count`
+- `verification_status`
+- `last_verification_command`
+- `last_verification_status`
+
+`verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
+
+For `codex.tool.exec_command`, metadata includes:
+
+- `command_kind`
+- `status`
+- `exit_code`
+- `duration_ms`
+- `failure_type`
+
+`command_kind` uses a fixed enum: `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
+
 Every supplemental observation also carries trace metadata for:
 
 - `codex_session_id`

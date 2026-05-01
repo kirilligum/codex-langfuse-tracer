@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,6 +128,9 @@ func turnAttributes(turn codextrace.Turn, environment, observationType string, i
 		)
 	}
 	attrs = append(attrs, metadataAttributes(turn)...)
+	if includeTraceIO {
+		attrs = append(attrs, insightMetadataAttributes(turn)...)
+	}
 	return attrs
 }
 
@@ -178,6 +182,28 @@ func metadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
 	}
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata.model", turn.Model))
+	}
+	return attrs
+}
+
+func insightMetadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
+	metadata := codextrace.BuildInsightRollup(turn).Metadata()
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	attrs := make([]attribute.KeyValue, 0, len(keys))
+	for _, key := range keys {
+		attrKey := "langfuse.trace.metadata.codex_insight." + key
+		switch value := metadata[key].(type) {
+		case int:
+			attrs = append(attrs, attribute.Int(attrKey, value))
+		case string:
+			attrs = append(attrs, attribute.String(attrKey, value))
+		default:
+			attrs = append(attrs, attribute.String(attrKey, jsonString(value)))
+		}
 	}
 	return attrs
 }

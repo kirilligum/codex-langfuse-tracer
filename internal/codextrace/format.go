@@ -3,6 +3,7 @@ package codextrace
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -156,6 +157,11 @@ func FileChangeMetadata(changes map[string]any) map[string]any {
 			movedFiles = append(movedFiles, path+" -> "+movePath)
 		}
 	}
+	sort.Strings(changedFiles)
+	sort.Strings(addedFiles)
+	sort.Strings(modifiedFiles)
+	sort.Strings(deletedFiles)
+	sort.Strings(movedFiles)
 	return map[string]any{
 		"changed_files":      changedFiles,
 		"added_files":        addedFiles,

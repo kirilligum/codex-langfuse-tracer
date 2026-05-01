@@ -2,7 +2,9 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
@@ -52,6 +54,60 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	if terminal.ParentSpanID != agent.SpanID {
 		t.Fatalf("terminal parent = %q want %q", terminal.ParentSpanID, agent.SpanID)
 	}
+}
+
+// TEST-107
+func TestInsightMetadataExportedOnAgent(t *testing.T) {
+	t.Parallel()
+	validateInsightMetadataExportedOnAgent(t)
+}
+
+func validateInsightMetadataExportedOnAgent(t *testing.T) {
+	t.Helper()
+	turn := completeTurn(t)
+	exporter := &memoryExporter{}
+	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitTurn: %v", err)
+	}
+	spans := exporter.Snapshots()
+	agent := spans.ByName("codex.agent")
+	for _, key := range []string{
+		"langfuse.trace.metadata.codex_insight.tool_count",
+		"langfuse.trace.metadata.codex_insight.command_count",
+		"langfuse.trace.metadata.codex_insight.verification_status",
+		"langfuse.trace.metadata.codex_insight.changed_extensions",
+	} {
+		if _, ok := agent.Attributes[key]; !ok {
+			t.Fatalf("agent missing %s in %#v", key, agent.Attributes)
+		}
+	}
+	for _, span := range spans {
+		if span.Name == "codex.agent" {
+			continue
+		}
+		for key := range span.Attributes {
+			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+				t.Fatalf("%s repeats root insight attribute %s", span.Name, key)
+			}
+		}
+	}
+
+	command := spans.ByName("codex.tool.exec_command")
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(command.Attributes["langfuse.observation.metadata"]), &metadata); err != nil {
+		t.Fatalf("parse command metadata: %v", err)
+	}
+	for _, key := range []string{"command_kind", "duration_ms", "failure_type"} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("command metadata missing %s in %#v", key, metadata)
+		}
+	}
+}
+
+// EVAL-104
+func TestEvalInsightMetadataProjection(t *testing.T) {
+	t.Parallel()
+	validateInsightMetadataExportedOnAgent(t)
 }
 
 func completeTurn(t *testing.T) codextrace.Turn {

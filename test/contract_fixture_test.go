@@ -106,10 +106,109 @@ func validateGoldenFixtures(t *testing.T) {
 	}
 }
 
+func completeToolsGolden(t *testing.T) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "golden", "complete-tools.normalized.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden map[string]any
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	return golden
+}
+
+func requireMap(t *testing.T, parent map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := parent[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", key, parent[key])
+	}
+	return value
+}
+
+func requireObservationMetadata(t *testing.T, golden map[string]any, name string) map[string]any {
+	t.Helper()
+	observations, ok := golden["observations"].([]any)
+	if !ok {
+		t.Fatalf("observations = %#v, want array", golden["observations"])
+	}
+	for _, raw := range observations {
+		observation, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("observation = %#v, want object", raw)
+		}
+		if observation["name"] == name {
+			return requireMap(t, observation, "metadata")
+		}
+	}
+	t.Fatalf("missing observation %s", name)
+	return nil
+}
+
+func requireNoRawTransportOrDuration(t *testing.T, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, forbidden := range []string{"resourceSpans", "scopeSpans", `"duration"`} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("golden contains forbidden field %s in %s", forbidden, text)
+		}
+	}
+}
+
+func validateInsightFixtureCoverage(t *testing.T) {
+	t.Helper()
+	golden := completeToolsGolden(t)
+	metadata := requireMap(t, golden, "metadata")
+	for _, key := range []string{
+		"tool_count",
+		"command_count",
+		"failed_command_count",
+		"patch_count",
+		"changed_file_count",
+		"verification_command_count",
+		"verification_status",
+		"changed_extensions",
+		"touched_test_files",
+	} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("root metadata missing %q in %#v", key, metadata)
+		}
+	}
+	if _, ok := metadata["changed_files"]; ok {
+		t.Fatalf("root metadata must not include full changed_files: %#v", metadata)
+	}
+
+	commandMetadata := requireObservationMetadata(t, golden, "codex.tool.exec_command")
+	for _, key := range []string{"command_kind", "status", "exit_code", "duration_ms", "failure_type"} {
+		if _, ok := commandMetadata[key]; !ok {
+			t.Fatalf("command metadata missing %q in %#v", key, commandMetadata)
+		}
+	}
+	requireNoRawTransportOrDuration(t, golden)
+}
+
+// TEST-101
+func TestGoldenInsightMetadataSchema(t *testing.T) {
+	t.Parallel()
+	validateInsightFixtureCoverage(t)
+}
+
 // TEST-020
 func TestGoldenFixturesAreLanguageAgnostic(t *testing.T) {
 	t.Parallel()
 	validateGoldenFixtures(t)
+}
+
+// EVAL-101
+func TestEvalInsightFixtureCoverage(t *testing.T) {
+	t.Parallel()
+	validateInsightFixtureCoverage(t)
 }
 
 // EVAL-009

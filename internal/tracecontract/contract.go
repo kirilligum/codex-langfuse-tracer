@@ -15,6 +15,7 @@ type Trace struct {
 	Output        string         `json:"output,omitempty"`
 	Model         string         `json:"model,omitempty"`
 	CWD           string         `json:"cwd,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 	TokenUsage    map[string]int `json:"token_usage,omitempty"`
 	Exportable    bool           `json:"exportable,omitempty"`
 	ParseError    bool           `json:"parse_error,omitempty"`
@@ -41,6 +42,7 @@ func FromTurn(turn codextrace.Turn) Trace {
 		Output:        codextrace.ExportText(turn.OutputText()),
 		Model:         turn.Model,
 		CWD:           turn.CWD,
+		Metadata:      codextrace.BuildInsightRollup(turn).Metadata(),
 		Exportable:    true,
 		Observations: []Observation{
 			{Name: "codex.agent", Type: "agent", Input: codextrace.ExportText(turn.InputText()), Output: codextrace.ExportText(turn.OutputText())},
