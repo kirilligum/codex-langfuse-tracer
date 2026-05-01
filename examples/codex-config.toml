@@ -3,6 +3,7 @@ command = "uvx"
 args = ["--python", "3.11", "langfuse-mcp"]
 
 [mcp_servers.langfuse.env]
+# Use the Langfuse host that owns the API keys below.
 LANGFUSE_HOST = "http://localhost:3000"
 LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
 LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
