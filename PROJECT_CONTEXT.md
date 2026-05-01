@@ -20,7 +20,7 @@ The repository is standalone and not tied to any one working repo.
 
 The setup has one tracing path:
 
-1. The shell wrapper runs the real Codex CLI.
+1. The executable `codex` wrapper runs the real Codex CLI.
 2. `bin/export_codex_session_to_langfuse.py` reads Codex rollout JSONL under `~/.codex/sessions/` after Codex exits and sends Langfuse OTLP spans with visible content.
 
 Native Codex OTEL is intentionally disabled. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for this repository's trace goals.
@@ -28,10 +28,9 @@ Native Codex OTEL is intentionally disabled. It emits low-level runtime spans su
 The implementation is intentionally small:
 
 - one Python exporter
-- one bash/zsh sourceable wrapper at `shell/functions/codex.sh`
+- one shell-agnostic executable wrapper at `bin/codex-langfuse-wrapper.sh`
 - one installer, `install.sh`
 - one uninstaller, `uninstall.sh`
-- no fish support
 - no dry-run mode
 - no watch mode
 - no per-file observation fanout
@@ -43,9 +42,9 @@ The implementation is intentionally small:
 LICENSE
 README.md
 bin/export_codex_session_to_langfuse.py
+bin/codex-langfuse-wrapper.sh
 examples/codex-config.toml
 install.sh
-shell/functions/codex.sh
 uninstall.sh
 PROJECT_CONTEXT.md
 ```
@@ -56,16 +55,10 @@ PROJECT_CONTEXT.md
 
 ```text
 ~/.codex/bin/export_codex_session_to_langfuse.py
-~/.codex/shell/codex-langfuse-tracer.sh
+~/.codex/bin/codex
 ```
 
-Users load the wrapper with:
-
-```sh
-source ~/.codex/shell/codex-langfuse-tracer.sh
-```
-
-The wrapper launches the real `codex` binary, then runs one verified export for the newest rollout file after Codex exits.
+Users put `~/.codex/bin` before the real Codex binary on `PATH`. The wrapper launches the real `codex` binary, then runs one verified export for the recorded rollout file after Codex exits.
 
 The exporter reads Langfuse credentials from `~/.codex/config.toml` under `[mcp_servers.langfuse.env]`. This is the only supported credential path.
 
@@ -73,7 +66,10 @@ The exporter reads Langfuse credentials from `~/.codex/config.toml` under `[mcp_
 
 The exporter emits:
 
-- `codex.transcript` as a Langfuse `generation` observation with prompt, final answer, and token usage.
+- `codex.agent` as a Langfuse `agent` root observation for the Codex turn.
+- `codex.transcript` as a Langfuse `generation` child observation with prompt, final answer, and token usage.
+- trace-level input/output on `codex.agent` so Langfuse trace tables show prompt and final answer previews without terminal timestamps.
+- stable trace IDs derived from Codex session id and turn id when Codex does not record a trace id.
 - `codex.terminal` as one ordered stream of the visible CLI events Codex recorded locally.
 - `codex.tool.*` observations as Langfuse `tool` observations.
 - `codex.reasoning.summary` only when Codex records a non-empty visible reasoning summary.
@@ -155,17 +151,17 @@ After the final simplification, these checks passed:
 
 ```sh
 python3 -m py_compile bin/export_codex_session_to_langfuse.py
-bash -n install.sh uninstall.sh shell/functions/codex.sh
+bash -n install.sh uninstall.sh bin/codex-langfuse-wrapper.sh
 git diff --check
 python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
-bash -n ~/.codex/shell/codex-langfuse-tracer.sh
+bash -n ~/.codex/bin/codex
 ```
 
 The generated payload was checked against a local rollout: it includes `codex.terminal`, does not include `codex.timeline`, and child observations no longer set `langfuse.trace.input` / `langfuse.trace.output`.
 
-The bash/zsh installer and uninstaller were smoke-tested against a temporary `HOME`.
+The installer and uninstaller were smoke-tested against a temporary `HOME`.
 
-`zsh` is not installed on this machine, so `zsh -n` was not run.
+The local fish `co` workflow was verified through the executable wrapper.
 
 ## Future Work Guidance
 

@@ -96,6 +96,10 @@ def iso_to_ns(value: str) -> str:
     return str(int(dt.timestamp() * 1_000_000_000))
 
 
+def stable_trace_id(session_id: str, turn_id: str) -> str:
+    return hashlib.sha256(f"codex-turn:{session_id}:{turn_id}".encode()).hexdigest()[:32]
+
+
 def duration_to_ns(value: Any) -> int | None:
     if not isinstance(value, dict):
         return None
@@ -403,10 +407,10 @@ def parse_turns(session_path: Path) -> list[Turn]:
 
         if item_type == "turn_context":
             turn_id = str(payload.get("turn_id") or "")
-            trace_id = str(payload.get("trace_id") or "")
-            if not turn_id or not trace_id:
+            if not turn_id:
                 current_turn_id = None
                 continue
+            trace_id = str(payload.get("trace_id") or stable_trace_id(session_id, turn_id))
             current_turn_id = turn_id
             turns_by_id[turn_id] = Turn(
                 session_id=session_id,
@@ -595,16 +599,8 @@ def usage_details(turn: Turn) -> dict[str, int] | None:
     return {key: int(value) for key, value in usage.items() if isinstance(value, int)}
 
 
-def otlp_attributes(turn: Turn, environment: str) -> list[dict[str, Any]]:
+def turn_metadata_attrs(turn: Turn) -> list[dict[str, Any]]:
     attrs: list[dict[str, Any]] = [
-        {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
-        {"key": "langfuse.trace.input", "value": {"stringValue": export_text(turn.input_text)}},
-        {"key": "langfuse.trace.output", "value": {"stringValue": export_text(turn.output_text)}},
-        {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
-        {"key": "langfuse.environment", "value": {"stringValue": environment}},
-        {"key": "langfuse.observation.type", "value": {"stringValue": "generation"}},
-        {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(turn.input_text))}},
-        {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(turn.output_text))}},
         {"key": "langfuse.trace.metadata.codex_session_id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.trace.metadata.codex_turn_id", "value": {"stringValue": turn.turn_id}},
         {"key": "langfuse.trace.metadata.codex_transcript_exported", "value": {"boolValue": True}},
@@ -616,6 +612,31 @@ def otlp_attributes(turn: Turn, environment: str) -> list[dict[str, Any]]:
         attrs.append({"key": "langfuse.observation.metadata.cwd", "value": {"stringValue": turn.cwd}})
     if turn.model:
         attrs.append({"key": "langfuse.observation.metadata.model", "value": {"stringValue": turn.model}})
+    return attrs
+
+
+def turn_observation_attrs(turn: Turn, environment: str, observation_type: str, include_trace_io: bool = False) -> list[dict[str, Any]]:
+    attrs: list[dict[str, Any]] = [
+        {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
+        {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
+        {"key": "langfuse.environment", "value": {"stringValue": environment}},
+        {"key": "langfuse.observation.type", "value": {"stringValue": observation_type}},
+        {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(turn.input_text))}},
+        {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(turn.output_text))}},
+    ]
+    if include_trace_io:
+        attrs.extend(
+            [
+                {"key": "langfuse.trace.input", "value": {"stringValue": export_text(turn.input_text)}},
+                {"key": "langfuse.trace.output", "value": {"stringValue": export_text(turn.output_text)}},
+            ]
+        )
+    attrs.extend(turn_metadata_attrs(turn))
+    return attrs
+
+
+def transcript_attrs(turn: Turn, environment: str) -> list[dict[str, Any]]:
+    attrs = turn_observation_attrs(turn, environment, "generation")
     usage = usage_details(turn)
     if usage:
         attrs.append({"key": "langfuse.observation.usage_details", "value": {"stringValue": json.dumps(usage)}})
@@ -627,13 +648,11 @@ def observation_attrs(turn: Turn, observation: Observation, environment: str) ->
         {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
         {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.environment", "value": {"stringValue": environment}},
-        {"key": "langfuse.trace.metadata.codex_session_id", "value": {"stringValue": turn.session_id}},
-        {"key": "langfuse.trace.metadata.codex_turn_id", "value": {"stringValue": turn.turn_id}},
-        {"key": "langfuse.trace.metadata.codex_transcript_exported", "value": {"boolValue": True}},
         {"key": "langfuse.observation.type", "value": {"stringValue": observation.observation_type}},
         {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(observation.input_text))}},
         {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(observation.output_text))}},
     ]
+    attrs.extend(turn_metadata_attrs(turn))
     if observation.metadata:
         attrs.append(
             {
@@ -662,37 +681,69 @@ def terminal_observation(turn: Turn) -> Observation | None:
     )
 
 
-def observation_span(turn: Turn, observation: Observation, environment: str, key: str) -> dict[str, Any]:
-    span_id = hashlib.sha256(f"codex-observation:{turn.trace_id}:{turn.turn_id}:{key}".encode()).hexdigest()[:16]
-    return {
-        "traceId": turn.trace_id,
+def span(
+    trace_id: str,
+    span_id: str,
+    name: str,
+    start_time_unix_ns: str,
+    end_time_unix_ns: str,
+    attributes: list[dict[str, Any]],
+    parent_span_id: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "traceId": trace_id,
         "spanId": span_id,
-        "name": observation.name,
+        "name": name,
         "kind": 1,
-        "startTimeUnixNano": observation.start_time_unix_ns,
-        "endTimeUnixNano": observation.end_time_unix_ns,
-        "attributes": observation_attrs(turn, observation, environment),
+        "startTimeUnixNano": start_time_unix_ns,
+        "endTimeUnixNano": end_time_unix_ns,
+        "attributes": attributes,
     }
+    if parent_span_id:
+        result["parentSpanId"] = parent_span_id
+    return result
+
+
+def observation_span(turn: Turn, observation: Observation, environment: str, key: str, parent_span_id: str) -> dict[str, Any]:
+    span_id = hashlib.sha256(f"codex-observation:{turn.trace_id}:{turn.turn_id}:{key}".encode()).hexdigest()[:16]
+    return span(
+        turn.trace_id,
+        span_id,
+        observation.name,
+        observation.start_time_unix_ns,
+        observation.end_time_unix_ns,
+        observation_attrs(turn, observation, environment),
+        parent_span_id,
+    )
 
 
 def build_payload(turn: Turn, environment: str, service_name: str) -> dict[str, Any]:
-    span_id = hashlib.sha256(f"codex-transcript:{turn.trace_id}:{turn.turn_id}".encode()).hexdigest()[:16]
+    agent_span_id = hashlib.sha256(f"codex-agent:{turn.trace_id}:{turn.turn_id}".encode()).hexdigest()[:16]
+    transcript_span_id = hashlib.sha256(f"codex-transcript:{turn.trace_id}:{turn.turn_id}".encode()).hexdigest()[:16]
     spans = [
-        {
-            "traceId": turn.trace_id,
-            "spanId": span_id,
-            "name": "codex.transcript",
-            "kind": 1,
-            "startTimeUnixNano": iso_to_ns(turn.start_ts),
-            "endTimeUnixNano": iso_to_ns(turn.end_ts),
-            "attributes": otlp_attributes(turn, environment),
-        }
+        span(
+            turn.trace_id,
+            agent_span_id,
+            "codex.agent",
+            iso_to_ns(turn.start_ts),
+            iso_to_ns(turn.end_ts),
+            turn_observation_attrs(turn, environment, "agent", include_trace_io=True),
+        ),
+        span(
+            turn.trace_id,
+            transcript_span_id,
+            "codex.transcript",
+            iso_to_ns(turn.start_ts),
+            iso_to_ns(turn.end_ts),
+            transcript_attrs(turn, environment),
+            agent_span_id,
+        ),
     ]
     for index, observation in enumerate(turn.observations):
-        spans.append(observation_span(turn, observation, environment, str(index)))
+        spans.append(observation_span(turn, observation, environment, str(index), agent_span_id))
     terminal = terminal_observation(turn)
     if terminal:
-        spans.append(observation_span(turn, terminal, environment, "terminal"))
+        spans.append(observation_span(turn, terminal, environment, "terminal", agent_span_id))
 
     return {
         "resourceSpans": [

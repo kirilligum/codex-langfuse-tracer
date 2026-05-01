@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+.env
+.playwright-cli/
 .venv/
 venv/
 *.log

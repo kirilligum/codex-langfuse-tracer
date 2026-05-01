@@ -15,8 +15,8 @@ This is a machine-level Codex setup, not a project-level dependency. Install it 
 
 The setup has one tracing path:
 
-1. The shell wrapper runs the real Codex CLI.
-2. After Codex exits, the exporter reads the newest local Codex rollout JSONL file and sends one supplemental Langfuse OTLP trace for each completed turn.
+1. The executable `codex` wrapper runs the real Codex CLI.
+2. After Codex exits, the exporter sends one supplemental Langfuse OTLP trace for each completed turn in the recorded rollout.
 
 Native Codex OTEL is intentionally not part of this setup. It emits many low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for understanding Codex prompts, answers, terminal output, tool calls, token usage, or file changes.
 
@@ -30,12 +30,13 @@ langfuse.observation.output
 langfuse.observation.metadata
 ```
 
-With a shell wrapper installed, running `codex` launches the real Codex CLI and exports the newest recorded rollout after Codex exits.
+With the wrapper installed first on `PATH`, running `codex` launches the real Codex CLI and exports the recorded rollout after Codex exits.
 
 ## What You Can See In Langfuse
 
 The exporter sends these observations when Codex records the data locally:
 
+- `codex.agent`: root agent observation with the trace-table prompt and final answer.
 - `codex.transcript`: generation observation with the user prompt, final assistant answer, and token usage.
 - `codex.terminal`: ordered visible CLI event stream built from Codex's recorded user messages, assistant messages, tool calls, command output, and patch output.
 - `codex.message.commentary`: assistant progress updates shown in the CLI.
@@ -66,9 +67,42 @@ Every supplemental observation also carries trace metadata for:
 - `codex_turn_id`
 - `codex_transcript_exported`
 
+## Trace Contract
+
+The trace surface is intentionally small. The goal is to understand Codex's input, output, visible terminal activity, tool calls, timing, and token usage without storing runtime internals.
+
+Keep and emit:
+
+- One Langfuse trace per completed Codex turn, named `codex.turn.transcript`.
+- Stable trace IDs derived from the Codex session id and turn id when Codex does not record a trace id.
+- `codex.agent` as the root `agent` observation so Langfuse renders Codex turns as agent workflows.
+- `codex.transcript` as the main child `generation` observation, with user input, final assistant output, and token usage.
+- Trace-level input/output on `codex.agent` so Langfuse trace tables show the prompt and final answer without terminal timestamps.
+- Token usage fields: `input`, `output`, `total`, `cached_input`, and `reasoning_output` when Codex records them.
+- `codex.terminal` as one ordered visible CLI stream for the turn.
+- `codex.tool.exec_command` for shell command input, terminal output, status, exit code, and duration.
+- `codex.tool.apply_patch` for patch input, patch output, changed files, change types, and unified diffs.
+- `codex.tool.mcp`, `codex.tool.web_search`, and `codex.tool.tool_search` when Codex records those calls.
+- `codex.message.commentary` for visible assistant progress messages.
+- `codex.reasoning.summary` only when Codex records a non-empty visible reasoning summary.
+
+Do not emit:
+
+- Native Codex OTEL runtime spans. This includes names such as `socket reader`, `perform`, `serve_inner`, `transport_worker`, `get_model_info`, `account/read`, `initialize`, `skills/list`, `list_all_tools`, `account/rateLimits/read`, `model_client.stream_responses_websocket`, `thread/list`, `thread/start`, `thread/read`, `thread/resume`, `thread/unsubscribe`, `model/list`, `list_models`, `session_loop`, `turn/steer`, `codex.exec`, `run_turn`, `run_sampling_request`, `handle_responses`, `receiving`, `receiving_stream`, `build_tool_call`, and `dispatch_tool_call_with_code_mode_result`.
+- `codex.timeline`; `codex.terminal` replaces it.
+- Per-file observation fanout. File changes stay as metadata on `codex.tool.apply_patch`.
+- Inferred "model context" observations. File reads may appear as command output, but they are not labeled as model context.
+- Hidden chain-of-thought or encrypted reasoning content.
+- Duplicate `langfuse.trace.input` / `langfuse.trace.output` on child observations.
+- Multiple export paths for the same turn, such as native OTEL plus supplemental export or watcher plus final export.
+
+Existing old traces in Langfuse can still contain deleted names. New sessions should not emit them once `[otel]` is removed from `~/.codex/config.toml` and this wrapper/exporter is installed.
+
 ## Important Limits
 
 The `codex.terminal` observation is an ordered stream of the terminal-relevant events Codex records locally. It is not a byte-for-byte TUI recording and it is not a hidden reasoning export.
+
+Langfuse Trace Log View and Agent Graphs are UI features built from the same observations. The exporter emits typed observations (`agent`, `generation`, `tool`, and `span`) with parent-child nesting so those views can render without adding a second trace format.
 
 It does not include:
 
@@ -103,7 +137,7 @@ git clone https://github.com/kirilligum/codex-langfuse-tracer.git ~/p/codex-lang
 cd ~/p/codex-langfuse-tracer
 ```
 
-Install the exporter and bash/zsh wrapper:
+Install the exporter and shell-agnostic `codex` wrapper:
 
 ```sh
 ./install.sh
@@ -113,16 +147,24 @@ This installs:
 
 ```text
 ~/.codex/bin/export_codex_session_to_langfuse.py
-~/.codex/shell/codex-langfuse-tracer.sh
+~/.codex/bin/codex
 ```
 
-Load the wrapper in the current shell:
+Put `~/.codex/bin` before the real Codex binary on `PATH`.
+
+For bash/zsh:
 
 ```sh
-source ~/.codex/shell/codex-langfuse-tracer.sh
+export PATH="$HOME/.codex/bin:$PATH"
 ```
 
-To load it automatically, add that `source` line to `~/.bashrc` or `~/.zshrc`.
+For fish:
+
+```fish
+fish_add_path --path --prepend "$HOME/.codex/bin"
+```
+
+To make bash/zsh permanent, add the `export PATH=...` line to `~/.bashrc` or `~/.zshrc`. To make fish permanent, add the `fish_add_path ...` line to `~/.config/fish/config.fish`.
 
 ## Configure Langfuse
 
@@ -172,6 +214,7 @@ Then open Langfuse:
 5. Select the `codex.transcript` observation.
 6. Confirm Input and Output show the prompt and answer text.
 7. Select `codex.terminal` to inspect the ordered visible CLI stream for the turn.
+8. Open Log View and confirm `codex.agent` is the root, `codex.transcript` is a `Generation`, and tool calls are `Tool` rows.
 
 The visible prompt/answer text is expected on `codex.transcript`. The ordered CLI stream is expected on `codex.terminal`, and filterable tool details are expected on `codex.tool.*` observations.
 
@@ -197,10 +240,10 @@ Export a specific rollout file:
 
 ## Troubleshooting
 
-Check the wrapper is loaded:
+Check the wrapper resolves before the real Codex binary:
 
 ```sh
-type codex
+command -v codex
 ```
 
 Check the real Codex binary still resolves:
@@ -225,12 +268,13 @@ Common failure modes:
 
 - Wrong Langfuse host. Use the same host where the target Langfuse project lives.
 - Native Codex OTEL still enabled. Delete the `[otel]` section from `~/.codex/config.toml` if Langfuse shows low-level spans such as `handle_responses`, `receiving`, `socket reader`, or `serve_inner`.
+- Shell aliases or functions that bypass `PATH` and call the real Codex binary by absolute path. They should call `codex` through `PATH` so `~/.codex/bin/codex` runs first.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.
 
 ## Remove
 
-Remove the transcript exporter and bash/zsh wrapper:
+Remove the transcript exporter and `codex` wrapper:
 
 ```sh
 cd ~/p/codex-langfuse-tracer
