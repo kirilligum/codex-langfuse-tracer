@@ -1,0 +1,4 @@
+{"timestamp":"2026-05-01T11:00:00Z","type":"session_meta","payload":{"id":"sess-incomplete","model":"gpt-5.5","cwd":"/tmp/codex-langfuse-fixture"}}
+{"timestamp":"2026-05-01T11:00:01Z","type":"turn_context","payload":{"turn_id":"turn-incomplete"}}
+{"timestamp":"2026-05-01T11:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"This turn never completes"}}
+{"timestamp":"2026-05-01T11:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Partial answer"}}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "session_id": "sess-incomplete",
+  "turn_id": "turn-incomplete",
+  "exportable": false,
+  "observations": []
+}

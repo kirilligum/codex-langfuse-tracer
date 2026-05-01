@@ -20,14 +20,14 @@ The repository is standalone and not tied to any one working repo.
 
 The setup has one tracing path:
 
-1. A `systemd --user` service runs `bin/export_codex_session_to_langfuse.py --watch`.
+1. A `systemd --user` service runs `~/.codex/bin/codex-langfuse-exporter --watch`.
 2. The exporter polls Codex rollout JSONL under `~/.codex/sessions/` and sends Langfuse OTLP spans for newly completed turns.
 
 Native Codex OTEL is intentionally disabled. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for this repository's trace goals.
 
 The implementation is intentionally small:
 
-- one Python exporter
+- one Go exporter binary
 - one user service at `systemd/codex-langfuse-watch.service`
 - one installer, `install.sh`
 - one uninstaller, `uninstall.sh`
@@ -41,7 +41,9 @@ The implementation is intentionally small:
 ```text
 LICENSE
 README.md
-bin/export_codex_session_to_langfuse.py
+cmd/codex-langfuse-exporter
+internal/
+testdata/
 systemd/codex-langfuse-watch.service
 examples/codex-config.toml
 install.sh
@@ -54,7 +56,7 @@ PROJECT_CONTEXT.md
 `install.sh` installs:
 
 ```text
-~/.codex/bin/export_codex_session_to_langfuse.py
+~/.codex/bin/codex-langfuse-exporter
 ~/.config/systemd/user/codex-langfuse-watch.service
 ```
 
@@ -158,10 +160,9 @@ docker compose down
 After the final simplification, these checks passed:
 
 ```sh
-python3 -m py_compile bin/export_codex_session_to_langfuse.py
+go test ./...
 bash -n install.sh uninstall.sh
 git diff --check
-python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
 systemctl --user status codex-langfuse-watch.service
 ```
 

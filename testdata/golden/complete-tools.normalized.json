@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "1e087e4ea8aa8d8e29e604d2cd8704d9",
+  "session_id": "sess-complete",
+  "turn_id": "turn-1",
+  "exportable": true,
+  "input": "Summarize the repo and run checks",
+  "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/codex-langfuse-fixture",
+  "token_usage": {
+    "cached_input": 20,
+    "input": 100,
+    "output": 40,
+    "reasoning_output": 10,
+    "total": 140
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Summarize the repo and run checks",
+      "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Summarize the repo and run checks",
+      "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted."
+    },
+    {
+      "name": "codex.message.commentary",
+      "type": "span",
+      "input": "",
+      "output": "I will inspect the files and run the checks."
+    },
+    {
+      "name": "codex.reasoning.summary",
+      "type": "span",
+      "input": "",
+      "output": "Need inspect files before editing."
+    },
+    {
+      "name": "codex.tool.exec_command",
+      "type": "tool",
+      "input": "printf 'ok\\n'",
+      "output": "## stdout\nok\n"
+    },
+    {
+      "name": "codex.tool.apply_patch",
+      "type": "tool",
+      "input": "{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch\"\n}",
+      "output": "## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```",
+      "metadata": {
+        "added_files": [],
+        "changed_file_count": 1,
+        "changed_files": [
+          "README.md"
+        ],
+        "deleted_files": [],
+        "file_change_types": {
+          "README.md": "update"
+        },
+        "modified_files": [
+          "README.md"
+        ],
+        "moved_files": []
+      }
+    },
+    {
+      "name": "codex.tool.mcp",
+      "type": "tool",
+      "input": "{\n  \"server\": \"github\",\n  \"tool\": \"issues/list\"\n}",
+      "output": "{\n  \"count\": 0\n}"
+    },
+    {
+      "name": "codex.tool.web_search",
+      "type": "tool",
+      "input": "{\n  \"action\": {\n    \"results\": 1\n  },\n  \"query\": \"Langfuse Agent Graph\"\n}",
+      "output": "{\n  \"results\": 1\n}"
+    },
+    {
+      "name": "codex.tool.tool_search",
+      "type": "tool",
+      "input": "{\n  \"query\": \"langfuse\"\n}",
+      "output": "[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]"
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "## 2026-05-01T10:00:02Z user",
+        "## 2026-05-01T10:00:13Z assistant.final",
+        "tool.apply_patch"
+      ],
+      "metadata": {
+        "event_count": 9,
+        "turn_id": "turn-1"
+      }
+    }
+  ]
+}

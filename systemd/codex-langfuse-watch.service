@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/.codex/bin/export_codex_session_to_langfuse.py --watch
+ExecStart=%h/.codex/bin/codex-langfuse-exporter --watch
 Restart=on-failure
 RestartSec=5
 

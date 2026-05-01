@@ -1,0 +1,15 @@
+{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-complete","model":"gpt-5.5","cwd":"/tmp/codex-langfuse-fixture"}}
+{"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-1"}}
+{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Summarize the repo and run checks"}}
+{"timestamp":"2026-05-01T10:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"analysis","message":"I will inspect the files and run the checks."}}
+{"timestamp":"2026-05-01T10:00:04Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"Need inspect files before editing."}],"content":"HIDDEN_REASONING_SENTINEL","encrypted_content":"ENCRYPTED_REASONING_SENTINEL"}}
+{"timestamp":"2026-05-01T10:00:05Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"exec-1","command":["bash","-lc","printf 'ok\\n'"],"stdout":"ok\n","stderr":"","status":"completed","exit_code":0,"duration":{"secs":1,"nanos":250000000}}}
+{"timestamp":"2026-05-01T10:00:06Z","type":"response_item","payload":{"type":"function_call","call_id":"patch-1","name":"apply_patch","arguments":{"cmd":"*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch"}}}
+{"timestamp":"2026-05-01T10:00:07Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"patch-1","stdout":"Done","stderr":"","changes":{"README.md":{"type":"update","unified_diff":"@@\n-old\n+new"}}}}
+{"timestamp":"2026-05-01T10:00:08Z","type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"mcp-1","invocation":{"server":"github","tool":"issues/list"},"result":{"count":0},"duration":{"secs":0,"nanos":50000000}}}
+{"timestamp":"2026-05-01T10:00:09Z","type":"event_msg","payload":{"type":"web_search_end","call_id":"web-1","query":"Langfuse Agent Graph","action":{"results":1}}}
+{"timestamp":"2026-05-01T10:00:10Z","type":"response_item","payload":{"type":"tool_search_call","call_id":"search-1","name":"tool_search","arguments":{"query":"langfuse"}}}
+{"timestamp":"2026-05-01T10:00:11Z","type":"response_item","payload":{"type":"tool_search_output","call_id":"search-1","tools":[{"name":"langfuse.trace"}],"status":"completed"}}
+{"timestamp":"2026-05-01T10:00:12Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":40,"total_tokens":140,"cached_input_tokens":20,"reasoning_output_tokens":10}}}}
+{"timestamp":"2026-05-01T10:00:13Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Checks passed with sk-lf-live-secret and ghp_live_secret redacted."}}
+{"timestamp":"2026-05-01T10:00:14Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Checks passed with sk-lf-live-secret and ghp_live_secret redacted."}}

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "complete-tools",
+      "rollout": "testdata/rollouts/complete-tools.jsonl",
+      "golden": "testdata/golden/complete-tools.normalized.json",
+      "categories": [
+        "completed_turn",
+        "trace_preview",
+        "terminal_stream",
+        "commentary",
+        "visible_reasoning_summary",
+        "hidden_reasoning_exclusion",
+        "exec_tool",
+        "apply_patch_metadata",
+        "mcp_tool",
+        "web_search",
+        "tool_search",
+        "redaction",
+        "truncation",
+        "state_dedupe"
+      ]
+    },
+    {
+      "id": "incomplete-turn",
+      "rollout": "testdata/rollouts/incomplete-turn.jsonl",
+      "golden": "testdata/golden/incomplete-turn.normalized.json",
+      "categories": [
+        "incomplete_turn"
+      ]
+    },
+    {
+      "id": "corrupt-rollout",
+      "rollout": "testdata/rollouts/corrupt-rollout.jsonl",
+      "golden": "testdata/golden/corrupt-rollout.normalized.json",
+      "categories": [
+        "corrupt_rollout"
+      ]
+    }
+  ]
+}

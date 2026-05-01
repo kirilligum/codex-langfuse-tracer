@@ -147,7 +147,7 @@ Install and start the exporter service:
 This installs:
 
 ```text
-~/.codex/bin/export_codex_session_to_langfuse.py
+~/.codex/bin/codex-langfuse-exporter
 ~/.config/systemd/user/codex-langfuse-watch.service
 ```
 
@@ -188,10 +188,16 @@ See [examples/codex-config.toml](examples/codex-config.toml).
 
 ## Verify
 
-Syntax-check the installed files:
+Run the local test suite:
 
 ```sh
-python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
+go test ./...
+```
+
+Confirm the installed binary is available:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --latest --no-verify
 ```
 
 Confirm the watcher is running:
@@ -226,19 +232,19 @@ The watcher is the normal export path. Manual export is for explicit backfill or
 Export the latest local Codex session:
 
 ```sh
-~/.codex/bin/export_codex_session_to_langfuse.py --latest
+~/.codex/bin/codex-langfuse-exporter --latest
 ```
 
 Export a known Codex session:
 
 ```sh
-~/.codex/bin/export_codex_session_to_langfuse.py --session-id <SESSION_ID>
+~/.codex/bin/codex-langfuse-exporter --session-id <SESSION_ID>
 ```
 
 Export a specific rollout file:
 
 ```sh
-~/.codex/bin/export_codex_session_to_langfuse.py --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
+~/.codex/bin/codex-langfuse-exporter --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
 ```
 
 ## Troubleshooting
