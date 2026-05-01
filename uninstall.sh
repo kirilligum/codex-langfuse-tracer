@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+
+exporter_dst="$codex_home/bin/export_codex_session_to_langfuse.py"
+log_file="$codex_home/langfuse-transcript-export.log"
+wrapper_dst="$codex_home/shell/codex-langfuse-tracer.sh"
+
+rm -f "$exporter_dst"
+rm -f "$log_file"
+rm -f "$wrapper_dst"
+
+echo "removed bash/zsh wrapper: $wrapper_dst"
+echo "removed exporter: $exporter_dst"
+echo "edit ~/.codex/config.toml to remove [otel] and optional [mcp_servers.langfuse] blocks."

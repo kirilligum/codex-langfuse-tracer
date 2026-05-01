@@ -6,7 +6,7 @@ This is a machine-level Codex setup, not a project-level dependency. Install it 
 
 ## Status
 
-- Tested with Codex CLI `0.125.0`.
+- Tested with Codex CLI `0.128.0`.
 - Uses Codex's local rollout JSONL files under `~/.codex/sessions/`.
 - Unofficial best-effort companion exporter. Codex's rollout file format and OTEL config schema may change.
 - Apache-2.0 licensed.
@@ -28,7 +28,7 @@ langfuse.observation.output
 langfuse.observation.metadata
 ```
 
-With the fish wrapper installed, running `codex` starts a background watcher before launching the real Codex CLI. The watcher exports tool/content observations while the interactive session is open, and a final export runs after Codex exits.
+With a shell wrapper installed, running `codex` starts a background watcher before launching the real Codex CLI. The watcher exports tool/content observations while the interactive session is open, and a final export runs after Codex exits.
 
 ## What You Can See In Langfuse
 
@@ -55,6 +55,12 @@ For `codex.tool.apply_patch`, metadata includes:
 
 This makes file changes filterable and inspectable in Langfuse.
 
+Every supplemental observation also carries trace metadata for:
+
+- `codex_session_id`
+- `codex_turn_id`
+- `codex_transcript_exported`
+
 ## Important Limits
 
 This is not a byte-for-byte recording of the terminal and it is not a hidden reasoning export.
@@ -67,6 +73,7 @@ It does not include:
 - File writes performed outside `apply_patch` as structured file-change metadata, unless they appear in command output or diffs recorded by Codex.
 - Arbitrarily large outputs beyond the exporter's per-field cap.
 - Perfect secret handling.
+- Guaranteed idempotent re-export behavior.
 
 For context files specifically: Codex may record startup instructions, user-provided text, shell commands that read files, and patch diffs. It does not always emit a distinct structured event saying "this file was added to model context." Treat file-context visibility as best-effort.
 
@@ -78,7 +85,7 @@ The exporter redacts several common token/key patterns, but redaction is a last 
 
 Protect `~/.codex/config.toml` if it contains API keys or a Basic auth header:
 
-```fish
+```sh
 chmod 600 ~/.codex/config.toml
 ```
 
@@ -86,71 +93,43 @@ chmod 600 ~/.codex/config.toml
 
 Clone the repo:
 
-```fish
+```sh
 git clone https://github.com/kirilligum/codex-langfuse-tracer.git ~/p/codex-langfuse-tracer
 cd ~/p/codex-langfuse-tracer
 ```
 
-Install the exporter and fish wrapper:
+Install the exporter and bash/zsh wrapper:
 
-```fish
-./install.fish
+```sh
+./install.sh
 ```
 
 This installs:
 
 ```text
 ~/.codex/bin/export_codex_session_to_langfuse.py
-~/.config/fish/functions/codex.fish
+~/.codex/shell/codex-langfuse-tracer.sh
 ```
 
-Reload the wrapper in the current fish shell:
+Load the wrapper in the current shell:
 
-```fish
-functions -e codex
-source ~/.config/fish/functions/codex.fish
+```sh
+source ~/.codex/shell/codex-langfuse-tracer.sh
 ```
+
+To load it automatically, add that `source` line to `~/.bashrc` or `~/.zshrc`.
 
 ## Configure Langfuse
 
-Create a Langfuse API key pair in the target Langfuse project.
+Create a Langfuse API key pair in the target project. Use the same host and keys for both the supplemental exporter and native Codex OTEL.
 
-Set fish universal variables for the transcript exporter:
+Host examples:
 
-```fish
-set -Ux LANGFUSE_HOST "https://us.cloud.langfuse.com"
-set -Ux LANGFUSE_PUBLIC_KEY "<LANGFUSE_PUBLIC_KEY>"
-set -Ux LANGFUSE_SECRET_KEY "<LANGFUSE_SECRET_KEY>"
-```
+- Local self-hosted Langfuse: `http://localhost:3000`
+- Langfuse Cloud US: `https://us.cloud.langfuse.com`
+- Langfuse Cloud EU/default: `https://cloud.langfuse.com`
 
-Use the host for your Langfuse region. For EU/cloud default projects this may be:
-
-```fish
-set -Ux LANGFUSE_HOST "https://cloud.langfuse.com"
-```
-
-Build the Basic auth token for Codex native OTEL:
-
-```fish
-set -l LANGFUSE_OTEL_AUTH (printf "%s:%s" $LANGFUSE_PUBLIC_KEY $LANGFUSE_SECRET_KEY | base64 | tr -d '\n')
-echo $LANGFUSE_OTEL_AUTH
-```
-
-Edit `~/.codex/config.toml` and add the Codex OTEL section:
-
-```toml
-[otel]
-environment = "default"
-exporter = "none"
-log_user_prompt = false
-trace_exporter = { otlp-http = { endpoint = "https://us.cloud.langfuse.com/api/public/otel/v1/traces", protocol = "binary", headers = { "Authorization" = "Basic <BASE64_PUBLIC_KEY_COLON_SECRET_KEY>", "x-langfuse-ingestion-version" = "4" } } }
-```
-
-Do not use the older `[telemetry]` block for Codex CLI `0.125.0`; that version uses `[otel]`.
-
-In the tested setup, Codex did not expand environment variables inside OTEL headers, so the Basic header had to be pasted directly into `config.toml`. Re-check this behavior for your Codex version before relying on env-var interpolation.
-
-Optional Langfuse MCP config can live in the same file:
+Store the exporter credentials in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.langfuse]
@@ -158,10 +137,33 @@ command = "uvx"
 args = ["--python", "3.11", "langfuse-mcp"]
 
 [mcp_servers.langfuse.env]
-LANGFUSE_HOST = "https://us.cloud.langfuse.com"
+LANGFUSE_HOST = "http://localhost:3000"
 LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
 LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
 ```
+
+Build the Basic auth token for native Codex OTEL:
+
+```sh
+LANGFUSE_PUBLIC_KEY="<LANGFUSE_PUBLIC_KEY>"
+LANGFUSE_SECRET_KEY="<LANGFUSE_SECRET_KEY>"
+LANGFUSE_OTEL_AUTH="$(printf "%s:%s" "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n')"
+echo "$LANGFUSE_OTEL_AUTH"
+```
+
+Add the Codex OTEL section to the same `~/.codex/config.toml` file:
+
+```toml
+[otel]
+environment = "default"
+exporter = "none"
+log_user_prompt = false
+trace_exporter = { otlp-http = { endpoint = "http://localhost:3000/api/public/otel/v1/traces", protocol = "binary", headers = { "Authorization" = "Basic <BASE64_PUBLIC_KEY_COLON_SECRET_KEY>", "x-langfuse-ingestion-version" = "4" } } }
+```
+
+Use the matching host in `LANGFUSE_HOST` and in the OTEL endpoint. Do not use the older `[telemetry]` block for tested Codex CLI versions; use `[otel]`.
+
+In the tested setup, Codex did not expand environment variables inside OTEL headers, so the Basic header had to be pasted directly into `config.toml`. Re-check this behavior for your Codex version before relying on env-var interpolation.
 
 See [examples/codex-config.toml](examples/codex-config.toml).
 
@@ -169,14 +171,13 @@ See [examples/codex-config.toml](examples/codex-config.toml).
 
 Syntax-check the installed files:
 
-```fish
+```sh
 python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
-fish -n ~/.config/fish/functions/codex.fish
 ```
 
 Run a small Codex prompt:
 
-```fish
+```sh
 codex exec --model gpt-5.4-mini --config model_reasoning_effort='"low"' --sandbox read-only --skip-git-repo-check "Reply exactly: langfuse-smoke-test"
 ```
 
@@ -195,75 +196,69 @@ Native Codex observations can still have empty Input/Output. The visible prompt/
 
 Export the latest local Codex session:
 
-```fish
+```sh
 ~/.codex/bin/export_codex_session_to_langfuse.py --latest
 ```
 
 Export a known Codex session:
 
-```fish
+```sh
 ~/.codex/bin/export_codex_session_to_langfuse.py --session-id <SESSION_ID>
 ```
 
 Export a specific rollout file:
 
-```fish
+```sh
 ~/.codex/bin/export_codex_session_to_langfuse.py --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
-```
-
-Parse without sending:
-
-```fish
-~/.codex/bin/export_codex_session_to_langfuse.py --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl --dry-run
 ```
 
 ## Troubleshooting
 
 Check the wrapper is loaded:
 
-```fish
-functions codex
+```sh
+type codex
 ```
 
 Check the real Codex binary still resolves:
 
-```fish
+```sh
 command -v codex
 ```
 
 Check exporter logs:
 
-```fish
+```sh
 tail -n 100 ~/.codex/langfuse-transcript-export.log
 ```
 
 Find the local session file for a prompt:
 
-```fish
+```sh
 rg -l "some prompt text" ~/.codex/sessions
 ```
 
 Common failure modes:
 
-- Wrong Langfuse region. Use the same host as the project, for example `https://us.cloud.langfuse.com`.
-- Old Codex config schema. Codex CLI `0.125.0` uses `[otel]`, not `[telemetry]`.
+- Wrong Langfuse host. Use the same host in `LANGFUSE_HOST` and the OTEL endpoint.
+- Old Codex config schema. Tested Codex CLI versions use `[otel]`, not `[telemetry]`.
 - Basic header is split across lines. The token must be one continuous string.
-- Fish wrapper was installed after an existing Codex session started. Exit Codex and start a new `codex`.
+- The wrapper was installed after an existing Codex session started. Exit Codex and start a new `codex`.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty native observations. Select the supplemental `codex.transcript` observation.
 
 ## Remove
 
-Remove the transcript exporter and fish wrapper:
+Remove the transcript exporter and bash/zsh wrapper:
 
-```fish
+```sh
 cd ~/p/codex-langfuse-tracer
-./uninstall.fish
+./uninstall.sh
 ```
 
 Open a new shell and confirm `codex` resolves to the real binary:
 
-```fish
+```sh
 type codex
 ```
 
@@ -278,12 +273,3 @@ trace_exporter = { otlp-http = { endpoint = "...", protocol = "binary", headers 
 ```
 
 If Langfuse MCP was added only for this setup, remove the `[mcp_servers.langfuse]` block too.
-
-## Better Alternatives To Consider
-
-This project is intentionally small and works with the data Codex already writes locally. For more robust production use, consider:
-
-- Native Codex OTEL only, if metadata and timings are enough.
-- A future official Codex hook/plugin API, if one exposes transcript and file events directly.
-- A dedicated Langfuse SDK exporter that models sessions, generations, tool calls, and files as first-class Langfuse objects.
-- An OpenTelemetry collector pipeline if you need central redaction, filtering, routing, or retention control before data reaches Langfuse.

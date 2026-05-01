@@ -86,21 +86,15 @@ def iso_to_ns(value: str) -> str:
     return str(int(dt.timestamp() * 1_000_000_000))
 
 
-def load_config(config_path: Path, host: str | None, public_key: str | None, secret_key: str | None) -> LangfuseConfig:
+def load_config(config_path: Path) -> LangfuseConfig:
     cfg: dict[str, Any] = {}
     if config_path.exists():
         cfg = tomllib.loads(config_path.read_text(encoding="utf-8"))
 
     mcp_env = cfg.get("mcp_servers", {}).get("langfuse", {}).get("env", {})
-    resolved_host = (
-        host
-        or os.environ.get("LANGFUSE_HOST")
-        or os.environ.get("LANGFUSE_BASE_URL")
-        or mcp_env.get("LANGFUSE_HOST")
-        or mcp_env.get("LANGFUSE_BASE_URL")
-    )
-    resolved_public = public_key or os.environ.get("LANGFUSE_PUBLIC_KEY") or mcp_env.get("LANGFUSE_PUBLIC_KEY")
-    resolved_secret = secret_key or os.environ.get("LANGFUSE_SECRET_KEY") or mcp_env.get("LANGFUSE_SECRET_KEY")
+    resolved_host = mcp_env.get("LANGFUSE_HOST")
+    resolved_public = mcp_env.get("LANGFUSE_PUBLIC_KEY")
+    resolved_secret = mcp_env.get("LANGFUSE_SECRET_KEY")
 
     missing = [
         name
@@ -112,7 +106,7 @@ def load_config(config_path: Path, host: str | None, public_key: str | None, sec
         if not value
     ]
     if missing:
-        raise ValueError(f"Missing Langfuse {'/'.join(missing)} in env or {config_path}")
+        raise ValueError(f"Missing Langfuse {'/'.join(missing)} in [mcp_servers.langfuse.env] in {config_path}")
 
     return LangfuseConfig(
         host=str(resolved_host).rstrip("/"),
@@ -533,6 +527,9 @@ def observation_attrs(turn: Turn, observation: Observation, environment: str) ->
         {"key": "langfuse.trace.output", "value": {"stringValue": export_text(turn.output_text)}},
         {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.environment", "value": {"stringValue": environment}},
+        {"key": "langfuse.trace.metadata.codex_session_id", "value": {"stringValue": turn.session_id}},
+        {"key": "langfuse.trace.metadata.codex_turn_id", "value": {"stringValue": turn.turn_id}},
+        {"key": "langfuse.trace.metadata.codex_transcript_exported", "value": {"boolValue": True}},
         {"key": "langfuse.observation.type", "value": {"stringValue": "span"}},
         {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(observation.input_text))}},
         {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(observation.output_text))}},
@@ -726,7 +723,6 @@ def export_session_turns(
     environment: str,
     service_name: str,
     turn_id: str | None = None,
-    dry_run: bool = False,
     quiet: bool = False,
 ) -> list[Turn]:
     turns = parse_turns(session_path)
@@ -748,9 +744,6 @@ def export_session_turns(
                 f"output={preview(export_text(turn.output_text))!r} "
                 f"observations={len(turn.observations)}"
             )
-
-    if dry_run:
-        return exportable
 
     for turn in exportable:
         status = export_turn(config, turn, environment, service_name)
@@ -828,12 +821,8 @@ def main() -> int:
     parser.add_argument("--turn-id", help="Only export one turn id from the selected session")
     parser.add_argument("--start-after-marker", type=Path, help="Only watch sessions started or modified after this file")
     parser.add_argument("--config", type=Path, default=default_config_path())
-    parser.add_argument("--host", help="Override Langfuse host, for example https://us.cloud.langfuse.com")
-    parser.add_argument("--public-key", help="Override Langfuse public key")
-    parser.add_argument("--secret-key", help="Override Langfuse secret key")
     parser.add_argument("--environment", default=DEFAULT_ENVIRONMENT)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE_NAME)
-    parser.add_argument("--dry-run", action="store_true", help="Parse and print what would be exported")
     parser.add_argument("--quiet", action="store_true", help="Only print errors")
     parser.add_argument("--no-verify", action="store_true", help="Do not fetch traces after export")
     parser.add_argument("--verify-wait-seconds", type=float, default=25.0)
@@ -843,7 +832,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        config = load_config(args.config, args.host, args.public_key, args.secret_key)
+        config = load_config(args.config)
         if args.watch:
             return watch_sessions(
                 config,
@@ -869,14 +858,10 @@ def main() -> int:
             args.environment,
             args.service_name,
             args.turn_id,
-            args.dry_run,
             args.quiet,
         )
         if not exportable:
             return 1
-
-        if args.dry_run:
-            return 0
 
         if not args.no_verify:
             for turn in exportable:
