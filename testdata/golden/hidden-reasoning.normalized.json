@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "11111111111111111111111111111111",
+  "session_id": "sess-reasoning",
+  "turn_id": "turn-reasoning",
+  "exportable": true,
+  "input": "Export only visible reasoning",
+  "output": "Visible answer only.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/reasoning",
+  "metadata": {
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "failed_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "patch_count": 0,
+    "tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable"
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Export only visible reasoning",
+      "output": "Visible answer only."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Export only visible reasoning",
+      "output": "Visible answer only."
+    },
+    {
+      "name": "codex.reasoning.summary",
+      "type": "span",
+      "input": "",
+      "output": "Visible plan only."
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "Visible plan only.",
+        "## 2026-05-01T11:50:04Z assistant.final"
+      ],
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "turn-reasoning"
+      }
+    }
+  ]
+}

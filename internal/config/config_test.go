@@ -19,6 +19,9 @@ func TestLoadConfig(t *testing.T) {
 	if got := DefaultStatePath(); got != filepath.Join(home, ".codex-custom", buildinfo.DefaultStateFileName) {
 		t.Fatalf("DefaultStatePath() = %q", got)
 	}
+	if got := DefaultConfigPath(); got != filepath.Join(home, ".codex-custom", "config.toml") {
+		t.Fatalf("DefaultConfigPath() = %q", got)
+	}
 
 	configPath := filepath.Join(home, "config.toml")
 	err := os.WriteFile(configPath, []byte(`
@@ -52,5 +55,25 @@ LANGFUSE_SECRET_KEY = "sk-lf-test"
 	}
 	if !strings.Contains(err.Error(), "[mcp_servers.langfuse.env]") {
 		t.Fatalf("missing error lacks config path hint: %v", err)
+	}
+
+	incompletePath := filepath.Join(home, "incomplete.toml")
+	if err := os.WriteFile(incompletePath, []byte(`
+[mcp_servers.langfuse.env]
+LANGFUSE_HOST = "http://localhost:3000"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(incompletePath)
+	if err == nil {
+		t.Fatal("Load(incomplete) succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "public key/secret key") {
+		t.Fatalf("incomplete error = %v", err)
+	}
+
+	t.Setenv("CODEX_HOME", "")
+	if got := CodexHome(); !strings.HasSuffix(got, ".codex") {
+		t.Fatalf("CodexHome() with no CODEX_HOME = %q", got)
 	}
 }

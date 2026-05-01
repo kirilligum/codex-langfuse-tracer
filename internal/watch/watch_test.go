@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 )
 
@@ -90,6 +91,49 @@ func TestWatchScanSemantics(t *testing.T) {
 	}
 	if exported != 0 {
 		t.Fatalf("duplicate exported = %d", exported)
+	}
+}
+
+func TestInitializeStateAndWatchCancel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state.json")
+	now := time.Date(2026, 5, 1, 10, 30, 0, 0, time.UTC)
+	var stdout bytes.Buffer
+	state, err := InitializeState(statePath, now, &stdout, false)
+	if err != nil {
+		t.Fatalf("InitializeState: %v", err)
+	}
+	wantWatermark := now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano()
+	if state.ScanWatermarkNS != wantWatermark {
+		t.Fatalf("watermark = %d, want %d", state.ScanWatermarkNS, wantWatermark)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("initialized watch state")) {
+		t.Fatalf("missing init log: %s", stdout.String())
+	}
+	loaded, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState after init: %v", err)
+	}
+	if loaded == nil || loaded.ScanWatermarkNS != wantWatermark {
+		t.Fatalf("saved state mismatch: %+v", loaded)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = WatchSessions(ctx, ScanOptions{
+		Root:                root,
+		StatePath:           statePath,
+		PollIntervalSeconds: 0.001,
+		Quiet:               true,
+		Export: func(context.Context, codextrace.Turn) (int, error) {
+			t.Fatal("export should not run for empty canceled watch")
+			return 0, nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WatchSessions canceled error = %v", err)
 	}
 }
 

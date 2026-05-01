@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "33333333333333333333333333333333",
+  "session_id": "sess-content",
+  "turn_id": "turn-content",
+  "exportable": true,
+  "input": "Use response item content as input.",
+  "output": "Response item content is exported.",
+  "model": "gpt-5.4",
+  "cwd": "/tmp/content",
+  "metadata": {
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "failed_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "patch_count": 0,
+    "tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable"
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Use response item content as input.",
+      "output": "Response item content is exported."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Use response item content as input.",
+      "output": "Response item content is exported."
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "## 2026-05-01T12:20:04Z assistant.final"
+      ],
+      "metadata": {
+        "event_count": 1,
+        "turn_id": "turn-content"
+      }
+    }
+  ]
+}

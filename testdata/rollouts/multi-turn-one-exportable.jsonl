@@ -1,0 +1,7 @@
+{"timestamp":"2026-05-01T11:10:00Z","type":"session_meta","payload":{"id":"sess-multi","model":"gpt-5.5","cwd":"/tmp/multi"}}
+{"timestamp":"2026-05-01T11:10:01Z","type":"turn_context","payload":{"turn_id":"turn-draft","trace_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+{"timestamp":"2026-05-01T11:10:02Z","type":"event_msg","payload":{"type":"user_message","message":"This turn is still in progress"}}
+{"timestamp":"2026-05-01T11:10:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"analysis","message":"Still working."}}
+{"timestamp":"2026-05-01T11:10:04Z","type":"turn_context","payload":{"turn_id":"turn-done","trace_id":"cccccccccccccccccccccccccccccccc"}}
+{"timestamp":"2026-05-01T11:10:05Z","type":"event_msg","payload":{"type":"user_message","message":"Export only this completed turn"}}
+{"timestamp":"2026-05-01T11:10:06Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Only the completed turn is exportable."}}

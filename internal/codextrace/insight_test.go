@@ -2,6 +2,7 @@ package codextrace
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -144,6 +145,29 @@ func TestInsightRollup(t *testing.T) {
 	}
 	if len(rollup.TouchedTestFiles) != 0 {
 		t.Fatalf("TouchedTestFiles = %#v", rollup.TouchedTestFiles)
+	}
+}
+
+func TestInsightRollupFailedVerification(t *testing.T) {
+	t.Parallel()
+
+	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "failed-command.jsonl"))
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	exportable := ExportableTurns(turns)
+	if len(exportable) != 1 {
+		t.Fatalf("exportable turns = %d, want 1", len(exportable))
+	}
+	rollup := BuildInsightRollup(exportable[0])
+	if rollup.CommandCount != 2 || rollup.FailedCommandCount != 1 || rollup.VerificationCommandCount != 2 {
+		t.Fatalf("command rollup mismatch: %+v", rollup)
+	}
+	if rollup.VerificationStatus != "failed" || rollup.LastVerificationCommand != "go test ./..." || rollup.LastVerificationStatus != "completed" {
+		t.Fatalf("verification rollup mismatch: %+v", rollup)
+	}
+	if !reflect.DeepEqual(rollup.ChangedExtensions, []string{".go"}) {
+		t.Fatalf("ChangedExtensions = %#v", rollup.ChangedExtensions)
 	}
 }
 

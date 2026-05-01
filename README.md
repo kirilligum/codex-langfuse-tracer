@@ -217,8 +217,10 @@ See [examples/codex-config.toml](examples/codex-config.toml).
 Run the local test suite:
 
 ```sh
-go test ./...
+go test ./... -count=1
 ```
+
+For focused parser, contract, watcher, exporter, and fuzz commands, see [TESTING.md](TESTING.md).
 
 Confirm the installed binary is available:
 

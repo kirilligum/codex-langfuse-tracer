@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "dddddddddddddddddddddddddddddddd",
+  "session_id": "sess-failed",
+  "turn_id": "turn-failed",
+  "exportable": true,
+  "input": "Fix failing tests",
+  "output": "Tests are passing after the parser fix.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/failed",
+  "metadata": {
+    "changed_extensions": [
+      ".go"
+    ],
+    "changed_file_count": 1,
+    "command_count": 2,
+    "failed_command_count": 1,
+    "last_verification_command": "go test ./...",
+    "last_verification_status": "completed",
+    "patch_count": 1,
+    "tool_count": 3,
+    "touched_test_files": [],
+    "verification_command_count": 2,
+    "verification_status": "failed"
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Fix failing tests",
+      "output": "Tests are passing after the parser fix."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Fix failing tests",
+      "output": "Tests are passing after the parser fix."
+    },
+    {
+      "name": "codex.tool.exec_command",
+      "type": "tool",
+      "input": "go test ./...",
+      "output": "## stderr\nFAIL ./internal/codextrace\n",
+      "metadata": {
+        "command_kind": "test",
+        "duration_ms": 400,
+        "exit_code": 1,
+        "failure_type": "nonzero_exit",
+        "status": "completed"
+      }
+    },
+    {
+      "name": "codex.tool.apply_patch",
+      "type": "tool",
+      "input": "{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: internal/codextrace/parser.go\\n@@\\n-bug\\n+fix\\n*** End Patch\"\n}",
+      "output": "## stdout\nDone\n\n## internal/codextrace/parser.go (update)\n\n```diff\n@@\n-bug\n+fix\n```",
+      "metadata": {
+        "changed_file_count": 1,
+        "changed_files": [
+          "internal/codextrace/parser.go"
+        ],
+        "file_change_types": {
+          "internal/codextrace/parser.go": "update"
+        }
+      }
+    },
+    {
+      "name": "codex.tool.exec_command",
+      "type": "tool",
+      "input": "go test ./...",
+      "output": "## stdout\nok ./...\n",
+      "metadata": {
+        "command_kind": "test",
+        "duration_ms": 2000,
+        "exit_code": 0,
+        "failure_type": "none",
+        "status": "completed"
+      }
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "tool.exec_command",
+        "tool.apply_patch",
+        "## 2026-05-01T11:20:07Z assistant.final"
+      ],
+      "metadata": {
+        "event_count": 5,
+        "turn_id": "turn-failed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-01T11:50:00Z","type":"session_meta","payload":{"id":"sess-reasoning","model":"gpt-5.5","cwd":"/tmp/reasoning"}}
+{"timestamp":"2026-05-01T11:50:01Z","type":"turn_context","payload":{"turn_id":"turn-reasoning","trace_id":"11111111111111111111111111111111"}}
+{"timestamp":"2026-05-01T11:50:02Z","type":"event_msg","payload":{"type":"user_message","message":"Export only visible reasoning"}}
+{"timestamp":"2026-05-01T11:50:03Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"Visible plan only."}],"content":"SECRET_HIDDEN_REASONING","encrypted_content":"SECRET_ENCRYPTED_REASONING"}}
+{"timestamp":"2026-05-01T11:50:04Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Visible answer only."}}

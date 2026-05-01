@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "session_id": "sess-no-tools",
+  "turn_id": "turn-no-tools",
+  "exportable": true,
+  "input": "Explain the project status",
+  "output": "The project status is stable.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/no-tools",
+  "metadata": {
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "failed_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "patch_count": 0,
+    "tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable"
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Explain the project status",
+      "output": "The project status is stable."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Explain the project status",
+      "output": "The project status is stable."
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "## 2026-05-01T11:00:02Z user",
+        "## 2026-05-01T11:00:03Z assistant.final"
+      ],
+      "metadata": {
+        "event_count": 2,
+        "turn_id": "turn-no-tools"
+      }
+    }
+  ]
+}

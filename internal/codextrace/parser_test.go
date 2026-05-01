@@ -52,3 +52,35 @@ func TestEvalParserGoldenCorpus(t *testing.T) {
 	t.Parallel()
 	validateCompletedAndIncompleteTurns(t)
 }
+
+func TestResponseMessageContentShapes(t *testing.T) {
+	t.Parallel()
+
+	content := []any{
+		map[string]any{"type": "input_text", "text": "first"},
+		map[string]any{"type": "ignored", "text": "skip"},
+		map[string]any{"type": "input_text", "text": "second"},
+	}
+	if got := textFromContent(content, "input_text"); got != "first\nsecond" {
+		t.Fatalf("textFromContent(valid) = %q", got)
+	}
+	for _, unsupported := range []any{"plain text", map[string]any{"type": "input_text", "text": "ignored"}, nil} {
+		if got := textFromContent(unsupported, "input_text"); got != "" {
+			t.Fatalf("textFromContent(%#v) = %q, want empty", unsupported, got)
+		}
+	}
+}
+
+func TestStableIDs(t *testing.T) {
+	t.Parallel()
+
+	traceID := StableTraceID("session", "turn")
+	if len(traceID) != 32 || traceID != StableTraceID("session", "turn") {
+		t.Fatalf("trace id is not stable 32-char hex: %q", traceID)
+	}
+	first := StableSpanID("prefix", traceID, "turn", "a")
+	second := StableSpanID("prefix", traceID, "turn", "b")
+	if len(first) != 16 || first == second {
+		t.Fatalf("span ids not distinct and stable: %q %q", first, second)
+	}
+}

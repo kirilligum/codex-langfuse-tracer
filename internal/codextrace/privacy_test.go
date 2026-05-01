@@ -50,3 +50,19 @@ func TestEvalRedactionCorpus(t *testing.T) {
 		}
 	}
 }
+
+func TestLongExportRedactsBeforeTruncating(t *testing.T) {
+	t.Parallel()
+
+	secret := "api_key = abcdefghijklmnop"
+	exported := ExportText(strings.Repeat("x", buildinfo.MaxFieldChars-20) + secret + " " + strings.Repeat("y", 100))
+	if strings.Contains(exported, "abcdefghijklmnop") {
+		t.Fatalf("long export leaked secret: %q", exported[len(exported)-120:])
+	}
+	if !strings.Contains(exported, "api_key = <redacted>") {
+		t.Fatalf("long export missing redacted marker near truncation boundary")
+	}
+	if !strings.Contains(exported, "[truncated to 50000 characters]") {
+		t.Fatalf("long export missing truncation suffix")
+	}
+}

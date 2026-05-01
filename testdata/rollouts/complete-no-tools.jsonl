@@ -1,0 +1,4 @@
+{"timestamp":"2026-05-01T11:00:00Z","type":"session_meta","payload":{"id":"sess-no-tools","model":"gpt-5.5","cwd":"/tmp/no-tools"}}
+{"timestamp":"2026-05-01T11:00:01Z","type":"turn_context","payload":{"turn_id":"turn-no-tools","trace_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+{"timestamp":"2026-05-01T11:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Explain the project status"}}
+{"timestamp":"2026-05-01T11:00:03Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"The project status is stable."}}

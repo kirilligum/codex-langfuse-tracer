@@ -23,6 +23,107 @@
       ]
     },
     {
+      "id": "complete-no-tools",
+      "rollout": "testdata/rollouts/complete-no-tools.jsonl",
+      "golden": "testdata/golden/complete-no-tools.normalized.json",
+      "categories": [
+        "completed_turn",
+        "no_tools",
+        "trace_preview",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "multi-turn-one-exportable",
+      "rollout": "testdata/rollouts/multi-turn-one-exportable.jsonl",
+      "golden": "testdata/golden/multi-turn-one-exportable.normalized.json",
+      "categories": [
+        "completed_turn",
+        "incomplete_turn",
+        "multi_turn",
+        "trace_preview",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "failed-command",
+      "rollout": "testdata/rollouts/failed-command.jsonl",
+      "golden": "testdata/golden/failed-command.normalized.json",
+      "categories": [
+        "completed_turn",
+        "exec_tool",
+        "apply_patch_metadata",
+        "failed_command",
+        "verification_metadata",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "missing-optional-fields",
+      "rollout": "testdata/rollouts/missing-optional-fields.jsonl",
+      "golden": "testdata/golden/missing-optional-fields.normalized.json",
+      "categories": [
+        "completed_turn",
+        "missing_optional_fields",
+        "trace_preview"
+      ]
+    },
+    {
+      "id": "unknown-event",
+      "rollout": "testdata/rollouts/unknown-event.jsonl",
+      "golden": "testdata/golden/unknown-event.normalized.json",
+      "categories": [
+        "completed_turn",
+        "unknown_event",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "hidden-reasoning",
+      "rollout": "testdata/rollouts/hidden-reasoning.jsonl",
+      "golden": "testdata/golden/hidden-reasoning.normalized.json",
+      "categories": [
+        "completed_turn",
+        "visible_reasoning_summary",
+        "hidden_reasoning_exclusion",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "web-search-contract",
+      "rollout": "testdata/rollouts/web-search-contract.jsonl",
+      "golden": "testdata/golden/web-search-contract.normalized.json",
+      "categories": [
+        "completed_turn",
+        "web_search",
+        "web_search_contract",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "response-message-content",
+      "rollout": "testdata/rollouts/response-message-content.jsonl",
+      "golden": "testdata/golden/response-message-content.normalized.json",
+      "categories": [
+        "completed_turn",
+        "response_item_content",
+        "trace_preview"
+      ]
+    },
+    {
+      "id": "secret-tool-output",
+      "rollout": "testdata/rollouts/secret-tool-output.jsonl",
+      "golden": "testdata/golden/secret-tool-output.normalized.json",
+      "categories": [
+        "completed_turn",
+        "exec_tool",
+        "apply_patch_metadata",
+        "redaction",
+        "tool_output_redaction",
+        "terminal_stream"
+      ]
+    },
+    {
       "id": "incomplete-turn",
       "rollout": "testdata/rollouts/incomplete-turn.jsonl",
       "golden": "testdata/golden/incomplete-turn.normalized.json",

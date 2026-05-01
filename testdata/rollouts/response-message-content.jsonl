@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-01T12:20:00Z","type":"session_meta","payload":{"id":"sess-content","model":"gpt-5.4","cwd":"/tmp/content"}}
+{"timestamp":"2026-05-01T12:20:01Z","type":"turn_context","payload":{"turn_id":"turn-content","trace_id":"33333333333333333333333333333333"}}
+{"timestamp":"2026-05-01T12:20:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Use response item content as input."}]}}
+{"timestamp":"2026-05-01T12:20:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Response item content is exported."}]}}
+{"timestamp":"2026-05-01T12:20:04Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Response item content is exported."}}

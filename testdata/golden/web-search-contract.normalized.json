@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "trace_id": "22222222222222222222222222222222",
+  "session_id": "sess-web",
+  "turn_id": "turn-web",
+  "exportable": true,
+  "input": "Search current docs",
+  "output": "The rollout records only web search action metadata.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/web",
+  "metadata": {
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "failed_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "patch_count": 0,
+    "tool_count": 1,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable"
+  },
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Search current docs",
+      "output": "The rollout records only web search action metadata."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Search current docs",
+      "output": "The rollout records only web search action metadata."
+    },
+    {
+      "name": "codex.tool.web_search",
+      "type": "tool",
+      "input": "{\n  \"action\": {\n    \"query\": \"current docs\",\n    \"results\": 2\n  },\n  \"query\": \"current docs\"\n}",
+      "output": "{\n  \"query\": \"current docs\",\n  \"results\": 2\n}"
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output_contains": [
+        "tool.web_search",
+        "The rollout records only web search action metadata."
+      ],
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "turn-web"
+      }
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
@@ -27,21 +28,52 @@ func AuthHeader(cfg config.LangfuseConfig) string {
 }
 
 func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn codextrace.Turn, environment, serviceName string) (int, error) {
+	recorder := &statusRecorder{base: http.DefaultTransport}
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(strings.TrimRight(cfg.Host, "/")+"/api/public/otel/v1/traces"),
 		otlptracehttp.WithHeaders(map[string]string{
 			"Authorization":                AuthHeader(cfg),
 			"x-langfuse-ingestion-version": "4",
 		}),
+		otlptracehttp.WithHTTPClient(&http.Client{Transport: recorder}),
 	)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = exporter.Shutdown(ctx) }()
 	if err := EmitTurn(ctx, turn, environment, serviceName, exporter); err != nil {
+		_ = exporter.Shutdown(ctx)
 		return 0, err
 	}
-	return http.StatusOK, nil
+	if err := exporter.Shutdown(ctx); err != nil {
+		return 0, err
+	}
+	status := recorder.StatusCode()
+	if status < 200 || status > 299 {
+		return status, fmt.Errorf("Langfuse OTLP export failed with HTTP %d", status)
+	}
+	return status, nil
+}
+
+type statusRecorder struct {
+	base       http.RoundTripper
+	mu         sync.Mutex
+	statusCode int
+}
+
+func (s *statusRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := s.base.RoundTrip(req)
+	if resp != nil {
+		s.mu.Lock()
+		s.statusCode = resp.StatusCode
+		s.mu.Unlock()
+	}
+	return resp, err
+}
+
+func (s *statusRecorder) StatusCode() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statusCode
 }
 
 func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter) error {
@@ -61,7 +93,6 @@ func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceNam
 		sdktrace.WithIDGenerator(newFixedIDGenerator(turn.TraceID, ids)),
 		sdktrace.WithBatcher(exporter),
 	)
-	defer func() { _ = provider.Shutdown(ctx) }()
 	tracer := provider.Tracer(buildinfo.ScopeName, trace.WithInstrumentationVersion(buildinfo.Version))
 
 	agentCtx, agent := tracer.Start(ctx, "codex.agent",
@@ -82,7 +113,7 @@ func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceNam
 		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal")
 	}
 	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
-	return nil
+	return provider.Shutdown(ctx)
 }
 
 func emitObservation(ctx context.Context, tracer trace.Tracer, turn codextrace.Turn, observation codextrace.Observation, environment, key string) {

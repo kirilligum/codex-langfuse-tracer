@@ -89,15 +89,17 @@ func compareTraceContract(t *testing.T, golden, actual tracecontract.Trace) {
 		t.Fatalf("metadata mismatch\ngolden=%s\nactual=%s", canonicalJSON(golden.Metadata), canonicalJSON(actual.Metadata))
 	}
 
-	actualByName := map[string]tracecontract.Observation{}
+	actualByName := map[string][]tracecontract.Observation{}
 	for _, observation := range actual.Observations {
-		actualByName[observation.Name] = observation
+		actualByName[observation.Name] = append(actualByName[observation.Name], observation)
 	}
 	for _, expected := range golden.Observations {
-		observed, ok := actualByName[expected.Name]
-		if !ok {
+		matches := actualByName[expected.Name]
+		if len(matches) == 0 {
 			t.Fatalf("missing observation %s", expected.Name)
 		}
+		observed := matches[0]
+		actualByName[expected.Name] = matches[1:]
 		if expected.Type != "" && expected.Type != observed.Type {
 			t.Fatalf("%s type = %q want %q", expected.Name, observed.Type, expected.Type)
 		}

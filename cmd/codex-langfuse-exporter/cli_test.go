@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 )
@@ -62,6 +65,60 @@ func TestCLIFlags(t *testing.T) {
 		if !strings.Contains(err.Error(), "exactly one source mode") {
 			t.Fatalf("parseArgs(%v) error = %q", args, err)
 		}
+	}
+}
+
+func TestSelectedSessionPathExplicitAndInvalidModes(t *testing.T) {
+	t.Parallel()
+
+	path, err := selectedSessionPath(options{Path: "/tmp/rollout.jsonl"})
+	if err != nil {
+		t.Fatalf("selectedSessionPath(path): %v", err)
+	}
+	if path != "/tmp/rollout.jsonl" {
+		t.Fatalf("selected path = %q", path)
+	}
+	if _, err := selectedSessionPath(options{}); err == nil {
+		t.Fatal("selectedSessionPath accepted empty mode")
+	}
+}
+
+func TestSelectedSessionPathLatestAndSessionID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	sessionDir := filepath.Join(home, "sessions", "2026", "05", "01")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(sessionDir, "rollout-old-session.jsonl")
+	newPath := filepath.Join(sessionDir, "rollout-target-session.jsonl")
+	for _, path := range []string{oldPath, newPath} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldTime := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	newTime := oldTime.Add(time.Minute)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	latest, err := selectedSessionPath(options{Latest: true})
+	if err != nil {
+		t.Fatalf("selectedSessionPath(latest): %v", err)
+	}
+	if latest != newPath {
+		t.Fatalf("latest = %q, want %q", latest, newPath)
+	}
+	byID, err := selectedSessionPath(options{SessionID: "target-session"})
+	if err != nil {
+		t.Fatalf("selectedSessionPath(session-id): %v", err)
+	}
+	if byID != newPath {
+		t.Fatalf("byID = %q, want %q", byID, newPath)
 	}
 }
 

@@ -46,3 +46,56 @@ func TestTraceVerificationClient(t *testing.T) {
 		t.Fatalf("verify result = %v/%v", hasInput, hasOutput)
 	}
 }
+
+func TestTraceFetchHTTPFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			_, err := FetchTrace(context.Background(), config.LangfuseConfig{
+				Host:      server.URL,
+				PublicKey: "pk-lf-test",
+				SecretKey: "sk-lf-test",
+			}, "trace-id")
+			if err == nil {
+				t.Fatalf("FetchTrace accepted HTTP %d", status)
+			}
+		})
+	}
+}
+
+func TestTraceVerificationMalformedAndCanceled(t *testing.T) {
+	t.Parallel()
+
+	turn := completeTurn(t)
+	malformed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"observations":`))
+	}))
+	defer malformed.Close()
+	_, _, err := VerifyTraceIO(context.Background(), config.LangfuseConfig{
+		Host:      malformed.URL,
+		PublicKey: "pk-lf-test",
+		SecretKey: "sk-lf-test",
+	}, turn, 0, time.Millisecond)
+	if err == nil {
+		t.Fatal("VerifyTraceIO accepted malformed trace response")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = VerifyTraceIO(ctx, config.LangfuseConfig{
+		Host:      malformed.URL,
+		PublicKey: "pk-lf-test",
+		SecretKey: "sk-lf-test",
+	}, turn, time.Second, time.Millisecond)
+	if err == nil {
+		t.Fatal("VerifyTraceIO with canceled context succeeded, want error")
+	}
+}

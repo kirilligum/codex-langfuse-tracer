@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-01T12:10:00Z","type":"session_meta","payload":{"id":"sess-web","model":"gpt-5.5","cwd":"/tmp/web"}}
+{"timestamp":"2026-05-01T12:10:01Z","type":"turn_context","payload":{"turn_id":"turn-web","trace_id":"22222222222222222222222222222222"}}
+{"timestamp":"2026-05-01T12:10:02Z","type":"event_msg","payload":{"type":"user_message","message":"Search current docs"}}
+{"timestamp":"2026-05-01T12:10:03Z","type":"event_msg","payload":{"type":"web_search_end","call_id":"web-contract","query":"current docs","action":{"query":"current docs","results":2},"status":"completed"}}
+{"timestamp":"2026-05-01T12:10:04Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"The rollout records only web search action metadata."}}

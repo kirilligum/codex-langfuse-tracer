@@ -98,6 +98,15 @@ func validateGoldenFixtures(t *testing.T) {
 		"truncation",
 		"corrupt_rollout",
 		"state_dedupe",
+		"no_tools",
+		"multi_turn",
+		"failed_command",
+		"verification_metadata",
+		"missing_optional_fields",
+		"unknown_event",
+		"web_search_contract",
+		"response_item_content",
+		"tool_output_redaction",
 	}
 	for _, category := range required {
 		if !categories[category] {

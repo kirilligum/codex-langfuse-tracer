@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
@@ -49,5 +50,25 @@ func TestOTLPHTTPExport(t *testing.T) {
 	}
 	if !gotBody {
 		t.Fatal("empty OTLP body")
+	}
+}
+
+func TestOTLPHTTPExportFailure(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	status, err := ExportTurn(ctx, config.LangfuseConfig{
+		Host:      server.URL,
+		PublicKey: "pk-lf-test",
+		SecretKey: "sk-lf-test",
+	}, completeTurn(t), buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName)
+	if err == nil {
+		t.Fatalf("ExportTurn status=%d err=nil, want error", status)
 	}
 }
