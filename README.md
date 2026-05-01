@@ -1,6 +1,6 @@
 # Codex Langfuse Tracer
 
-Export useful Codex CLI activity to Langfuse, including visible prompts, final answers, tool calls, command output, patch diffs, and file-change metadata.
+Export useful Codex CLI activity to Langfuse, including visible prompts, final answers, terminal output, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
 
 This is a machine-level Codex setup, not a project-level dependency. Install it once on a workstation and it can trace Codex sessions from any repository.
 
@@ -8,17 +8,19 @@ This is a machine-level Codex setup, not a project-level dependency. Install it 
 
 - Tested with Codex CLI `0.128.0`.
 - Uses Codex's local rollout JSONL files under `~/.codex/sessions/`.
-- Unofficial best-effort companion exporter. Codex's rollout file format and OTEL config schema may change.
+- Unofficial best-effort companion exporter. Codex's rollout file format may change.
 - Apache-2.0 licensed.
 
 ## What It Does
 
-The setup has two layers:
+The setup has one tracing path:
 
-1. Native Codex OpenTelemetry export sends Codex spans, timing, and metadata to Langfuse.
-2. This tracer reads local Codex rollout JSONL files and sends extra Langfuse OTLP spans with visible content.
+1. The shell wrapper runs the real Codex CLI.
+2. After Codex exits, the exporter reads the newest local Codex rollout JSONL file and sends one supplemental Langfuse OTLP trace for each completed turn.
 
-The second layer exists because native Codex OTEL can show useful metadata while leaving Langfuse Input/Output fields empty. This tracer fills Langfuse trace and observation fields such as:
+Native Codex OTEL is intentionally not part of this setup. It emits many low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for understanding Codex prompts, answers, terminal output, tool calls, token usage, or file changes.
+
+The exporter fills Langfuse trace and observation fields such as:
 
 ```text
 langfuse.trace.input
@@ -28,20 +30,23 @@ langfuse.observation.output
 langfuse.observation.metadata
 ```
 
-With a shell wrapper installed, running `codex` starts a background watcher before launching the real Codex CLI. The watcher exports tool/content observations while the interactive session is open, and a final export runs after Codex exits.
+With a shell wrapper installed, running `codex` launches the real Codex CLI and exports the newest recorded rollout after Codex exits.
 
 ## What You Can See In Langfuse
 
 The exporter sends these observations when Codex records the data locally:
 
-- `codex.transcript`: user prompt and final assistant answer.
+- `codex.transcript`: generation observation with the user prompt, final assistant answer, and token usage.
+- `codex.terminal`: ordered visible CLI event stream built from Codex's recorded user messages, assistant messages, tool calls, command output, and patch output.
 - `codex.message.commentary`: assistant progress updates shown in the CLI.
+- `codex.reasoning.summary`: visible reasoning summaries when Codex records a non-empty summary.
 - `codex.tool.exec_command`: shell command input and terminal output.
 - `codex.tool.apply_patch`: patch input, changed files, and unified diffs.
 - `codex.tool.mcp`: MCP invocation and result.
 - `codex.tool.web_search`: web search query/action.
 - `codex.tool.tool_search`: deferred-tool discovery calls and results.
-- `codex.timeline`: one combined view of commentary and tool activity for the turn.
+
+Tool observations use Langfuse's `tool` observation type. The transcript uses `generation`.
 
 For `codex.tool.apply_patch`, metadata includes:
 
@@ -63,7 +68,7 @@ Every supplemental observation also carries trace metadata for:
 
 ## Important Limits
 
-This is not a byte-for-byte recording of the terminal and it is not a hidden reasoning export.
+The `codex.terminal` observation is an ordered stream of the terminal-relevant events Codex records locally. It is not a byte-for-byte TUI recording and it is not a hidden reasoning export.
 
 It does not include:
 
@@ -83,7 +88,7 @@ This can export prompt text, assistant text, tool inputs, command output, and di
 
 The exporter redacts several common token/key patterns, but redaction is a last line of defense, not a security boundary.
 
-Protect `~/.codex/config.toml` if it contains API keys or a Basic auth header:
+Protect `~/.codex/config.toml` if it contains API keys:
 
 ```sh
 chmod 600 ~/.codex/config.toml
@@ -121,7 +126,7 @@ To load it automatically, add that `source` line to `~/.bashrc` or `~/.zshrc`.
 
 ## Configure Langfuse
 
-Create a Langfuse API key pair in the target project. Use the same host and keys for both the supplemental exporter and native Codex OTEL.
+Create a Langfuse API key pair in the target project.
 
 Host examples:
 
@@ -141,29 +146,6 @@ LANGFUSE_HOST = "http://localhost:3000"
 LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
 LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
 ```
-
-Build the Basic auth token for native Codex OTEL:
-
-```sh
-LANGFUSE_PUBLIC_KEY="<LANGFUSE_PUBLIC_KEY>"
-LANGFUSE_SECRET_KEY="<LANGFUSE_SECRET_KEY>"
-LANGFUSE_OTEL_AUTH="$(printf "%s:%s" "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 | tr -d '\n')"
-echo "$LANGFUSE_OTEL_AUTH"
-```
-
-Add the Codex OTEL section to the same `~/.codex/config.toml` file:
-
-```toml
-[otel]
-environment = "default"
-exporter = "none"
-log_user_prompt = false
-trace_exporter = { otlp-http = { endpoint = "http://localhost:3000/api/public/otel/v1/traces", protocol = "binary", headers = { "Authorization" = "Basic <BASE64_PUBLIC_KEY_COLON_SECRET_KEY>", "x-langfuse-ingestion-version" = "4" } } }
-```
-
-Use the matching host in `LANGFUSE_HOST` and in the OTEL endpoint. Do not use the older `[telemetry]` block for tested Codex CLI versions; use `[otel]`.
-
-In the tested setup, Codex did not expand environment variables inside OTEL headers, so the Basic header had to be pasted directly into `config.toml`. Re-check this behavior for your Codex version before relying on env-var interpolation.
 
 See [examples/codex-config.toml](examples/codex-config.toml).
 
@@ -189,8 +171,9 @@ Then open Langfuse:
 4. Open the trace.
 5. Select the `codex.transcript` observation.
 6. Confirm Input and Output show the prompt and answer text.
+7. Select `codex.terminal` to inspect the ordered visible CLI stream for the turn.
 
-Native Codex observations can still have empty Input/Output. The visible prompt/answer text is expected on the supplemental `codex.transcript` observation. Tool details are expected on `codex.tool.*` observations and `codex.timeline`.
+The visible prompt/answer text is expected on `codex.transcript`. The ordered CLI stream is expected on `codex.terminal`, and filterable tool details are expected on `codex.tool.*` observations.
 
 ## Manual Backfill
 
@@ -240,12 +223,10 @@ rg -l "some prompt text" ~/.codex/sessions
 
 Common failure modes:
 
-- Wrong Langfuse host. Use the same host in `LANGFUSE_HOST` and the OTEL endpoint.
-- Old Codex config schema. Tested Codex CLI versions use `[otel]`, not `[telemetry]`.
-- Basic header is split across lines. The token must be one continuous string.
-- The wrapper was installed after an existing Codex session started. Exit Codex and start a new `codex`.
+- Wrong Langfuse host. Use the same host where the target Langfuse project lives.
+- Native Codex OTEL still enabled. Delete the `[otel]` section from `~/.codex/config.toml` if Langfuse shows low-level spans such as `handle_responses`, `receiving`, `socket reader`, or `serve_inner`.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
-- Empty native observations. Select the supplemental `codex.transcript` observation.
+- Empty Input/Output on unrelated observations. Select `codex.transcript`.
 
 ## Remove
 
@@ -260,16 +241,6 @@ Open a new shell and confirm `codex` resolves to the real binary:
 
 ```sh
 type codex
-```
-
-To remove native Codex OTEL export too, edit `~/.codex/config.toml` and delete the `[otel]` section:
-
-```toml
-[otel]
-environment = "default"
-exporter = "none"
-log_user_prompt = false
-trace_exporter = { otlp-http = { endpoint = "...", protocol = "binary", headers = { "Authorization" = "...", "x-langfuse-ingestion-version" = "4" } } }
 ```
 
 If Langfuse MCP was added only for this setup, remove the `[mcp_servers.langfuse]` block too.

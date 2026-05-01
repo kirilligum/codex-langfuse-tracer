@@ -1,9 +1,3 @@
-[otel]
-environment = "default"
-exporter = "none"
-log_user_prompt = false
-trace_exporter = { otlp-http = { endpoint = "http://localhost:3000/api/public/otel/v1/traces", protocol = "binary", headers = { "Authorization" = "Basic <BASE64_PUBLIC_KEY_COLON_SECRET_KEY>", "x-langfuse-ingestion-version" = "4" } } }
-
 [mcp_servers.langfuse]
 command = "uvx"
 args = ["--python", "3.11", "langfuse-mcp"]

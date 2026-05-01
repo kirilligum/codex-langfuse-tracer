@@ -13,4 +13,4 @@ rm -f "$wrapper_dst"
 
 echo "removed bash/zsh wrapper: $wrapper_dst"
 echo "removed exporter: $exporter_dst"
-echo "edit ~/.codex/config.toml to remove [otel] and optional [mcp_servers.langfuse] blocks."
+echo "edit ~/.codex/config.toml to remove the optional [mcp_servers.langfuse] block."

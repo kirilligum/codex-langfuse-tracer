@@ -53,6 +53,7 @@ class Turn:
     user_messages: list[str] = field(default_factory=list)
     assistant_messages: list[str] = field(default_factory=list)
     token_usage: dict[str, Any] | None = None
+    terminal_entries: list["TerminalEntry"] = field(default_factory=list)
     observations: list["Observation"] = field(default_factory=list)
 
     @property
@@ -65,9 +66,18 @@ class Turn:
 
 
 @dataclass
+class TerminalEntry:
+    timestamp: str
+    label: str
+    text: str
+
+
+@dataclass
 class Observation:
     name: str
-    timestamp: str
+    start_time_unix_ns: str
+    end_time_unix_ns: str
+    observation_type: str = "span"
     input_text: str = ""
     output_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -84,6 +94,23 @@ def append_unique(values: list[str], value: str | None) -> None:
 def iso_to_ns(value: str) -> str:
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return str(int(dt.timestamp() * 1_000_000_000))
+
+
+def duration_to_ns(value: Any) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    seconds = value.get("secs")
+    nanos = value.get("nanos")
+    if not isinstance(seconds, int) or not isinstance(nanos, int):
+        return None
+    return seconds * 1_000_000_000 + nanos
+
+
+def observation_bounds(timestamp: str, duration: Any = None) -> tuple[str, str]:
+    end_ns = int(iso_to_ns(timestamp))
+    elapsed_ns = duration_to_ns(duration)
+    start_ns = end_ns if not elapsed_ns else max(0, end_ns - elapsed_ns)
+    return str(start_ns), str(end_ns)
 
 
 def load_config(config_path: Path) -> LangfuseConfig:
@@ -162,13 +189,19 @@ def add_observation(
     input_text: str = "",
     output_text: str = "",
     metadata: dict[str, Any] | None = None,
+    observation_type: str = "span",
+    duration: Any = None,
 ) -> None:
     if not input_text and not output_text:
         return
+    resolved_timestamp = timestamp or turn.end_ts or turn.start_ts
+    start_ns, end_ns = observation_bounds(resolved_timestamp, duration)
     turn.observations.append(
         Observation(
             name=name,
-            timestamp=timestamp or turn.end_ts or turn.start_ts,
+            start_time_unix_ns=start_ns,
+            end_time_unix_ns=end_ns,
+            observation_type=observation_type,
             input_text=input_text,
             output_text=output_text,
             metadata=metadata or {},
@@ -176,12 +209,43 @@ def add_observation(
     )
 
 
+def add_terminal_entry(turn: Turn, timestamp: str | None, label: str, text: str | None) -> None:
+    if not text:
+        return
+    clean_text = text.strip()
+    if not clean_text:
+        return
+    if turn.terminal_entries and turn.terminal_entries[-1].label == label and turn.terminal_entries[-1].text == clean_text:
+        return
+    turn.terminal_entries.append(TerminalEntry(timestamp or turn.end_ts or turn.start_ts, label, clean_text))
+
+
 def command_output(payload: dict[str, Any]) -> str:
+    formatted = payload.get("formatted_output")
+    if formatted:
+        return f"## output\n{stable_json(formatted)}"
+
+    aggregated = payload.get("aggregated_output")
+    if aggregated:
+        return f"## output\n{stable_json(aggregated)}"
+
     parts: list[str] = []
-    for label, key in (("formatted output", "formatted_output"), ("output", "aggregated_output"), ("stdout", "stdout"), ("stderr", "stderr")):
+    for label, key in (("stdout", "stdout"), ("stderr", "stderr")):
         value = payload.get(key)
         if value:
             parts.append(f"## {label}\n{stable_json(value)}")
+    return "\n\n".join(parts)
+
+
+def command_terminal_text(payload: dict[str, Any]) -> str:
+    parts = [f"Command:\n{format_command(payload.get('command'))}"]
+    output = command_output(payload)
+    if output:
+        parts.append(f"Output:\n{output}")
+    status = payload.get("status")
+    exit_code = payload.get("exit_code")
+    if status or exit_code is not None:
+        parts.append(f"Status: {status or 'unknown'} exit_code={exit_code}")
     return "\n\n".join(parts)
 
 
@@ -203,6 +267,32 @@ def patch_output(payload: dict[str, Any]) -> str:
         elif change.get("content"):
             parts.append(f"```text\n{change['content']}\n```")
     return "\n\n".join(parts)
+
+
+def tool_terminal_text(input_text: str, output_text: str) -> str:
+    parts: list[str] = []
+    if input_text:
+        parts.append(f"Input:\n{input_text}")
+    if output_text:
+        parts.append(f"Output:\n{output_text}")
+    return "\n\n".join(parts)
+
+
+def reasoning_summary_text(summary: Any) -> str | None:
+    if isinstance(summary, str):
+        return summary.strip() or None
+    if not isinstance(summary, list):
+        return None
+
+    parts: list[str] = []
+    for item in summary:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            value = item.get("text") or item.get("summary") or item.get("content")
+            if value:
+                parts.append(stable_json(value))
+    return "\n".join(part.strip() for part in parts if part.strip()).strip() or None
 
 
 def file_change_metadata(changes: dict[str, Any]) -> dict[str, Any]:
@@ -273,36 +363,6 @@ def latest_session(root: Path) -> Path:
     return max(matches, key=lambda path: path.stat().st_mtime)
 
 
-def rollout_start_timestamp(path: Path) -> float | None:
-    parts = path.name.split("-")
-    if len(parts) < 4 or parts[0] != "rollout":
-        return None
-    try:
-        started = datetime.strptime("-".join(parts[1:4]), "%Y-%m-%dT%H-%M-%S")
-    except ValueError:
-        return None
-    return started.timestamp()
-
-
-def session_files(root: Path, marker: Path | None = None) -> list[Path]:
-    marker_time = marker.stat().st_mtime if marker and marker.exists() else None
-    paths: list[Path] = []
-
-    for path in root.glob("sessions/**/rollout-*.jsonl"):
-        if marker_time is not None:
-            started_at = rollout_start_timestamp(path)
-            if started_at is not None and started_at + 1 < marker_time:
-                continue
-            try:
-                if path.stat().st_mtime + 1 < marker_time:
-                    continue
-            except OSError:
-                continue
-        paths.append(path)
-
-    return sorted(paths)
-
-
 def text_from_content(content: Any, text_type: str) -> str | None:
     if not isinstance(content, list):
         return None
@@ -366,27 +426,35 @@ def parse_turns(session_path: Path) -> list[Turn]:
         if item_type == "event_msg":
             payload_type = payload.get("type")
             if payload_type == "user_message":
-                append_unique(turn.user_messages, payload.get("message"))
+                message = payload.get("message")
+                append_unique(turn.user_messages, message)
+                add_terminal_entry(turn, timestamp, "user", message)
             elif payload_type == "agent_message" and payload.get("phase") == "final_answer":
-                append_unique(turn.assistant_messages, payload.get("message"))
+                message = payload.get("message")
+                append_unique(turn.assistant_messages, message)
+                add_terminal_entry(turn, timestamp, "assistant.final", message)
                 turn.end_ts = timestamp or turn.end_ts
             elif payload_type == "agent_message":
+                message = payload.get("message") or ""
+                add_terminal_entry(turn, timestamp, "assistant.commentary", message)
                 add_observation(
                     turn,
                     "codex.message.commentary",
                     timestamp,
-                    output_text=payload.get("message") or "",
+                    output_text=message,
                     metadata={"phase": payload.get("phase")},
                 )
             elif payload_type == "exec_command_end":
                 call_id = str(payload.get("call_id") or "")
                 covered_call_ids.add(call_id)
+                output_text = command_output(payload)
+                add_terminal_entry(turn, timestamp, "tool.exec_command", command_terminal_text(payload))
                 add_observation(
                     turn,
                     "codex.tool.exec_command",
                     timestamp,
                     input_text=format_command(payload.get("command")),
-                    output_text=command_output(payload),
+                    output_text=output_text,
                     metadata=metadata_without_large_fields(
                         payload,
                         {
@@ -398,6 +466,8 @@ def parse_turns(session_path: Path) -> list[Turn]:
                             "parsed_cmd",
                         },
                     ),
+                    observation_type="tool",
+                    duration=payload.get("duration"),
                 )
             elif payload_type == "patch_apply_end":
                 call_id = str(payload.get("call_id") or "")
@@ -408,44 +478,59 @@ def parse_turns(session_path: Path) -> list[Turn]:
                     patch_input = stable_json(pending.get("input") or pending.get("arguments"))
                 metadata = metadata_without_large_fields(payload, {"stdout", "stderr", "changes"})
                 metadata.update(file_change_metadata(payload.get("changes") or {}))
+                output_text = patch_output(payload)
+                add_terminal_entry(turn, timestamp, "tool.apply_patch", tool_terminal_text(patch_input, output_text))
                 add_observation(
                     turn,
                     "codex.tool.apply_patch",
                     timestamp,
                     input_text=patch_input,
-                    output_text=patch_output(payload),
+                    output_text=output_text,
                     metadata=metadata,
+                    observation_type="tool",
                 )
             elif payload_type == "mcp_tool_call_end":
                 call_id = str(payload.get("call_id") or "")
                 covered_call_ids.add(call_id)
+                input_text = stable_json(payload.get("invocation"))
+                output_text = stable_json(payload.get("result"))
+                add_terminal_entry(turn, timestamp, "tool.mcp", tool_terminal_text(input_text, output_text))
                 add_observation(
                     turn,
                     "codex.tool.mcp",
                     timestamp,
-                    input_text=stable_json(payload.get("invocation")),
-                    output_text=stable_json(payload.get("result")),
+                    input_text=input_text,
+                    output_text=output_text,
                     metadata=metadata_without_large_fields(payload, {"invocation", "result"}),
+                    observation_type="tool",
                 )
             elif payload_type == "web_search_end":
                 call_id = str(payload.get("call_id") or "")
                 covered_call_ids.add(call_id)
+                input_text = stable_json({"query": payload.get("query"), "action": payload.get("action")})
+                output_text = stable_json(payload.get("action"))
+                add_terminal_entry(turn, timestamp, "tool.web_search", tool_terminal_text(input_text, output_text))
                 add_observation(
                     turn,
                     "codex.tool.web_search",
                     timestamp,
-                    input_text=stable_json({"query": payload.get("query"), "action": payload.get("action")}),
-                    output_text=stable_json(payload.get("action")),
+                    input_text=input_text,
+                    output_text=output_text,
                     metadata=metadata_without_large_fields(payload, {"query", "action"}),
+                    observation_type="tool",
                 )
             elif payload_type == "task_complete":
-                append_unique(turn.assistant_messages, payload.get("last_agent_message"))
+                message = payload.get("last_agent_message")
+                append_unique(turn.assistant_messages, message)
+                add_terminal_entry(turn, timestamp, "assistant.final", message)
                 turn.end_ts = timestamp or turn.end_ts
             elif payload_type == "token_count":
                 info = payload.get("info") or {}
                 usage = info.get("last_token_usage") or info.get("total_token_usage")
                 if usage:
                     turn.token_usage = usage
+            elif payload_type == "context_compacted":
+                add_terminal_entry(turn, timestamp, "system", "Context compacted")
             continue
 
         if item_type == "response_item":
@@ -455,6 +540,17 @@ def parse_turns(session_path: Path) -> list[Turn]:
             elif payload.get("type") == "message" and role == "assistant" and payload.get("phase") == "final_answer":
                 append_unique(turn.assistant_messages, text_from_content(payload.get("content"), "output_text"))
                 turn.end_ts = timestamp or turn.end_ts
+            elif payload.get("type") == "reasoning":
+                summary_text = reasoning_summary_text(payload.get("summary"))
+                if summary_text:
+                    add_terminal_entry(turn, timestamp, "assistant.reasoning", summary_text)
+                    add_observation(
+                        turn,
+                        "codex.reasoning.summary",
+                        timestamp,
+                        output_text=summary_text,
+                        metadata={"response_item_type": "reasoning"},
+                    )
             elif payload.get("type") in {"function_call", "custom_tool_call", "tool_search_call"}:
                 call_id = str(payload.get("call_id") or "")
                 if call_id:
@@ -466,17 +562,21 @@ def parse_turns(session_path: Path) -> list[Turn]:
                 pending = pending_calls.get(call_id, {})
                 name = pending.get("name") or payload.get("type", "tool").removesuffix("_output")
                 observation_name = "codex.tool.tool_search" if payload.get("type") == "tool_search_output" else f"codex.tool.{name}"
+                input_text = stable_json(pending.get("arguments") or pending.get("input") or pending.get("execution"))
+                output_text = stable_json(payload.get("output") or payload.get("tools"))
+                add_terminal_entry(turn, timestamp, observation_name.removeprefix("codex."), tool_terminal_text(input_text, output_text))
                 add_observation(
                     turn,
                     observation_name,
                     timestamp,
-                    input_text=stable_json(pending.get("arguments") or pending.get("input") or pending.get("execution")),
-                    output_text=stable_json(payload.get("output") or payload.get("tools")),
+                    input_text=input_text,
+                    output_text=output_text,
                     metadata={
                         "call_id": call_id,
                         "response_item_type": payload.get("type"),
                         "status": payload.get("status"),
                     },
+                    observation_type="tool",
                 )
 
     return list(turns_by_id.values())
@@ -489,6 +589,8 @@ def usage_details(turn: Turn) -> dict[str, int] | None:
         "input": turn.token_usage.get("input_tokens"),
         "output": turn.token_usage.get("output_tokens"),
         "total": turn.token_usage.get("total_tokens"),
+        "cached_input": turn.token_usage.get("cached_input_tokens"),
+        "reasoning_output": turn.token_usage.get("reasoning_output_tokens"),
     }
     return {key: int(value) for key, value in usage.items() if isinstance(value, int)}
 
@@ -500,7 +602,7 @@ def otlp_attributes(turn: Turn, environment: str) -> list[dict[str, Any]]:
         {"key": "langfuse.trace.output", "value": {"stringValue": export_text(turn.output_text)}},
         {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.environment", "value": {"stringValue": environment}},
-        {"key": "langfuse.observation.type", "value": {"stringValue": "span"}},
+        {"key": "langfuse.observation.type", "value": {"stringValue": "generation"}},
         {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(turn.input_text))}},
         {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(turn.output_text))}},
         {"key": "langfuse.trace.metadata.codex_session_id", "value": {"stringValue": turn.session_id}},
@@ -523,14 +625,12 @@ def otlp_attributes(turn: Turn, environment: str) -> list[dict[str, Any]]:
 def observation_attrs(turn: Turn, observation: Observation, environment: str) -> list[dict[str, Any]]:
     attrs: list[dict[str, Any]] = [
         {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
-        {"key": "langfuse.trace.input", "value": {"stringValue": export_text(turn.input_text)}},
-        {"key": "langfuse.trace.output", "value": {"stringValue": export_text(turn.output_text)}},
         {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.environment", "value": {"stringValue": environment}},
         {"key": "langfuse.trace.metadata.codex_session_id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.trace.metadata.codex_turn_id", "value": {"stringValue": turn.turn_id}},
         {"key": "langfuse.trace.metadata.codex_transcript_exported", "value": {"boolValue": True}},
-        {"key": "langfuse.observation.type", "value": {"stringValue": "span"}},
+        {"key": "langfuse.observation.type", "value": {"stringValue": observation.observation_type}},
         {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(observation.input_text))}},
         {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(observation.output_text))}},
     ]
@@ -544,22 +644,21 @@ def observation_attrs(turn: Turn, observation: Observation, environment: str) ->
     return attrs
 
 
-def timeline_observation(turn: Turn) -> Observation | None:
-    if not turn.observations:
+def terminal_observation(turn: Turn) -> Observation | None:
+    if not turn.terminal_entries:
         return None
 
     parts: list[str] = []
-    for index, observation in enumerate(turn.observations, start=1):
-        parts.append(f"## {index}. {observation.name}")
-        if observation.input_text:
-            parts.append(f"Input:\n{observation.input_text}")
-        if observation.output_text:
-            parts.append(f"Output:\n{observation.output_text}")
+    for entry in turn.terminal_entries:
+        parts.append(f"## {entry.timestamp} {entry.label}\n{entry.text}")
+    start_ns, _ = observation_bounds(turn.terminal_entries[0].timestamp)
+    _, end_ns = observation_bounds(turn.terminal_entries[-1].timestamp)
     return Observation(
-        name="codex.timeline",
-        timestamp=turn.end_ts,
+        name="codex.terminal",
+        start_time_unix_ns=start_ns,
+        end_time_unix_ns=end_ns,
         output_text="\n\n".join(parts),
-        metadata={"event_count": len(turn.observations), "turn_id": turn.turn_id},
+        metadata={"event_count": len(turn.terminal_entries), "turn_id": turn.turn_id},
     )
 
 
@@ -570,8 +669,8 @@ def observation_span(turn: Turn, observation: Observation, environment: str, key
         "spanId": span_id,
         "name": observation.name,
         "kind": 1,
-        "startTimeUnixNano": iso_to_ns(observation.timestamp),
-        "endTimeUnixNano": iso_to_ns(observation.timestamp),
+        "startTimeUnixNano": observation.start_time_unix_ns,
+        "endTimeUnixNano": observation.end_time_unix_ns,
         "attributes": observation_attrs(turn, observation, environment),
     }
 
@@ -591,9 +690,9 @@ def build_payload(turn: Turn, environment: str, service_name: str) -> dict[str, 
     ]
     for index, observation in enumerate(turn.observations):
         spans.append(observation_span(turn, observation, environment, str(index)))
-    timeline = timeline_observation(turn)
-    if timeline:
-        spans.append(observation_span(turn, timeline, environment, "timeline"))
+    terminal = terminal_observation(turn)
+    if terminal:
+        spans.append(observation_span(turn, terminal, environment, "terminal"))
 
     return {
         "resourceSpans": [
@@ -608,27 +707,6 @@ def build_payload(turn: Turn, environment: str, service_name: str) -> dict[str, 
                     {
                         "scope": {"name": "codex-transcript-exporter", "version": "0.1.0"},
                         "spans": spans,
-                    }
-                ],
-            }
-        ]
-    }
-
-
-def build_observation_payload(turn: Turn, observation: Observation, environment: str, service_name: str, key: str) -> dict[str, Any]:
-    return {
-        "resourceSpans": [
-            {
-                "resource": {
-                    "attributes": [
-                        {"key": "service.name", "value": {"stringValue": service_name}},
-                        {"key": "langfuse.environment", "value": {"stringValue": environment}},
-                    ]
-                },
-                "scopeSpans": [
-                    {
-                        "scope": {"name": "codex-transcript-exporter", "version": "0.1.0"},
-                        "spans": [observation_span(turn, observation, environment, key)],
                     }
                 ],
             }
@@ -753,73 +831,15 @@ def export_session_turns(
     return exportable
 
 
-def watch_sessions(
-    config: LangfuseConfig,
-    root: Path,
-    marker: Path | None,
-    environment: str,
-    service_name: str,
-    poll_interval_seconds: float,
-    watch_timeout_seconds: float,
-    quiet: bool,
-) -> int:
-    exported_turns: set[tuple[str, str]] = set()
-    exported_observations: set[tuple[str, str, int]] = set()
-    deadline = time.monotonic() + max(watch_timeout_seconds, 0.0)
-
-    while True:
-        for session_path in session_files(root, marker):
-            try:
-                turns = parse_turns(session_path)
-            except (OSError, ValueError):
-                continue
-
-            for turn in turns:
-                if not turn.trace_id:
-                    continue
-
-                for index, observation in enumerate(turn.observations):
-                    observation_key = (turn.trace_id, turn.turn_id, index)
-                    if observation_key in exported_observations:
-                        continue
-                    post_otlp(
-                        config,
-                        build_observation_payload(
-                            turn,
-                            observation,
-                            environment,
-                            service_name,
-                            str(index),
-                        ),
-                    )
-                    exported_observations.add(observation_key)
-                    if not quiet:
-                        print(f"watch_exported_observation trace={turn.trace_id} turn={turn.turn_id} name={observation.name}")
-
-                key = (turn.trace_id, turn.turn_id)
-                if key in exported_turns or not turn.input_text or not turn.output_text:
-                    continue
-                export_turn(config, turn, environment, service_name)
-                exported_turns.add(key)
-                if not quiet:
-                    print(f"watch_exported trace={turn.trace_id} turn={turn.turn_id}")
-
-        if time.monotonic() >= deadline:
-            return 0
-        time.sleep(max(poll_interval_seconds, 0.25))
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Backfill visible Codex prompt/answer text into matching Langfuse traces."
+        description="Export visible Codex prompt, answer, terminal, and tool data into matching Langfuse traces."
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--session-id", help="Codex session id from `codex resume <id>`")
     source.add_argument("--path", type=Path, help="Path to a Codex rollout JSONL file")
     source.add_argument("--latest", action="store_true", help="Export the latest Codex rollout JSONL file")
-    source.add_argument("--watch", action="store_true", help="Poll Codex rollout files and export turns as they complete")
     parser.add_argument("--turn-id", help="Only export one turn id from the selected session")
-    parser.add_argument("--start-after-marker", type=Path, help="Only watch sessions started or modified after this file")
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--environment", default=DEFAULT_ENVIRONMENT)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE_NAME)
@@ -827,24 +847,10 @@ def main() -> int:
     parser.add_argument("--no-verify", action="store_true", help="Do not fetch traces after export")
     parser.add_argument("--verify-wait-seconds", type=float, default=25.0)
     parser.add_argument("--verify-interval-seconds", type=float, default=3.0)
-    parser.add_argument("--poll-interval-seconds", type=float, default=2.0)
-    parser.add_argument("--watch-timeout-seconds", type=float, default=43_200.0)
     args = parser.parse_args()
 
     try:
         config = load_config(args.config)
-        if args.watch:
-            return watch_sessions(
-                config,
-                codex_home(),
-                args.start_after_marker.expanduser() if args.start_after_marker else None,
-                args.environment,
-                args.service_name,
-                args.poll_interval_seconds,
-                args.watch_timeout_seconds,
-                args.quiet,
-            )
-
         if args.path:
             session_path = args.path.expanduser()
         elif args.latest:

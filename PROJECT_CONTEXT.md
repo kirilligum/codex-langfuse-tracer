@@ -1,27 +1,29 @@
 # Project Context For Future Codex Sessions
 
-This file summarizes the final shape of this repository and the local Langfuse setup. It intentionally omits real API keys, Basic auth values, passwords, and other secrets.
+This file summarizes the final shape of this repository and the local Langfuse setup. It intentionally omits real API keys, passwords, and other secrets.
 
 ## Goal
 
 The project is a machine-level Codex companion that exports useful visible Codex CLI activity to Langfuse:
 
 - user prompts and final assistant answers
+- ordered visible terminal output recorded by Codex
 - visible assistant commentary
 - shell/tool calls and command output
 - `apply_patch` diffs and file-change metadata
+- token usage and command timing when available
 - MCP, web search, and deferred tool-search calls when Codex records them locally
 
 The repository is standalone and not tied to any one working repo.
 
 ## Final Design
 
-The setup has two layers:
+The setup has one tracing path:
 
-1. Native Codex OTEL sends spans, timing, and metadata to Langfuse.
-2. `bin/export_codex_session_to_langfuse.py` reads Codex rollout JSONL under `~/.codex/sessions/` and sends supplemental OTLP spans with visible content.
+1. The shell wrapper runs the real Codex CLI.
+2. `bin/export_codex_session_to_langfuse.py` reads Codex rollout JSONL under `~/.codex/sessions/` after Codex exits and sends Langfuse OTLP spans with visible content.
 
-The supplemental exporter exists because native Codex OTEL can leave Langfuse Input/Output fields empty.
+Native Codex OTEL is intentionally disabled. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for this repository's trace goals.
 
 The implementation is intentionally small:
 
@@ -31,6 +33,7 @@ The implementation is intentionally small:
 - one uninstaller, `uninstall.sh`
 - no fish support
 - no dry-run mode
+- no watch mode
 - no per-file observation fanout
 - no include/exclude config surface
 
@@ -62,13 +65,20 @@ Users load the wrapper with:
 source ~/.codex/shell/codex-langfuse-tracer.sh
 ```
 
-The wrapper starts a background watcher before launching the real `codex` binary, then runs one final verified export for the newest rollout file after Codex exits.
+The wrapper launches the real `codex` binary, then runs one verified export for the newest rollout file after Codex exits.
 
 The exporter reads Langfuse credentials from `~/.codex/config.toml` under `[mcp_servers.langfuse.env]`. This is the only supported credential path.
 
 ## Langfuse Metadata
 
-The transcript span and supplemental observation spans carry trace metadata for:
+The exporter emits:
+
+- `codex.transcript` as a Langfuse `generation` observation with prompt, final answer, and token usage.
+- `codex.terminal` as one ordered stream of the visible CLI events Codex recorded locally.
+- `codex.tool.*` observations as Langfuse `tool` observations.
+- `codex.reasoning.summary` only when Codex records a non-empty visible reasoning summary.
+
+The transcript and supplemental observations carry trace metadata for:
 
 - `codex_session_id`
 - `codex_turn_id`
@@ -91,11 +101,11 @@ Do not weaken these caveats in future docs:
 - Codex rollout JSONL is not a stable public tracing API.
 - This is best-effort, not authoritative tracing.
 - It does not export hidden reasoning or encrypted reasoning content.
-- It is not a byte-for-byte terminal recording.
+- `codex.terminal` is not a byte-for-byte terminal recording.
 - It cannot guarantee a canonical list of files added to model context.
 - File reads may be visible as recorded tool calls, but that is not the same as structured model-context tracking.
 - File writes outside `apply_patch` may be missed unless they appear in command output or another recorded event.
-- Re-export may duplicate observations; OTLP ingestion is not treated as an upsert contract here.
+- Re-export may duplicate observations; OTLP ingestion is not treated as an upsert contract here. The installed wrapper avoids the old watcher-plus-final duplicate path by exporting once after Codex exits.
 - Redaction is a last line of defense, not a security boundary.
 
 ## Local Self-Hosted Langfuse
@@ -120,10 +130,11 @@ Local Langfuse credentials and generated API keys live in:
 
 Do not copy those values into this repository.
 
-`~/.codex/config.toml` was updated to point native Codex OTEL and the Langfuse MCP env at `http://localhost:3000`. A backup was created before editing:
+`~/.codex/config.toml` was updated to point the Langfuse MCP env at `http://localhost:3000`. Native Codex OTEL was removed to avoid noisy internal spans. Backups were created before config edits:
 
 ```text
 ~/.codex/config.toml.backup.20260430173229
+~/.codex/config.toml.backup.20260430181234
 ```
 
 The local stack was verified by sending a small OTLP smoke trace to `http://localhost:3000/api/public/otel/v1/traces` and fetching it back from `/api/public/traces/<trace_id>`.
@@ -146,7 +157,11 @@ After the final simplification, these checks passed:
 python3 -m py_compile bin/export_codex_session_to_langfuse.py
 bash -n install.sh uninstall.sh shell/functions/codex.sh
 git diff --check
+python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
+bash -n ~/.codex/shell/codex-langfuse-tracer.sh
 ```
+
+The generated payload was checked against a local rollout: it includes `codex.terminal`, does not include `codex.timeline`, and child observations no longer set `langfuse.trace.input` / `langfuse.trace.output`.
 
 The bash/zsh installer and uninstaller were smoke-tested against a temporary `HOME`.
 
