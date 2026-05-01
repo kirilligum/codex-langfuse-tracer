@@ -20,19 +20,19 @@ The repository is standalone and not tied to any one working repo.
 
 The setup has one tracing path:
 
-1. The executable `codex` wrapper runs the real Codex CLI.
-2. `bin/export_codex_session_to_langfuse.py` reads Codex rollout JSONL under `~/.codex/sessions/` after Codex exits and sends Langfuse OTLP spans with visible content.
+1. A `systemd --user` service runs `bin/export_codex_session_to_langfuse.py --watch`.
+2. The exporter polls Codex rollout JSONL under `~/.codex/sessions/` and sends Langfuse OTLP spans for newly completed turns.
 
 Native Codex OTEL is intentionally disabled. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for this repository's trace goals.
 
 The implementation is intentionally small:
 
 - one Python exporter
-- one shell-agnostic executable wrapper at `bin/codex-langfuse-wrapper.sh`
+- one user service at `systemd/codex-langfuse-watch.service`
 - one installer, `install.sh`
 - one uninstaller, `uninstall.sh`
 - no dry-run mode
-- no watch mode
+- no wrapper-based export
 - no per-file observation fanout
 - no include/exclude config surface
 
@@ -42,7 +42,7 @@ The implementation is intentionally small:
 LICENSE
 README.md
 bin/export_codex_session_to_langfuse.py
-bin/codex-langfuse-wrapper.sh
+systemd/codex-langfuse-watch.service
 examples/codex-config.toml
 install.sh
 uninstall.sh
@@ -55,10 +55,18 @@ PROJECT_CONTEXT.md
 
 ```text
 ~/.codex/bin/export_codex_session_to_langfuse.py
-~/.codex/bin/codex
+~/.config/systemd/user/codex-langfuse-watch.service
 ```
 
-Users put `~/.codex/bin` before the real Codex binary on `PATH`. The wrapper launches the real `codex` binary, then runs one verified export for the recorded rollout file after Codex exits.
+The installer starts `codex-langfuse-watch.service` and removes the older `~/.codex/bin/codex` wrapper if present. `codex` should resolve to the real Codex CLI.
+
+The watcher stores processed trace ids in:
+
+```text
+~/.codex/langfuse-export-state.json
+```
+
+On first start it sets an initial time watermark so local history is not flooded into Langfuse. Recent/current rollout files remain eligible so active Codex sessions can still be exported.
 
 The exporter reads Langfuse credentials from `~/.codex/config.toml` under `[mcp_servers.langfuse.env]`. This is the only supported credential path.
 
@@ -101,7 +109,7 @@ Do not weaken these caveats in future docs:
 - It cannot guarantee a canonical list of files added to model context.
 - File reads may be visible as recorded tool calls, but that is not the same as structured model-context tracking.
 - File writes outside `apply_patch` may be missed unless they appear in command output or another recorded event.
-- Re-export may duplicate observations; OTLP ingestion is not treated as an upsert contract here. The installed wrapper avoids the old watcher-plus-final duplicate path by exporting once after Codex exits.
+- Re-export may duplicate observations; OTLP ingestion is not treated as an upsert contract here. The watcher state avoids normal duplicates, but deleting the state file or manual re-export can duplicate traces.
 - Redaction is a last line of defense, not a security boundary.
 
 ## Local Self-Hosted Langfuse
@@ -151,17 +159,19 @@ After the final simplification, these checks passed:
 
 ```sh
 python3 -m py_compile bin/export_codex_session_to_langfuse.py
-bash -n install.sh uninstall.sh bin/codex-langfuse-wrapper.sh
+bash -n install.sh uninstall.sh
 git diff --check
 python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
-bash -n ~/.codex/bin/codex
+systemctl --user status codex-langfuse-watch.service
 ```
 
 The generated payload was checked against a local rollout: it includes `codex.terminal`, does not include `codex.timeline`, and child observations no longer set `langfuse.trace.input` / `langfuse.trace.output`.
 
 The installer and uninstaller were smoke-tested against a temporary `HOME`.
 
-The local fish `co` workflow was verified through the executable wrapper.
+The local fish `co` workflow is covered by the watcher because it writes the same Codex rollout files as `codex` and `codex exec`.
+
+The installed watcher was verified with a real `codex exec` prompt. `codex` resolved to the real Codex binary, the service exported the completed turn without wrapper/manual export, and Langfuse returned clean trace input/output for trace `d65bc7460042d68c6955aa4c0228f087`.
 
 ## Future Work Guidance
 

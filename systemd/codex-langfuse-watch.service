@@ -1,0 +1,12 @@
+[Unit]
+Description=Export completed Codex turns to Langfuse
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.codex/bin/export_codex_session_to_langfuse.py --watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -8,6 +8,7 @@ This is a machine-level Codex setup, not a project-level dependency. Install it 
 
 - Tested with Codex CLI `0.128.0`.
 - Uses Codex's local rollout JSONL files under `~/.codex/sessions/`.
+- Uses a `systemd --user` service for automatic export.
 - Unofficial best-effort companion exporter. Codex's rollout file format may change.
 - Apache-2.0 licensed.
 
@@ -15,8 +16,8 @@ This is a machine-level Codex setup, not a project-level dependency. Install it 
 
 The setup has one tracing path:
 
-1. The executable `codex` wrapper runs the real Codex CLI.
-2. After Codex exits, the exporter sends one supplemental Langfuse OTLP trace for each completed turn in the recorded rollout.
+1. A `systemd --user` service runs the exporter in watch mode.
+2. The exporter polls Codex rollout JSONL files and sends one Langfuse OTLP trace for each newly completed turn.
 
 Native Codex OTEL is intentionally not part of this setup. It emits many low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for understanding Codex prompts, answers, terminal output, tool calls, token usage, or file changes.
 
@@ -30,7 +31,7 @@ langfuse.observation.output
 langfuse.observation.metadata
 ```
 
-With the wrapper installed first on `PATH`, running `codex` launches the real Codex CLI and exports the recorded rollout after Codex exits.
+The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
 
 ## What You Can See In Langfuse
 
@@ -94,9 +95,9 @@ Do not emit:
 - Inferred "model context" observations. File reads may appear as command output, but they are not labeled as model context.
 - Hidden chain-of-thought or encrypted reasoning content.
 - Duplicate `langfuse.trace.input` / `langfuse.trace.output` on child observations.
-- Multiple export paths for the same turn, such as native OTEL plus supplemental export or watcher plus final export.
+- Multiple automatic export paths for the same turn, such as native OTEL plus wrapper export or wrapper export plus watcher export.
 
-Existing old traces in Langfuse can still contain deleted names. New sessions should not emit them once `[otel]` is removed from `~/.codex/config.toml` and this wrapper/exporter is installed.
+Existing old traces in Langfuse can still contain deleted names. New sessions should not emit them once `[otel]` is removed from `~/.codex/config.toml` and this watch service is installed.
 
 ## Important Limits
 
@@ -112,7 +113,7 @@ It does not include:
 - File writes performed outside `apply_patch` as structured file-change metadata, unless they appear in command output or diffs recorded by Codex.
 - Arbitrarily large outputs beyond the exporter's per-field cap.
 - Perfect secret handling.
-- Guaranteed idempotent re-export behavior.
+- Idempotent re-export behavior after the watch state is deleted or traces are manually re-exported.
 
 For context files specifically: Codex may record startup instructions, user-provided text, shell commands that read files, and patch diffs. It does not always emit a distinct structured event saying "this file was added to model context." Treat file-context visibility as best-effort.
 
@@ -137,7 +138,7 @@ git clone https://github.com/kirilligum/codex-langfuse-tracer.git ~/p/codex-lang
 cd ~/p/codex-langfuse-tracer
 ```
 
-Install the exporter and shell-agnostic `codex` wrapper:
+Install and start the exporter service:
 
 ```sh
 ./install.sh
@@ -147,24 +148,18 @@ This installs:
 
 ```text
 ~/.codex/bin/export_codex_session_to_langfuse.py
-~/.codex/bin/codex
+~/.config/systemd/user/codex-langfuse-watch.service
 ```
 
-Put `~/.codex/bin` before the real Codex binary on `PATH`.
+The installer also removes the older `~/.codex/bin/codex` wrapper if it is present. `codex` should resolve to the real Codex CLI after installation.
 
-For bash/zsh:
+The watcher stores processed trace ids in:
 
-```sh
-export PATH="$HOME/.codex/bin:$PATH"
+```text
+~/.codex/langfuse-export-state.json
 ```
 
-For fish:
-
-```fish
-fish_add_path --path --prepend "$HOME/.codex/bin"
-```
-
-To make bash/zsh permanent, add the `export PATH=...` line to `~/.bashrc` or `~/.zshrc`. To make fish permanent, add the `fish_add_path ...` line to `~/.config/fish/config.fish`.
+On first start, it sets an initial time watermark instead of parsing and exporting your old local history. Recent/current rollout files remain eligible so active Codex sessions can still be exported.
 
 ## Configure Langfuse
 
@@ -199,13 +194,19 @@ Syntax-check the installed files:
 python3 -m py_compile ~/.codex/bin/export_codex_session_to_langfuse.py
 ```
 
+Confirm the watcher is running:
+
+```sh
+systemctl --user status codex-langfuse-watch.service
+```
+
 Run a small Codex prompt:
 
 ```sh
 codex exec --model gpt-5.4-mini --config model_reasoning_effort='"low"' --sandbox read-only --skip-git-repo-check "Reply exactly: langfuse-smoke-test"
 ```
 
-Then open Langfuse:
+The watch service should export the completed turn within a few seconds. Then open Langfuse:
 
 1. Go to the target project.
 2. Open Tracing.
@@ -219,6 +220,8 @@ Then open Langfuse:
 The visible prompt/answer text is expected on `codex.transcript`. The ordered CLI stream is expected on `codex.terminal`, and filterable tool details are expected on `codex.tool.*` observations.
 
 ## Manual Backfill
+
+The watcher is the normal export path. Manual export is for explicit backfill or debugging.
 
 Export the latest local Codex session:
 
@@ -240,22 +243,22 @@ Export a specific rollout file:
 
 ## Troubleshooting
 
-Check the wrapper resolves before the real Codex binary:
+Check the service:
+
+```sh
+systemctl --user status codex-langfuse-watch.service
+```
+
+Check service logs:
+
+```sh
+journalctl --user -u codex-langfuse-watch.service -n 100 --no-pager
+```
+
+Confirm `codex` resolves to the real Codex binary:
 
 ```sh
 command -v codex
-```
-
-Check the real Codex binary still resolves:
-
-```sh
-command -v codex
-```
-
-Check exporter logs:
-
-```sh
-tail -n 100 ~/.codex/langfuse-transcript-export.log
 ```
 
 Find the local session file for a prompt:
@@ -268,23 +271,17 @@ Common failure modes:
 
 - Wrong Langfuse host. Use the same host where the target Langfuse project lives.
 - Native Codex OTEL still enabled. Delete the `[otel]` section from `~/.codex/config.toml` if Langfuse shows low-level spans such as `handle_responses`, `receiving`, `socket reader`, or `serve_inner`.
-- Shell aliases or functions that bypass `PATH` and call the real Codex binary by absolute path. They should call `codex` through `PATH` so `~/.codex/bin/codex` runs first.
+- Watch state already marked a historical turn as processed. Use manual backfill for that specific session if you intentionally want an old trace.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.
 
 ## Remove
 
-Remove the transcript exporter and `codex` wrapper:
+Remove the transcript exporter and watch service:
 
 ```sh
 cd ~/p/codex-langfuse-tracer
 ./uninstall.sh
-```
-
-Open a new shell and confirm `codex` resolves to the real binary:
-
-```sh
-type codex
 ```
 
 If Langfuse MCP was added only for this setup, remove the `[mcp_servers.langfuse]` block too.

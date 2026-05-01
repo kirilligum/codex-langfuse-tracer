@@ -22,6 +22,9 @@ from typing import Any
 
 DEFAULT_ENVIRONMENT = "default"
 DEFAULT_SERVICE_NAME = "codex_transcript_exporter"
+DEFAULT_INITIAL_LOOKBACK_SECONDS = 300
+DEFAULT_POLL_INTERVAL_SECONDS = 5.0
+DEFAULT_STATE_FILE_NAME = "langfuse-export-state.json"
 MAX_FIELD_CHARS = 50_000
 SECRET_PATTERNS = (
     (re.compile(r"Basic [A-Za-z0-9+/=]{32,}"), "Basic <redacted>"),
@@ -53,6 +56,7 @@ class Turn:
     user_messages: list[str] = field(default_factory=list)
     assistant_messages: list[str] = field(default_factory=list)
     token_usage: dict[str, Any] | None = None
+    completed: bool = False
     terminal_entries: list["TerminalEntry"] = field(default_factory=list)
     observations: list["Observation"] = field(default_factory=list)
 
@@ -152,6 +156,10 @@ def codex_home() -> Path:
 
 def default_config_path() -> Path:
     return codex_home() / "config.toml"
+
+
+def default_state_path() -> Path:
+    return codex_home() / DEFAULT_STATE_FILE_NAME
 
 
 def redact_text(value: str) -> str:
@@ -528,6 +536,7 @@ def parse_turns(session_path: Path) -> list[Turn]:
                 append_unique(turn.assistant_messages, message)
                 add_terminal_entry(turn, timestamp, "assistant.final", message)
                 turn.end_ts = timestamp or turn.end_ts
+                turn.completed = True
             elif payload_type == "token_count":
                 info = payload.get("info") or {}
                 usage = info.get("last_token_usage") or info.get("total_token_usage")
@@ -615,15 +624,25 @@ def turn_metadata_attrs(turn: Turn) -> list[dict[str, Any]]:
     return attrs
 
 
-def turn_observation_attrs(turn: Turn, environment: str, observation_type: str, include_trace_io: bool = False) -> list[dict[str, Any]]:
-    attrs: list[dict[str, Any]] = [
+def base_observation_attrs(
+    turn: Turn,
+    environment: str,
+    observation_type: str,
+    input_text: str,
+    output_text: str,
+) -> list[dict[str, Any]]:
+    return [
         {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
         {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
         {"key": "langfuse.environment", "value": {"stringValue": environment}},
         {"key": "langfuse.observation.type", "value": {"stringValue": observation_type}},
-        {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(turn.input_text))}},
-        {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(turn.output_text))}},
+        {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(input_text))}},
+        {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(output_text))}},
     ]
+
+
+def turn_observation_attrs(turn: Turn, environment: str, observation_type: str, include_trace_io: bool = False) -> list[dict[str, Any]]:
+    attrs = base_observation_attrs(turn, environment, observation_type, turn.input_text, turn.output_text)
     if include_trace_io:
         attrs.extend(
             [
@@ -644,14 +663,13 @@ def transcript_attrs(turn: Turn, environment: str) -> list[dict[str, Any]]:
 
 
 def observation_attrs(turn: Turn, observation: Observation, environment: str) -> list[dict[str, Any]]:
-    attrs: list[dict[str, Any]] = [
-        {"key": "langfuse.trace.name", "value": {"stringValue": "codex.turn.transcript"}},
-        {"key": "langfuse.session.id", "value": {"stringValue": turn.session_id}},
-        {"key": "langfuse.environment", "value": {"stringValue": environment}},
-        {"key": "langfuse.observation.type", "value": {"stringValue": observation.observation_type}},
-        {"key": "langfuse.observation.input", "value": {"stringValue": json.dumps(export_text(observation.input_text))}},
-        {"key": "langfuse.observation.output", "value": {"stringValue": json.dumps(export_text(observation.output_text))}},
-    ]
+    attrs = base_observation_attrs(
+        turn,
+        environment,
+        observation.observation_type,
+        observation.input_text,
+        observation.output_text,
+    )
     attrs.extend(turn_metadata_attrs(turn))
     if observation.metadata:
         attrs.append(
@@ -846,6 +864,10 @@ def preview(value: str, max_chars: int = 120) -> str:
     return value if len(value) <= max_chars else value[: max_chars - 3] + "..."
 
 
+def exportable_turns(turns: list[Turn]) -> list[Turn]:
+    return [turn for turn in turns if turn.completed and turn.trace_id and turn.input_text and turn.output_text]
+
+
 def export_session_turns(
     config: LangfuseConfig,
     session_path: Path,
@@ -857,7 +879,7 @@ def export_session_turns(
     turns = parse_turns(session_path)
     if turn_id:
         turns = [turn for turn in turns if turn.turn_id == turn_id]
-    exportable = [turn for turn in turns if turn.trace_id and turn.input_text and turn.output_text]
+    exportable = exportable_turns(turns)
 
     if not exportable:
         if not quiet:
@@ -882,6 +904,125 @@ def export_session_turns(
     return exportable
 
 
+def session_paths(root: Path) -> list[Path]:
+    sessions_dir = root / "sessions"
+    if not sessions_dir.exists():
+        return []
+    return sorted(sessions_dir.glob("**/rollout-*.jsonl"))
+
+
+def load_watch_state(state_path: Path) -> dict[str, Any] | None:
+    if not state_path.exists():
+        return None
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if state.get("version") != 1:
+        raise ValueError(f"Unsupported watch state version in {state_path}")
+    state.setdefault("processed_trace_ids", [])
+    state.setdefault("scan_watermark_ns", 0)
+    return state
+
+
+def save_watch_state(state_path: Path, state: dict[str, Any]) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = state_path.with_name(f"{state_path.name}.tmp")
+    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(state_path)
+
+
+def completed_turns_from_path(session_path: Path) -> list[Turn]:
+    return exportable_turns(parse_turns(session_path))
+
+
+def watch_completed_turns_from_path(session_path: Path, quiet: bool) -> list[Turn]:
+    try:
+        return completed_turns_from_path(session_path)
+    except Exception as exc:
+        if not quiet:
+            print(f"warning: skipped unreadable rollout {session_path}: {exc}", file=sys.stderr, flush=True)
+        return []
+
+
+def initialize_watch_state(state_path: Path, quiet: bool) -> dict[str, Any]:
+    scan_started_ns = time.time_ns()
+    initial_watermark_ns = scan_started_ns - int(DEFAULT_INITIAL_LOOKBACK_SECONDS * 1_000_000_000)
+
+    state = {
+        "version": 1,
+        "scan_watermark_ns": initial_watermark_ns,
+        "processed_trace_ids": [],
+    }
+    save_watch_state(state_path, state)
+    if not quiet:
+        print("initialized watch state; historical turns before the initial watermark will not be exported", flush=True)
+    return state
+
+
+def watch_scan_once(
+    config: LangfuseConfig,
+    state_path: Path,
+    state: dict[str, Any],
+    environment: str,
+    service_name: str,
+    quiet: bool,
+) -> tuple[dict[str, Any], int]:
+    scan_started_ns = time.time_ns()
+    watermark_ns = int(state.get("scan_watermark_ns") or 0)
+    processed_trace_ids = set(str(trace_id) for trace_id in state.get("processed_trace_ids", []))
+    exported_count = 0
+    export_failed = False
+
+    for session_path in session_paths(codex_home()):
+        mtime_ns = session_path.stat().st_mtime_ns
+        if mtime_ns <= watermark_ns or mtime_ns > scan_started_ns:
+            continue
+
+        for turn in watch_completed_turns_from_path(session_path, quiet):
+            if int(iso_to_ns(turn.end_ts)) <= watermark_ns:
+                continue
+            if turn.trace_id in processed_trace_ids:
+                continue
+            try:
+                status = export_turn(config, turn, environment, service_name)
+            except Exception as exc:
+                export_failed = True
+                print(f"ERROR: failed to export trace={turn.trace_id} path={session_path}: {exc}", file=sys.stderr, flush=True)
+                continue
+
+            processed_trace_ids.add(turn.trace_id)
+            exported_count += 1
+            state["processed_trace_ids"] = sorted(processed_trace_ids)
+            save_watch_state(state_path, state)
+            if not quiet:
+                print(f"exported trace={turn.trace_id} status={status} path={session_path}", flush=True)
+
+    if not export_failed:
+        state["scan_watermark_ns"] = scan_started_ns
+        state["processed_trace_ids"] = sorted(processed_trace_ids)
+        save_watch_state(state_path, state)
+
+    return state, exported_count
+
+
+def watch_sessions(
+    config: LangfuseConfig,
+    state_path: Path,
+    environment: str,
+    service_name: str,
+    poll_interval_seconds: float,
+    quiet: bool,
+) -> int:
+    state = load_watch_state(state_path)
+    if state is None:
+        state = initialize_watch_state(state_path, quiet)
+
+    if not quiet:
+        print(f"watching {codex_home() / 'sessions'}", flush=True)
+
+    while True:
+        state, _ = watch_scan_once(config, state_path, state, environment, service_name, quiet)
+        time.sleep(max(poll_interval_seconds, 0.5))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export visible Codex prompt, answer, terminal, and tool data into matching Langfuse traces."
@@ -890,10 +1031,13 @@ def main() -> int:
     source.add_argument("--session-id", help="Codex session id from `codex resume <id>`")
     source.add_argument("--path", type=Path, help="Path to a Codex rollout JSONL file")
     source.add_argument("--latest", action="store_true", help="Export the latest Codex rollout JSONL file")
+    source.add_argument("--watch", action="store_true", help="Continuously export newly completed Codex turns")
     parser.add_argument("--turn-id", help="Only export one turn id from the selected session")
     parser.add_argument("--config", type=Path, default=default_config_path())
+    parser.add_argument("--state-file", type=Path, default=default_state_path())
     parser.add_argument("--environment", default=DEFAULT_ENVIRONMENT)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE_NAME)
+    parser.add_argument("--poll-interval-seconds", type=float, default=DEFAULT_POLL_INTERVAL_SECONDS)
     parser.add_argument("--quiet", action="store_true", help="Only print errors")
     parser.add_argument("--no-verify", action="store_true", help="Do not fetch traces after export")
     parser.add_argument("--verify-wait-seconds", type=float, default=25.0)
@@ -902,6 +1046,16 @@ def main() -> int:
 
     try:
         config = load_config(args.config)
+        if args.watch:
+            return watch_sessions(
+                config,
+                args.state_file.expanduser(),
+                args.environment,
+                args.service_name,
+                args.poll_interval_seconds,
+                args.quiet,
+            )
+
         if args.path:
             session_path = args.path.expanduser()
         elif args.latest:
