@@ -7,7 +7,7 @@
 - Owners: repository maintainers
 - Date: 2026-05-02
 - Document ID: CLT-LF-COST-SRS-001
-- Summary: This plan replaces the temporary live-cost probe with a production path for Langfuse `Total Cost` columns. The exporter will keep one tracing path through OTLP generation spans, normalize token usage into Langfuse pricing keys, seed required Langfuse model definitions through the public model API, and prove costs through deterministic Go tests plus one opt-in live Langfuse test for session `019de6d8-fb40-74a0-af20-46b088397c53`.
+- Summary: This plan replaces the temporary live-cost probe with a production path for Langfuse `Total Cost` columns. The exporter will keep one tracing path through OTLP generation spans, normalize token usage into Langfuse pricing keys, seed required Langfuse model definitions from one source-dated Go pricing catalog, and prove costs through deterministic Go tests plus one opt-in live Langfuse test for session `019de6d8-fb40-74a0-af20-46b088397c53`.
 
 ## 2. Design consensus and trade-offs
 
@@ -18,13 +18,17 @@
 | Direct public ingestion probe | AGAINST | The probe proved the Langfuse API path, but production traces already use OTLP at `/api/public/otel/v1/traces` through `internal/langfuse/export.go`. Keeping a direct ingestion path would duplicate export behavior. |
 | Langfuse model definition sync | DECISION | Add one setup path that creates missing custom model definitions using `GET /api/public/models` and `POST /api/public/models`. The local Langfuse API definition at `/home/kirill/p/langfuse/fern/apis/server/definition/models.yml` supports `modelName`, `matchPattern`, `unit`, and `pricingTiers`. |
 | Pricing tiers over flat prices | DECISION | Langfuse marks flat `inputPrice`, `outputPrice`, and `totalPrice` as deprecated in the model API definition and documents `pricingTiers` as the preferred shape. |
+| Pricing storage | DECISION | Store pricing in one source-dated Go catalog under `internal/langfuse`; do not add a user pricing config file or a separate pricing data parser. |
 | Usage key normalization | DECISION | Current exporter emits `cached_input` and `reasoning_output`; Langfuse default model prices use keys such as `input_cached_tokens` and `output_reasoning_tokens`. A single `TokenUsage.LangfuseUsageDetails()` method will map Codex token counts to pricing keys. |
 | Cached and reasoning token accounting | DECISION | Full-rate parent buckets must exclude detailed buckets: `input = InputTokens - CachedInputTokens`, `output = OutputTokens - ReasoningOutputTokens`. This avoids charging cached or reasoning tokens twice when separate pricing keys exist. |
 | Conflicting existing custom model definitions | DECISION | If a project already has a custom definition for a managed Codex model name with different match pattern or prices, the sync command fails with a diagnostic. It does not mutate user-owned pricing silently. |
-| Model coverage scope | DECISION | Seed only model names observed in repository fixtures and Codex runs: `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. New model names require an explicit pricing data change and tests. |
+| Model coverage scope | DECISION | Seed only the explicit catalog entries `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`; tests validate repository fixture model coverage, but install/setup does not scan recent rollout history. New model names require an explicit pricing data change and tests. |
 | Observability producer boundary | DECISION | The tracer is an observation producer. It emits model and usage facts through OTLP; Langfuse joins those facts to rate cards and materializes costs. This mirrors OpenTelemetry semantic attribution and cloud-billing usage-record/rate-card separation. |
 | Direct model setup | DECISION | `--sync-model-pricing` shall use one direct setup function: list existing models, create missing required definitions, accept exact matches, and fail on conflicts. It shall not update or delete existing definitions. |
 | Runtime versus setup separation | DECISION | The watcher runtime remains parse-and-export only. Model definition sync runs from explicit CLI setup and `install.sh`, so a normal completed Codex turn does not pay external model-list latency before export. |
+| Install failure behavior | DECISION | `install.sh` fails before restarting `codex-langfuse-watch.service` when model pricing setup fails. A warning-only install would make a cost-broken service look healthy. |
+| Live validation scope | DECISION | Use one known-session live proof plus deterministic setup/export tests. Do not add a fresh-session generator to the automated plan. |
+| Formal plan with small implementation | DECISION | Keep ISO-style traceability in this document, but implement the smallest direct code path: one usage projection, one model setup function, one CLI setup mode, one install invocation, and one live proof. |
 | Decision-focused tests | DECISION | Unit tests must cover decision outcomes rather than only line coverage: missing model, matching model, conflicting model, API failure, cached-token subtraction, reasoning-token subtraction, and live post-sync cost readback. |
 | Package-private helpers over a new framework | DECISION | Shared HTTP request construction and JSON decoding stay inside `internal/langfuse`; no separate client framework or compatibility code is introduced. |
 
@@ -55,11 +59,13 @@
   - Trace API for session `019de6d8-fb40-74a0-af20-46b088397c53` returns `totalCost > 0`.
   - Default Go suite passes with the live test skipped when `LIVE_LANGFUSE_SESSION_ID` is unset.
   - `install.sh` creates missing model definitions before restarting `codex-langfuse-watch.service`.
+  - `install.sh` exits nonzero and does not restart `codex-langfuse-watch.service` when model pricing setup fails.
   - Model sync reports one of three deterministic outcomes for every required model: created, already matching, or conflict.
+  - Repository fixture model names are covered by the source-dated Go pricing catalog.
   - Watcher export latency is not coupled to model definition reads during normal `--watch` operation.
 - Scope:
   - Token usage normalization in `internal/codextrace`.
-  - Langfuse model pricing sync in `internal/langfuse`.
+  - Langfuse model pricing sync and one Go pricing catalog in `internal/langfuse`.
   - CLI mode `--sync-model-pricing` in `cmd/codex-langfuse-exporter`.
   - Install integration in `install.sh`.
   - Tests and documentation updates.
@@ -70,6 +76,9 @@
   - No pricing UI automation.
   - No background model setup inside `--watch`.
   - No automatic overwrite of existing custom Langfuse model definitions.
+  - No install-time scan of recent rollout history to infer model names.
+  - No user-managed pricing config file.
+  - No automated fresh-session generator for live validation.
   - No historical trace migration beyond explicit session re-export commands.
   - No support for arbitrary future model names without a pricing record.
 - Dependencies:
@@ -97,11 +106,11 @@
 - REQ-401 type func: `codextrace.TokenUsage` shall expose one canonical Langfuse usage-detail projection. Acceptance: cached input and reasoning output are represented with Langfuse pricing keys and subtracted from full-rate parent buckets.
 - REQ-402 type func: `codex.transcript` shall use the canonical usage-detail projection for `langfuse.observation.usage_details`. Acceptance: exporter tests show `input_cached_tokens` and `output_reasoning_tokens` when fixture token details exist.
 - REQ-403 type func: The trace contract shall use the same canonical usage-detail projection as the exporter. Acceptance: fixture golden files and `tracecontract.Trace.TokenUsage` use the same keys as the Langfuse span attributes.
-- REQ-404 type func: The Langfuse package shall sync required Codex model definitions through public Langfuse APIs. Acceptance: missing required models are posted with one `Standard` pricing tier.
+- REQ-404 type func: The Langfuse package shall sync required Codex model definitions through public Langfuse APIs from the explicit source-dated Go pricing catalog. Acceptance: missing required models are posted with one `Standard` pricing tier and repository fixture model names are covered by the catalog.
 - REQ-405 type func: Model definition sync shall be idempotent. Acceptance: when existing custom definitions match required definitions, no POST request is sent.
 - REQ-406 type func: Conflicting existing custom model definitions shall stop the sync with a diagnostic that names the model and mismatched fields. Acceptance: no conflicting model is overwritten.
 - REQ-407 type func: The exporter CLI shall support `--sync-model-pricing` as a source mode. Acceptance: the mode loads config, calls model definition sync, prints a non-secret summary unless `--quiet` is set, and exits without parsing rollout sessions.
-- REQ-408 type func: `install.sh` shall execute `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` after building the binary and before restarting `codex-langfuse-watch.service`. Acceptance: install integration tests observe the sync invocation.
+- REQ-408 type func: `install.sh` shall execute `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` after building the binary and before restarting `codex-langfuse-watch.service`. Acceptance: install integration tests observe the sync invocation and prove setup failure exits nonzero before service restart.
 - REQ-409 type func: Live cost validation shall prove that the target session returns `calculatedTotalCost > 0` on `codex.transcript` and `totalCost > 0` on the trace. Acceptance: the existing opt-in live test passes after install and explicit session re-export.
 
 ### Non-functional requirements
@@ -120,7 +129,7 @@
 
 ### Data requirements
 
-- REQ-418 type data: Pricing records shall store USD per token values, not USD per million tokens. Acceptance: `gpt-5.5` input is `0.000005`, cached input is `0.0000005`, output is `0.00003`, and reasoning output is `0.00003` from the 2026-05-02 official OpenAI pricing page.
+- REQ-418 type data: Pricing records shall store USD per token values, not USD per million tokens, in one Go catalog under `internal/langfuse`. Acceptance: `gpt-5.5` input is `0.000005`, cached input is `0.0000005`, output is `0.00003`, and reasoning output is `0.00003` from the 2026-05-02 official OpenAI pricing page.
 - REQ-419 type data: Required pricing keys shall be exactly `input`, `input_cached_tokens`, `output`, and `output_reasoning_tokens`. Acceptance: static tests reject obsolete `cached_input` and `reasoning_output` in exported/golden cost usage.
 - REQ-420 type data: Pricing records shall include `sourceURL` and `sourceDate` metadata in code or documentation. Acceptance: static docs tests find the OpenAI pricing URL and `2026-05-02`.
 - REQ-421 type reliability: Model definition sync shall use one deterministic setup function with only three per-model outcomes: created, already matching, or conflict. Acceptance: decision-table tests cover all outcomes and no PATCH, PUT, or DELETE path exists.
@@ -257,8 +266,8 @@ Data store: Langfuse project
 
 - Scope and objectives: Add model pricing catalog and HTTP sync for `REQ-404`, `REQ-405`, `REQ-406`, `REQ-411`, `REQ-413`, `REQ-415`, `REQ-416`, `REQ-418`, `REQ-420`, `REQ-421`.
 - Restore point: run `git tag -f langfuse-cost-pricing-P01-start`; expected PASS because Git records the pre-phase commit.
-- Step 1 RED: create/update `TEST-404` in `internal/langfuse/models_test.go` for `REQ-404`, `REQ-415`, `REQ-416`, `REQ-418`, and `REQ-421`; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1`; expected FAIL because no model sync package, pricing catalog, or created outcome exists.
-- Step 2 GREEN: implement minimal code change; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1`; expected PASS.
+- Step 1 RED: create/update `TEST-404` in `internal/langfuse/models_test.go` for `REQ-404`, `REQ-415`, `REQ-416`, `REQ-418`, and `REQ-421`; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1`; expected FAIL because no model sync package, pricing catalog, created outcome, or fixture coverage guard exists.
+- Step 2 GREEN: implement minimal code change; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1`; expected PASS.
 - Step 3 RED: create/update `TEST-405` in `internal/langfuse/models_test.go` for `REQ-405`, `REQ-406`, and `REQ-421`; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncIsIdempotent|TestModelDefinitionSyncRejectsConflictingModel' -count=1`; expected FAIL because idempotency, conflict detection, and the setup decision table are not implemented.
 - Step 4 GREEN: implement minimal code change; run `go test ./internal/langfuse -run 'TestModelDefinitionSyncIsIdempotent|TestModelDefinitionSyncRejectsConflictingModel' -count=1`; expected PASS.
 - Step 5 RED: create/update `TEST-411` in `internal/langfuse/models_test.go` for `REQ-411`; run `go test ./internal/langfuse -run TestModelDefinitionSyncDoesNotLeakSecrets -count=1`; expected FAIL because sync error handling does not yet sanitize fake secret values.
@@ -288,14 +297,14 @@ Data store: Langfuse project
 - Restore point: run `git tag -f langfuse-cost-pricing-P02-start`; expected PASS because Git records the pre-phase commit.
 - Step 1 RED: create/update `TEST-406` in `cmd/codex-langfuse-exporter/cli_test.go` for `REQ-407`, `REQ-417`, and `REQ-422`; run `go test ./cmd/codex-langfuse-exporter -run TestSyncModelPricingMode -count=1`; expected FAIL because `--sync-model-pricing` is not parsed and export modes are not proven isolated from model sync.
 - Step 2 GREEN: implement minimal code change; run `go test ./cmd/codex-langfuse-exporter -run TestSyncModelPricingMode -count=1`; expected PASS.
-- Step 3 RED: create/update `TEST-407` in `test/install_test.go` for `REQ-408` and `REQ-414`; run `go test ./test -run TestInstallUninstallScripts -count=1`; expected FAIL because `install.sh` does not invoke pricing sync before service restart.
+- Step 3 RED: create/update `TEST-407` in `test/install_test.go` for `REQ-408` and `REQ-414`; run `go test ./test -run TestInstallUninstallScripts -count=1`; expected FAIL because `install.sh` does not invoke pricing sync before service restart and does not prove setup failure blocks restart.
 - Step 4 GREEN: implement minimal code change; run `go test ./test -run TestInstallUninstallScripts -count=1`; expected PASS.
 - Step 5 REFACTOR: keep `options.Mode()` as the single source-mode selector and avoid a second setup binary; run `go test ./cmd/codex-langfuse-exporter ./test -run 'TestCLIFlags|TestSyncModelPricingMode|TestInstallUninstallScripts|TestEvalInstallRuntimeSurface' -count=1`; expected PASS.
 - Step 6 MEASURE: run `bash -n install.sh uninstall.sh && systemd-analyze --user verify systemd/codex-langfuse-watch.service && git diff --check`; expected thresholds met for `EVAL-403`.
 - Exit gates:
   - Green criteria: CLI mode and install script both call the same sync function.
   - Yellow criteria: sync failure exits nonzero before service restart.
-  - Red criteria: watcher export path changes from `--watch` or export modes call `/api/public/models`.
+  - Red criteria: watcher export path changes from `--watch`, export modes call `/api/public/models`, or install restarts the service after pricing setup failure.
 - Phase metrics:
   - Confidence %: 84; CLI and install tests cover the new user-facing surfaces.
   - Long-term robustness %: 87; setup is centralized in the installed binary.
@@ -509,10 +518,10 @@ evals:
   - type: unit
   - verifies: REQ-404, REQ-415, REQ-416, REQ-418, REQ-420, REQ-421
   - location: `internal/langfuse/models_test.go`
-  - command: `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1`
-  - fixtures/mocks/data: `httptest.Server` returning empty model list and capturing POST bodies.
-  - deterministic controls: fixed model catalog, fake Basic auth keys, no external network.
-  - pass_criteria: POST bodies include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `unit:"TOKENS"`, one default tier, expected price keys, official source URL, and source date.
+  - command: `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1`
+  - fixtures/mocks/data: `httptest.Server` returning empty model list and capturing POST bodies; repository rollout fixtures named in `testdata/manifest.json`.
+  - deterministic controls: fixed model catalog, fake Basic auth keys, fixture files only, no external network.
+  - pass_criteria: POST bodies include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `unit:"TOKENS"`, one default tier, expected price keys, official source URL, and source date; every non-empty fixture model is present in the Go pricing catalog.
   - expected_runtime: 2s
 - id: TEST-405
   - name: Model definition sync idempotency and conflict handling
@@ -542,7 +551,7 @@ evals:
   - command: `go test ./test -run TestInstallUninstallScripts -count=1`
   - fixtures/mocks/data: temporary `HOME`, fake `systemctl`, isolated `CODEX_HOME`, existing Go module cache.
   - deterministic controls: fake systemctl log, temp filesystem, no real service restart.
-  - pass_criteria: install builds binary, invokes `--sync-model-pricing --quiet` before `restart codex-langfuse-watch.service`, and service still runs `.codex/bin/codex-langfuse-exporter --watch`.
+  - pass_criteria: install builds binary, invokes `--sync-model-pricing --quiet` before `restart codex-langfuse-watch.service`, exits nonzero without restart when the setup command fails, and service still runs `.codex/bin/codex-langfuse-exporter --watch`.
   - expected_runtime: 20s
 - id: TEST-408
   - name: Documentation for Langfuse cost pricing
@@ -638,6 +647,9 @@ type CodexModelPricing struct {
 - `total` remains the Codex-provided total token count.
 - `input` is never negative after subtracting cached input.
 - `output` is never negative after subtracting reasoning output.
+- The Go pricing catalog under `internal/langfuse` is the only pricing policy source.
+- Runtime config remains credential/configuration only and does not carry price values.
+- Every non-empty model name in repository rollout fixtures appears in the pricing catalog or causes a deterministic test failure.
 - A model definition contains exactly one default pricing tier named `Standard`.
 - A model definition price map contains no `total` price when input/output prices exist.
 - Sync never deletes model definitions.
@@ -670,6 +682,7 @@ type CodexModelPricing struct {
   - `LANGFUSE_HOST`
   - `LANGFUSE_PUBLIC_KEY`
   - `LANGFUSE_SECRET_KEY`
+- Fresh Codex session generation is not part of reproducibility; live validation uses the fixed `LIVE_LANGFUSE_SESSION_ID` plus deterministic local tests.
 
 ## 10. Requirements Traceability Matrix
 
@@ -678,7 +691,7 @@ type CodexModelPricing struct {
 | P00 | REQ-401 | TEST-401 | internal/codextrace/model_test.go | `go test ./internal/codextrace -run TestTokenUsageLangfuseUsageDetails -count=1` |
 | P00 | REQ-402 | TEST-402 | internal/langfuse/spans_test.go | `go test ./internal/langfuse -run TestLangfuseGenerationModelUsageAndNoCostDetails -count=1` |
 | P00 | REQ-403 | TEST-403 | internal/tracecontract/contract_test.go, test/contract_test.go | `go test ./internal/tracecontract ./test -run 'TestFromTurnNormalizesTrace|TestGoldenTraceContract|TestFullAcceptanceLangfuseFilterCostContract' -count=1` |
-| P01 | REQ-404 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1` |
+| P01 | REQ-404 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1` |
 | P01 | REQ-405 | TEST-405 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncIsIdempotent|TestModelDefinitionSyncRejectsConflictingModel' -count=1` |
 | P01 | REQ-406 | TEST-405 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncIsIdempotent|TestModelDefinitionSyncRejectsConflictingModel' -count=1` |
 | P02 | REQ-407 | TEST-406 | cmd/codex-langfuse-exporter/cli_test.go | `go test ./cmd/codex-langfuse-exporter -run TestSyncModelPricingMode -count=1` |
@@ -689,13 +702,13 @@ type CodexModelPricing struct {
 | P03 | REQ-412 | TEST-409 | test/docs_static_test.go | `go test ./test -run TestNoLocalCostDetailsOrDirectIngestionShortcut -count=1` |
 | P04 | REQ-413 | TEST-306 | internal/langfuse/live_cost_test.go | `LIVE_LANGFUSE_SESSION_ID=019de6d8-fb40-74a0-af20-46b088397c53 go test ./internal/langfuse -run TestLiveLangfuseTranscriptModelUsageAndCost -count=1` |
 | P02 | REQ-414 | TEST-407 | test/install_test.go | `go test ./test -run TestInstallUninstallScripts -count=1` |
-| P01 | REQ-415 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1` |
-| P01 | REQ-416 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1` |
+| P01 | REQ-415 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1` |
+| P01 | REQ-416 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1` |
 | P02 | REQ-417 | TEST-406 | cmd/codex-langfuse-exporter/cli_test.go | `go test ./cmd/codex-langfuse-exporter -run TestSyncModelPricingMode -count=1` |
-| P01 | REQ-418 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1` |
+| P01 | REQ-418 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1` |
 | P00 | REQ-419 | TEST-401 | internal/codextrace/model_test.go | `go test ./internal/codextrace -run TestTokenUsageLangfuseUsageDetails -count=1` |
 | P03 | REQ-420 | TEST-408 | test/docs_static_test.go | `go test ./test -run TestDocsLangfuseCostPricing -count=1` |
-| P01 | REQ-421 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys' -count=1` |
+| P01 | REQ-421 | TEST-404 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1` |
 | P01 | REQ-421 | TEST-405 | internal/langfuse/models_test.go | `go test ./internal/langfuse -run 'TestModelDefinitionSyncIsIdempotent|TestModelDefinitionSyncRejectsConflictingModel' -count=1` |
 | P02 | REQ-422 | TEST-406 | cmd/codex-langfuse-exporter/cli_test.go | `go test ./cmd/codex-langfuse-exporter -run TestSyncModelPricingMode -count=1` |
 
@@ -719,6 +732,8 @@ type CodexModelPricing struct {
 - ADR-003: Install-time model definition sync is the single setup path.
 - ADR-004: Any pricing threshold or price-value change requires source-date update and tests.
 - ADR-005: Direct public ingestion remains a validation probe pattern only and is not production export behavior.
+- ADR-006: Source-dated Go pricing catalog is the only pricing policy source.
+- ADR-007: Known-session live proof plus deterministic tests is the validation scope; no fresh-session generator.
 
 ## 13. Consistency check
 
