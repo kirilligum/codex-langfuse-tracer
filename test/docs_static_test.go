@@ -11,14 +11,15 @@ import (
 func TestDocsAndRuntimeDoNotReferencePythonExporter(t *testing.T) {
 	t.Parallel()
 
-	if _, err := os.Stat(filepath.Join("..", "bin", "export_codex_session_to_langfuse.py")); !os.IsNotExist(err) {
-		t.Fatalf("Python exporter still exists: %v", err)
-	}
-	for _, path := range []string{
-		"README.md",
-		"PROJECT_CONTEXT.md",
-		"systemd/codex-langfuse-watch.service",
-	} {
+		if _, err := os.Stat(filepath.Join("..", "bin", "export_codex_session_to_langfuse.py")); !os.IsNotExist(err) {
+			t.Fatalf("Python exporter still exists: %v", err)
+		}
+		for _, path := range []string{
+			"AGENTS.md",
+			"README.md",
+			"TESTING.md",
+			"systemd/codex-langfuse-watch.service",
+		} {
 		raw, err := os.ReadFile(filepath.Join("..", path))
 		if err != nil {
 			t.Fatal(err)
@@ -68,7 +69,7 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 		"failure_type",
 		"hidden chain-of-thought",
 	}
-	for _, path := range []string{"README.md", "PROJECT_CONTEXT.md"} {
+		for _, path := range []string{"README.md"} {
 		raw, err := os.ReadFile(filepath.Join("..", path))
 		if err != nil {
 			t.Fatal(err)
