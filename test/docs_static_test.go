@@ -133,6 +133,44 @@ func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
 	}
 }
 
+// TEST-405
+func TestDocsTagsAndMCPUsage(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	installScript := readRepoDoc(t, "install.sh")
+	for _, required := range []string{
+		"langfuse.trace.tags",
+		"codex_insight.navigation values plus observed mcp:<server>",
+		"mcp_server",
+		"mcp_tool",
+		"codex.tool.mcp",
+		"issues/list",
+		"future watcher exports",
+		"explicit re-export",
+		"codex-langfuse-watch.service",
+		"~/.codex/bin/codex-langfuse-exporter --path",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"TestDocsTagsAndMCPUsage",
+		"TestLangfuseTraceTagsExportedOnSpans",
+		"TestGoldenLangfuseTagsContract",
+		"TestInsightTagFacets",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing %q", required)
+		}
+	}
+	if !strings.Contains(installScript, "codex-langfuse-watch.service") {
+		t.Fatalf("install.sh missing service restart")
+	}
+}
+
 func readRepoDoc(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", path))

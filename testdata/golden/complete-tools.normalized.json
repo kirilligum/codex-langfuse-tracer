@@ -40,6 +40,17 @@
     "verification_status": "not_run",
     "web_search_tool_count": 1
   },
+  "tags": [
+    "command:other",
+    "files:changed",
+    "mcp:github",
+    "tool:apply_patch",
+    "tool:exec_command",
+    "tool:mcp",
+    "tool:tool_search",
+    "tool:web_search",
+    "verification:not_run"
+  ],
   "token_usage": {
     "cached_input": 20,
     "input": 100,
@@ -124,6 +135,8 @@
       "output": "{\n  \"count\": 0\n}",
       "metadata": {
         "call_id": "mcp-1",
+        "mcp_server": "github",
+        "mcp_tool": "issues/list",
         "type": "mcp_tool_call_end"
       }
     },

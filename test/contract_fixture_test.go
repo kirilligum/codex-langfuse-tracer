@@ -245,6 +245,57 @@ func validateSingleRepresentationFixtureCoverage(t *testing.T) {
 	}
 }
 
+func validateGoldenLangfuseTagsContract(t *testing.T) {
+	t.Helper()
+	complete := completeToolsGolden(t)
+	tags, ok := complete["tags"].([]any)
+	if !ok {
+		t.Fatalf("complete-tools tags = %#v, want array", complete["tags"])
+	}
+	want := []string{
+		"command:other",
+		"files:changed",
+		"mcp:github",
+		"tool:apply_patch",
+		"tool:exec_command",
+		"tool:mcp",
+		"tool:tool_search",
+		"tool:web_search",
+		"verification:not_run",
+	}
+	if canonicalJSON(tags) != canonicalJSON(want) {
+		t.Fatalf("complete-tools tags = %s want %s", canonicalJSON(tags), canonicalJSON(want))
+	}
+	raw := canonicalJSON(tags)
+	for _, forbidden := range []string{"issues/list", "/tmp/", "sess-complete", "turn-1", "sk-lf-", "ghp_"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("tags contain forbidden substring %q in %s", forbidden, raw)
+		}
+	}
+
+	noToolsRaw, err := os.ReadFile(filepath.Join("..", "testdata", "golden", "complete-no-tools.normalized.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var noTools map[string]any
+	if err := json.Unmarshal(noToolsRaw, &noTools); err != nil {
+		t.Fatal(err)
+	}
+	noToolTags, ok := noTools["tags"].([]any)
+	if !ok {
+		t.Fatalf("complete-no-tools tags = %#v, want array", noTools["tags"])
+	}
+	for _, rawTag := range noToolTags {
+		tag, ok := rawTag.(string)
+		if !ok {
+			t.Fatalf("tag = %#v, want string", rawTag)
+		}
+		if strings.HasPrefix(tag, "mcp:") || tag == "tool:mcp" {
+			t.Fatalf("no-tools fixture has MCP tag in %#v", noTools["tags"])
+		}
+	}
+}
+
 func requireNoForbiddenContractKeys(t *testing.T, value any) {
 	t.Helper()
 	switch typed := value.(type) {
@@ -264,7 +315,7 @@ func requireNoForbiddenContractKeys(t *testing.T, value any) {
 
 func isForbiddenContractKey(key string) bool {
 	switch key {
-	case "has_file_changes", "is_read_only", "command_kinds", "web_search_count", "trace_facets", "navigation_facets", "cost_details", "tool_name", "tags", "available_tool_names":
+	case "has_file_changes", "is_read_only", "command_kinds", "web_search_count", "trace_facets", "navigation_facets", "cost_details", "tool_name", "available_tool_names":
 		return true
 	default:
 		return strings.HasPrefix(key, "ran_") || strings.HasPrefix(key, "used_")
@@ -283,6 +334,12 @@ func TestGoldenLangfuseSingleRepresentation(t *testing.T) {
 	validateSingleRepresentationFixtureCoverage(t)
 }
 
+// TEST-403
+func TestGoldenLangfuseTagsContract(t *testing.T) {
+	t.Parallel()
+	validateGoldenLangfuseTagsContract(t)
+}
+
 // TEST-020
 func TestGoldenFixturesAreLanguageAgnostic(t *testing.T) {
 	t.Parallel()
@@ -293,6 +350,12 @@ func TestGoldenFixturesAreLanguageAgnostic(t *testing.T) {
 func TestEvalInsightFixtureCoverage(t *testing.T) {
 	t.Parallel()
 	validateInsightFixtureCoverage(t)
+}
+
+// EVAL-403
+func TestEvalGoldenFixtureCoverageForLangfuseTags(t *testing.T) {
+	t.Parallel()
+	validateGoldenLangfuseTagsContract(t)
 }
 
 // EVAL-009

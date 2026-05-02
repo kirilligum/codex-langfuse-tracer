@@ -94,32 +94,33 @@ func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceNam
 		sdktrace.WithBatcher(exporter),
 	)
 	tracer := provider.Tracer(buildinfo.ScopeName, trace.WithInstrumentationVersion(buildinfo.Version))
+	traceTags := codextrace.BuildInsightRollup(turn).Tags()
 
 	agentCtx, agent := tracer.Start(ctx, "codex.agent",
 		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(turnAttributes(turn, environment, "agent", true)...),
+		trace.WithAttributes(turnAttributes(turn, environment, "agent", true, traceTags)...),
 	)
 	transcriptCtx, transcript := tracer.Start(agentCtx, "codex.transcript",
 		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(transcriptAttributes(turn, environment)...),
+		trace.WithAttributes(transcriptAttributes(turn, environment, traceTags)...),
 	)
 	transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	_ = transcriptCtx
 
 	for index, observation := range turn.Observations {
-		emitObservation(agentCtx, tracer, turn, observation, environment, strconv.Itoa(index))
+		emitObservation(agentCtx, tracer, turn, observation, environment, strconv.Itoa(index), traceTags)
 	}
 	if terminal := codextrace.TerminalObservation(turn); terminal != nil {
-		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal")
+		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal", traceTags)
 	}
 	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	return provider.Shutdown(ctx)
 }
 
-func emitObservation(ctx context.Context, tracer trace.Tracer, turn codextrace.Turn, observation codextrace.Observation, environment, key string) {
+func emitObservation(ctx context.Context, tracer trace.Tracer, turn codextrace.Turn, observation codextrace.Observation, environment, key string, traceTags []string) {
 	_, span := tracer.Start(ctx, observation.Name,
 		trace.WithTimestamp(nsTime(observation.StartTimeUnixNS)),
-		trace.WithAttributes(observationAttributes(turn, observation, environment)...),
+		trace.WithAttributes(observationAttributes(turn, observation, environment, traceTags)...),
 	)
 	span.End(trace.WithTimestamp(nsTime(observation.EndTimeUnixNS)))
 	_ = key
@@ -152,8 +153,9 @@ func baseObservationAttributes(turn codextrace.Turn, environment, observationTyp
 	}
 }
 
-func turnAttributes(turn codextrace.Turn, environment, observationType string, includeTraceIO bool) []attribute.KeyValue {
+func turnAttributes(turn codextrace.Turn, environment, observationType string, includeTraceIO bool, traceTags []string) []attribute.KeyValue {
 	attrs := baseObservationAttributes(turn, environment, observationType, turn.InputText(), turn.OutputText())
+	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	if includeTraceIO {
 		attrs = append(attrs,
 			attribute.String("langfuse.trace.input", codextrace.ExportText(turn.InputText())),
@@ -167,8 +169,8 @@ func turnAttributes(turn codextrace.Turn, environment, observationType string, i
 	return attrs
 }
 
-func transcriptAttributes(turn codextrace.Turn, environment string) []attribute.KeyValue {
-	attrs := turnAttributes(turn, environment, "generation", false)
+func transcriptAttributes(turn codextrace.Turn, environment string, traceTags []string) []attribute.KeyValue {
+	attrs := turnAttributes(turn, environment, "generation", false, traceTags)
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
 	}
@@ -196,8 +198,9 @@ func transcriptAttributes(turn codextrace.Turn, environment string) []attribute.
 	return attrs
 }
 
-func observationAttributes(turn codextrace.Turn, observation codextrace.Observation, environment string) []attribute.KeyValue {
+func observationAttributes(turn codextrace.Turn, observation codextrace.Observation, environment string, traceTags []string) []attribute.KeyValue {
 	attrs := baseObservationAttributes(turn, environment, observation.Type, observation.Input, observation.Output)
+	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	attrs = append(attrs, metadataAttributes(turn)...)
 	if len(observation.Metadata) > 0 {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata", jsonString(observation.Metadata)))
@@ -234,6 +237,13 @@ func metadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata.cwd", turn.CWD))
 	}
 	return attrs
+}
+
+func traceTagAttributes(tags []string) []attribute.KeyValue {
+	if len(tags) == 0 {
+		return nil
+	}
+	return []attribute.KeyValue{attribute.StringSlice("langfuse.trace.tags", tags)}
 }
 
 func insightMetadataAttributes(turn codextrace.Turn) []attribute.KeyValue {

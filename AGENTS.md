@@ -17,3 +17,10 @@ Default verification before handing off changes:
 go test ./... -count=1
 git diff --check
 ```
+
+## Browser Automation
+
+- For browser automation that should use the user's active Chrome profile, logged-in sessions, or visible browser state, use the configured Playwright MCP browser attached to `http://localhost:9222`.
+- Expected Chrome launch command: `google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-debug --no-first-run --no-default-browser-check`
+- Avoid the Playwright CLI wrapper for those tasks because it may launch or use a separate browser session.
+- Use a separate or clean browser only when isolation is intentional, such as reproducible UI testing, clean screenshots, or when the DevTools endpoint is unavailable.

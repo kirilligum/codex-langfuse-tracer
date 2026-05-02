@@ -54,6 +54,7 @@ type InsightRollup struct {
 	LastVerificationStatus   string
 	CommandKindCounts        map[string]int
 	ToolFamilyCounts         map[string]int
+	MCPServerCounts          map[string]int
 	ChangedExtensions        []string
 	TouchedTestFiles         []string
 }
@@ -105,6 +106,7 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 		VerificationStatus: "not_applicable",
 		CommandKindCounts:  newCommandKindCounts(),
 		ToolFamilyCounts:   newToolFamilyCounts(),
+		MCPServerCounts:    map[string]int{},
 	}
 	changedFiles := map[string]bool{}
 	verificationFailed := false
@@ -146,6 +148,10 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 				if path != "" {
 					changedFiles[path] = true
 				}
+			}
+		case "codex.tool.mcp":
+			if server := normalizeMCPServer(stringValue(observation.Metadata["mcp_server"])); server != "" {
+				rollup.MCPServerCounts[server]++
 			}
 		}
 	}
@@ -212,6 +218,14 @@ func (r InsightRollup) navigationValues() []string {
 	return values
 }
 
+func (r InsightRollup) Tags() []string {
+	values := append([]string{}, r.navigationValues()...)
+	for _, server := range sortedMCPServers(r.MCPServerCounts) {
+		values = append(values, "mcp:"+server)
+	}
+	return sortedUnique(values)
+}
+
 func CommandInsightMetadata(payload map[string]any) map[string]any {
 	metadata := map[string]any{
 		"command_kind": ClassifyCommand(FormatCommand(payload["command"])),
@@ -227,6 +241,35 @@ func CommandInsightMetadata(payload map[string]any) map[string]any {
 		metadata["duration_ms"] = int(durationToNS(payload["duration"]) / 1_000_000)
 	}
 	return metadata
+}
+
+func MCPToolMetadata(payload map[string]any) map[string]any {
+	invocation := mapValue(payload["invocation"])
+	metadata := map[string]any{}
+	if server := normalizeMCPServer(stringValue(invocation["server"])); server != "" {
+		metadata["mcp_server"] = server
+	}
+	if tool := strings.TrimSpace(stringValue(invocation["tool"])); tool != "" {
+		metadata["mcp_tool"] = tool
+	}
+	return metadata
+}
+
+func normalizeMCPServer(server string) string {
+	server = strings.ToLower(strings.TrimSpace(server))
+	if server == "" {
+		return ""
+	}
+	for i, r := range server {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			continue
+		}
+		if i > 0 && (r == '.' || r == '_' || r == '-') {
+			continue
+		}
+		return ""
+	}
+	return server
 }
 
 func isVerificationCommand(kind string) bool {
@@ -323,6 +366,31 @@ func stringSliceValue(value any) []string {
 func sortedKeys(values map[string]bool) []string {
 	result := make([]string, 0, len(values))
 	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sortedMCPServers(values map[string]int) []string {
+	result := make([]string, 0, len(values))
+	for value, count := range values {
+		if count > 0 {
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sortedUnique(values []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
 		result = append(result, value)
 	}
 	sort.Strings(result)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +242,90 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 	requireNoDuplicateInsightFields(t, changedMetadata)
 }
 
+// TEST-402
+func TestInsightTagFacets(t *testing.T) {
+	t.Parallel()
+	validateInsightTagFacets(t)
+}
+
+func validateInsightTagFacets(t *testing.T) {
+	t.Helper()
+
+	complete := parseCompleteFixture(t)
+	completeRollup := BuildInsightRollup(complete)
+	wantComplete := strings.Fields(completeRollup.Metadata()["navigation"].(string))
+	wantComplete = append(wantComplete, "mcp:github")
+	sort.Strings(wantComplete)
+	if got := completeRollup.Tags(); !reflect.DeepEqual(got, wantComplete) {
+		t.Fatalf("complete tags = %#v, want %#v", got, wantComplete)
+	}
+	for _, tag := range completeRollup.Tags() {
+		if strings.Contains(tag, "issues/list") || strings.Contains(tag, "/") {
+			t.Fatalf("tag contains exact MCP tool or path-like value: %q", tag)
+		}
+	}
+
+	noMCP := BuildInsightRollup(Turn{
+		Observations: []Observation{
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
+		},
+	})
+	if got := noMCP.Tags(); !reflect.DeepEqual(got, strings.Fields(noMCP.Metadata()["navigation"].(string))) {
+		t.Fatalf("no-MCP tags = %#v, want navigation values", got)
+	}
+	for _, tag := range noMCP.Tags() {
+		if tag == "tool:mcp" || strings.HasPrefix(tag, "mcp:") {
+			t.Fatalf("configured-but-unused MCP must not create tag: %#v", noMCP.Tags())
+		}
+	}
+
+	userDefined := BuildInsightRollup(Turn{
+		Observations: []Observation{
+			{Name: "codex.tool.mcp", Type: "tool", Metadata: map[string]any{"mcp_server": "private-test-server", "mcp_tool": "secret/tool"}},
+		},
+	})
+	wantUserDefined := strings.Fields(userDefined.Metadata()["navigation"].(string))
+	wantUserDefined = append(wantUserDefined, "mcp:private-test-server")
+	sort.Strings(wantUserDefined)
+	if got := userDefined.Tags(); !reflect.DeepEqual(got, wantUserDefined) {
+		t.Fatalf("user-defined MCP tags = %#v, want %#v", got, wantUserDefined)
+	}
+	for _, tag := range userDefined.Tags() {
+		if strings.Contains(tag, "secret/tool") {
+			t.Fatalf("exact MCP tool leaked into tags: %#v", userDefined.Tags())
+		}
+	}
+
+	allCommands := Turn{}
+	for _, kind := range commandKinds {
+		allCommands.Observations = append(allCommands.Observations, Observation{
+			Name:     "codex.tool.exec_command",
+			Type:     "tool",
+			Metadata: map[string]any{"command_kind": kind, "failure_type": "none"},
+		})
+	}
+	allCommandTags := BuildInsightRollup(allCommands).Tags()
+	for _, kind := range commandKinds {
+		if !slices.Contains(allCommandTags, "command:"+kind) {
+			t.Fatalf("tags missing command:%s in %#v", kind, allCommandTags)
+		}
+	}
+}
+
+// EVAL-402
+func TestEvalInsightTagFacetDeterminism(t *testing.T) {
+	t.Parallel()
+	validateInsightTagFacets(t)
+
+	turn := parseCompleteFixture(t)
+	first := BuildInsightRollup(turn).Tags()
+	for i := 0; i < 20; i++ {
+		if got := BuildInsightRollup(turn).Tags(); !reflect.DeepEqual(got, first) {
+			t.Fatalf("tags are nondeterministic: first=%#v got=%#v", first, got)
+		}
+	}
+}
+
 // TEST-105
 func TestInsightRollupDeterminism(t *testing.T) {
 	t.Parallel()
@@ -283,8 +369,6 @@ func TestInsightRollupDeterminism(t *testing.T) {
 
 // EVAL-103
 func TestEvalInsightRollupLatency(t *testing.T) {
-	t.Parallel()
-
 	turn := parseCompleteFixture(t)
 	start := time.Now()
 	for i := 0; i < 100; i++ {

@@ -40,6 +40,13 @@
     "verification_status": "failed",
     "web_search_tool_count": 0
   },
+  "tags": [
+    "command:test",
+    "files:changed",
+    "tool:apply_patch",
+    "tool:exec_command",
+    "verification:failed"
+  ],
   "exportable": true,
   "observations": [
     {

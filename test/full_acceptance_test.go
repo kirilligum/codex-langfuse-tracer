@@ -2,14 +2,19 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // TEST-018
@@ -109,7 +114,81 @@ func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 	requireNoForbiddenContractKeys(t, failed.Metadata)
 }
 
+// TEST-406
+func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
+	t.Parallel()
+
+	completeTurn := turnFromFixture(t, "complete-tools")
+	complete := tracecontract.FromTurn(completeTurn)
+	for _, tag := range []string{"command:other", "files:changed", "mcp:github", "tool:mcp", "tool:web_search", "verification:not_run"} {
+		if !slices.Contains(complete.Tags, tag) {
+			t.Fatalf("complete tags missing %q in %#v", tag, complete.Tags)
+		}
+	}
+	for _, tag := range complete.Tags {
+		if strings.Contains(tag, "issues/list") || strings.Contains(tag, "/tmp/") || strings.Contains(tag, "sess-complete") {
+			t.Fatalf("forbidden value leaked into tag %q", tag)
+		}
+	}
+	mcpMetadata := map[string]any(nil)
+	for _, observation := range complete.Observations {
+		if observation.Name == "codex.tool.mcp" {
+			mcpMetadata = observation.Metadata
+			break
+		}
+	}
+	if mcpMetadata["mcp_server"] != "github" || mcpMetadata["mcp_tool"] != "issues/list" {
+		t.Fatalf("MCP metadata = %#v", mcpMetadata)
+	}
+
+	noTools := contractFromFixture(t, "complete-no-tools")
+	for _, tag := range noTools.Tags {
+		if strings.HasPrefix(tag, "mcp:") || tag == "tool:mcp" {
+			t.Fatalf("no-tools fixture has MCP tag in %#v", noTools.Tags)
+		}
+	}
+
+	spans := emitAcceptanceSpans(t, completeTurn)
+	rawTags, err := json.Marshal(codextrace.BuildInsightRollup(completeTurn).Tags())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTags := string(rawTags)
+	for _, name := range []string{"codex.agent", "codex.transcript", "codex.tool.mcp"} {
+		span := spans.byName(name)
+		if span.name == "" {
+			t.Fatalf("missing span %s", name)
+		}
+		if span.attributes["langfuse.trace.tags"] != wantTags {
+			t.Fatalf("%s tags = %q want %q", name, span.attributes["langfuse.trace.tags"], wantTags)
+		}
+	}
+	for _, span := range spans {
+		if span.name == "codex.agent" {
+			continue
+		}
+		for key := range span.attributes {
+			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+				t.Fatalf("%s repeats root insight metadata %s", span.name, key)
+			}
+		}
+	}
+
+	service, err := os.ReadFile(filepath.Join("..", "systemd", "codex-langfuse-watch.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(service), ".codex/bin/codex-langfuse-exporter --watch") {
+		t.Fatalf("service does not run watcher exporter:\n%s", service)
+	}
+}
+
 func contractFromFixture(t *testing.T, name string) tracecontract.Trace {
+	t.Helper()
+	return tracecontract.FromTurn(turnFromFixture(t, name))
+}
+
+func turnFromFixture(t *testing.T, name string) codextrace.Turn {
 	t.Helper()
 	turns, err := codextrace.ParseTurns(filepath.Join("..", "testdata", "rollouts", name+".jsonl"))
 	if err != nil {
@@ -119,7 +198,7 @@ func contractFromFixture(t *testing.T, name string) tracecontract.Trace {
 	if len(exportable) != 1 {
 		t.Fatalf("%s exportable turns = %d", name, len(exportable))
 	}
-	return tracecontract.FromTurn(exportable[0])
+	return exportable[0]
 }
 
 func requireMetadataInt(t *testing.T, metadata map[string]any, key string, want int) {
@@ -127,4 +206,55 @@ func requireMetadataInt(t *testing.T, metadata map[string]any, key string, want 
 	if metadata[key] != want {
 		t.Fatalf("metadata[%s] = %#v, want %d\nmetadata=%s", key, metadata[key], want, canonicalJSON(metadata))
 	}
+}
+
+type acceptanceExporter struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (e *acceptanceExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.spans = append(e.spans, spans...)
+	return nil
+}
+
+func (e *acceptanceExporter) Shutdown(context.Context) error {
+	return nil
+}
+
+func emitAcceptanceSpans(t *testing.T, turn codextrace.Turn) acceptanceSpans {
+	t.Helper()
+	exporter := &acceptanceExporter{}
+	if err := langfuse.EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitTurn: %v", err)
+	}
+	exporter.mu.Lock()
+	defer exporter.mu.Unlock()
+	result := make(acceptanceSpans, 0, len(exporter.spans))
+	for _, span := range exporter.spans {
+		attrs := map[string]string{}
+		for _, attr := range span.Attributes() {
+			attrs[string(attr.Key)] = attr.Value.Emit()
+		}
+		result = append(result, acceptanceSpan{name: span.Name(), attributes: attrs})
+	}
+	return result
+}
+
+type acceptanceSpan struct {
+	name       string
+	attributes map[string]string
+}
+
+type acceptanceSpans []acceptanceSpan
+
+func (s acceptanceSpans) byName(name string) acceptanceSpan {
+	for _, span := range s {
+		if span.name == name {
+			return span
+		}
+	}
+	return acceptanceSpan{}
 }

@@ -41,6 +41,15 @@ go test ./internal/langfuse -run TestCountMetadataExportedOnAgent -count=1
 go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1
 ```
 
+Tags and MCP usage checks:
+
+```sh
+go test ./internal/codextrace -run TestInsightTagFacets -count=1
+go test ./test -run TestGoldenLangfuseTagsContract -count=1
+go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1
+go test ./test -run TestDocsTagsAndMCPUsage -count=1
+```
+
 ## Fuzz Smoke
 
 ```sh

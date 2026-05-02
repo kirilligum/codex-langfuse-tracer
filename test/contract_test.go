@@ -88,6 +88,9 @@ func compareTraceContract(t *testing.T, golden, actual tracecontract.Trace) {
 	if canonicalJSON(golden.Metadata) != canonicalJSON(actual.Metadata) {
 		t.Fatalf("metadata mismatch\ngolden=%s\nactual=%s", canonicalJSON(golden.Metadata), canonicalJSON(actual.Metadata))
 	}
+	if canonicalJSON(golden.Tags) != canonicalJSON(actual.Tags) {
+		t.Fatalf("tags mismatch\ngolden=%s\nactual=%s", canonicalJSON(golden.Tags), canonicalJSON(actual.Tags))
+	}
 
 	actualByName := map[string][]tracecontract.Observation{}
 	for _, observation := range actual.Observations {

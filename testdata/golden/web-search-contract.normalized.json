@@ -38,6 +38,11 @@
     "verification_status": "not_applicable",
     "web_search_tool_count": 1
   },
+  "tags": [
+    "files:read_only",
+    "tool:web_search",
+    "verification:not_applicable"
+  ],
   "exportable": true,
   "observations": [
     {

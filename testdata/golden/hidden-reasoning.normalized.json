@@ -38,6 +38,10 @@
     "verification_status": "not_applicable",
     "web_search_tool_count": 0
   },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
   "exportable": true,
   "observations": [
     {

@@ -7,20 +7,21 @@
 - Owners: repository maintainers for `/home/kirill/p/codex-langfuse-tracer`
 - Date: 2026-05-01
 - Document ID: CLT-TAGS-MCP-SRS-TEST-PLAN-001
-- Summary: This plan adds deterministic low-cardinality Langfuse trace tags and observed MCP server usage to the existing Go exporter. The implementation keeps the current installed watcher path, keeps `codex_insight.navigation` as the canonical trace filter index, adds exact MCP server/tool metadata to `codex.tool.mcp` observations, derives trace tags from the same rollup used for navigation, and avoids tags for configured-but-unused MCPs or high-cardinality exact MCP tool names.
+- Summary: This plan adds deterministic low-cardinality Langfuse trace tags and observed MCP server usage to the existing Go exporter. The implementation keeps the current installed watcher path, keeps `codex_insight.navigation` as the canonical trace filter index, adds exact MCP server/tool metadata to `codex.tool.mcp` observations, derives trace tags as the existing navigation values plus observed MCP server tags, and avoids tags for configured-but-unused MCPs or high-cardinality exact MCP tool names.
 
 ## 2. Design Consensus and Trade-Offs
 
 | Topic | Verdict | Rationale |
 | --- | --- | --- |
-| Tags vs metadata | DECISION | Keep `codex_insight.navigation` in `internal/codextrace/insight.go` as the complete trace-table filter index. Add tags only as a human-facing projection for common trace buckets, because Langfuse exposes tags directly in trace filtering while metadata remains more structured. |
-| One canonical derivation path | DECISION | Generate tags from the same rollup data that feeds `navigation`; do not add independent tag parsing in `internal/langfuse/export.go`. This matches the repository preference for one way of doing things and prevents drift between metadata filters and tag filters. |
+| Tags vs metadata | DECISION | Keep `codex_insight.navigation` in `internal/codextrace/insight.go` as the complete trace-table filter index. Add tags as the same navigation values plus observed MCP server tags, because Langfuse exposes tags directly in trace filtering while metadata remains more structured. |
+| One canonical derivation path | DECISION | Generate tags from the same rollup data that feeds `navigation`; do not add independent tag parsing or a curated tag subset in `internal/langfuse/export.go`. This matches the repository preference for one way of doing things and prevents drift between metadata filters and tag filters. |
+| Command tag scope | DECISION | Emit command tags for every observed `command_kind` enum value already produced by `CommandInsightMetadata` and counted by `BuildInsightRollup`. A selected subset such as only `search`, `network`, and `install` would create a second taxonomy. |
 | Observed MCPs vs configured MCPs | DECISION | Tag only MCP servers observed in a trace through `mcp_tool_call_end` events parsed by `internal/codextrace/parser.go`. Configured-but-unused MCPs describe availability, not behavior, and would make trace tags misleading. |
 | Exact MCP tool tags | AGAINST | Do not emit tags such as `mcp:github:issues/list`. Exact tool names are useful drill-down data and belong on `codex.tool.mcp` observation metadata as `mcp_tool`; tags remain low-cardinality trace buckets. |
 | MCP server tags | DECISION | Emit `mcp:<server>` for every non-empty MCP server observed in the trace. This is more maintainable than a static MCP server list and keeps one rule for built-in, plugin, and user-defined MCP servers. |
 | Install behavior | DECISION | Do not add an installer mode or separate MCP watcher. `install.sh` already builds `~/.codex/bin/codex-langfuse-exporter` and restarts `codex-langfuse-watch.service`; new exports produced by `--watch` receive tags automatically after installation. |
 | Backfill behavior | AGAINST | Do not add automatic Langfuse backfill in this change. Existing manual export modes in `cmd/codex-langfuse-exporter/main.go` already support `--path`, `--session-id`, and `--latest`; old traces can be re-exported explicitly when needed. |
-| Tag attribute API | DECISION | Emit OpenTelemetry attribute `langfuse.trace.tags` from the root `codex.agent` span. The repository already uses Langfuse OTel attributes in `internal/langfuse/export.go`; Langfuse documents tags as trace/observation filters and maps `langfuse.trace.tags` to trace tags: https://langfuse.com/docs/observability/features/tags and https://langfuse.com/integrations/native/opentelemetry. |
+| Tag attribute API | DECISION | Emit OpenTelemetry attribute `langfuse.trace.tags` from the root `codex.agent` span and child spans using one shared tag slice. The repository already uses Langfuse OTel attributes in `internal/langfuse/export.go`; Langfuse documents tags as trace/observation filters and maps `langfuse.trace.tags` to trace tags: https://langfuse.com/docs/observability/features/tags and https://langfuse.com/integrations/native/opentelemetry. Child spans must not repeat `codex_insight` metadata. |
 
 ## 3. PRD / Stakeholder and System Needs
 
@@ -36,7 +37,7 @@
   - 100% of new `TEST-###` tests pass locally.
   - `go test ./... -count=1` passes.
   - `git diff --check` passes.
-  - All emitted tags are sorted, unique, and derived from the core tag set plus observed `mcp:<server>` values.
+  - All emitted tags are sorted, unique, and derived from `codex_insight.navigation` values plus observed `mcp:<server>` values.
   - `codex.tool.mcp` observations include `mcp_server` and `mcp_tool` when rollout invocation data is present.
 - Scope:
   - Parser metadata for MCP observations.
@@ -44,7 +45,7 @@
   - Trace tags derived from canonical rollup data.
   - Normalized contract and golden fixture coverage.
   - Langfuse OTel projection tests.
-  - Documentation for the core tag list, observed MCP server tag rule, install behavior, and backfill behavior.
+  - Documentation for the navigation-derived tag rule, observed MCP server tag rule, install behavior, and backfill behavior.
 - Non-goals:
   - No new CLI flags.
   - No new configuration file format.
@@ -68,7 +69,7 @@
   - Codex rollout files continue to record MCP usage as `mcp_tool_call_end` events with `payload.invocation.server` and `payload.invocation.tool`.
   - `codex.tool.mcp` remains the observation name for MCP calls.
   - The installed watcher exports future completed turns after `install.sh` restarts the service.
-  - The tag set should stay small enough for the Langfuse tag filter UI to remain useful.
+  - The tag set should stay small enough for the Langfuse tag filter UI to remain useful because navigation values are bounded by existing file-state, verification-status, command-kind, and tool-family enums.
 
 ## 4. SRS / Canonical Requirements
 
@@ -76,14 +77,14 @@
 
 - REQ-401 type func: The parser shall add `mcp_server` and `mcp_tool` metadata to each `codex.tool.mcp` observation when `mcp_tool_call_end.payload.invocation.server` and `.tool` are present. Acceptance: `testdata/rollouts/complete-tools.jsonl` produces `mcp_server=github` and `mcp_tool=issues/list` in the MCP observation.
 - REQ-402 type func: The trace rollup shall derive MCP server facets only from observed `codex.tool.mcp` observations. Acceptance: a turn with one GitHub MCP observation contains `mcp:github`; a turn without MCP observations contains no `mcp:*` facets.
-- REQ-403 type func: The exporter shall support core trace tags `files:changed`, `files:read_only`, `verification:failed`, `command:search`, `command:network`, `command:install`, `tool:web_search`, and `tool:mcp`, plus one `mcp:<server>` tag for each non-empty observed MCP server. Acceptance: tag derivation omits unrelated navigation facets such as `command:read`, `command:test`, `command:git`, `command:other`, `tool:exec_command`, `tool:apply_patch`, and exact MCP tool names.
+- REQ-403 type func: The exporter shall support trace tags for every value emitted by `InsightRollup.navigationValues()` plus one `mcp:<server>` tag for each non-empty observed MCP server. Acceptance: tag derivation includes observed command tags for all `command_kind` enum values when present, includes observed tool-family tags when present, and omits exact MCP tool names.
 - REQ-404 type func: Tags shall be derived from the same rollup data used by `codex_insight.navigation`. Acceptance: no duplicate parser or exporter branch recomputes file state, command family, web search, or MCP server facts.
 - REQ-405 type func: Normalized trace contracts shall include tags so fixture drift is visible in `testdata/golden/*.normalized.json`. Acceptance: `tracecontract.Trace` has a deterministic `tags` field for exportable traces.
-- REQ-406 type func: Langfuse OTel export shall attach trace tags to `codex.agent` using `langfuse.trace.tags`. Acceptance: the in-memory span snapshot for `codex.agent` contains the expected tag attribute and child observations do not repeat root-only insight metadata.
+- REQ-406 type func: Langfuse OTel export shall attach trace tags to `codex.agent` and child spans using `langfuse.trace.tags`. Acceptance: the in-memory span snapshot for `codex.agent` and at least one child span contains the same expected tag attribute, and child observations do not repeat `langfuse.trace.metadata.codex_insight.*` metadata.
 - REQ-407 type func: The installed watcher shall apply tags to future exports without an additional watcher process. Acceptance: `install.sh` still installs and restarts `codex-langfuse-watch.service`, and docs state that future `--watch` exports receive tags after installation.
 - REQ-408 type func: Exact MCP tool names shall not become trace tags. Acceptance: `mcp_tool=issues/list` appears in observation metadata and no tag contains `issues/list`.
 - REQ-409 type func: Configured-but-unused MCPs shall not become trace tags. Acceptance: a fixture with no MCP observation has no `tool:mcp` or `mcp:*` tags.
-- REQ-410 type func: Documentation shall list the core tag set, observed MCP server tag rule, MCP observation metadata fields, install behavior, and explicit backfill behavior. Acceptance: `README.md` and `TESTING.md` describe the tags and existing commands.
+- REQ-410 type func: Documentation shall describe the navigation-derived tag rule, observed MCP server tag rule, MCP observation metadata fields, install behavior, and explicit backfill behavior. Acceptance: `README.md` and `TESTING.md` describe the tags and existing commands.
 
 ### Non-Functional Requirements
 
@@ -95,7 +96,7 @@
 ### Interface/API Requirements
 
 - REQ-415 type int: The CLI interface shall remain unchanged. Acceptance: `cmd/codex-langfuse-exporter/cli_test.go` still accepts the same source modes and rejects mutually exclusive source modes.
-- REQ-416 type int: Langfuse tag export shall use the OTel attribute key `langfuse.trace.tags` in `internal/langfuse/export.go`. Acceptance: span tests inspect that exact key on `codex.agent`.
+- REQ-416 type int: Langfuse tag export shall use the OTel attribute key `langfuse.trace.tags` in `internal/langfuse/export.go`. Acceptance: span tests inspect that exact key on `codex.agent` and child spans.
 - REQ-417 type int: The install interface shall remain `./install.sh`, which builds `~/.codex/bin/codex-langfuse-exporter`, installs `codex-langfuse-watch.service`, reloads systemd, enables the service, and restarts it. Acceptance: installer tests continue to validate the same service name and installed binary path.
 
 ### Data Requirements
@@ -108,8 +109,8 @@
 
 - Parser behavior: Missing or malformed MCP invocation fields produce no parser error; the observation is still emitted with existing metadata such as `call_id` and `type`.
 - Export behavior: An empty tag list shall omit `langfuse.trace.tags`; it shall not emit an empty string or metadata key named `tags`.
-- Privacy behavior: Tag derivation shall use only low-cardinality categorical facts from the rollup: core trace facts and observed MCP server identifiers.
-- Telemetry behavior: Trace tags are root-level trace navigation data; exact MCP call details remain observation-level metadata.
+- Privacy behavior: Tag derivation shall use only low-cardinality categorical facts from the rollup: navigation values and observed MCP server identifiers.
+- Telemetry behavior: Trace tags are trace navigation data emitted through `langfuse.trace.tags`; exact MCP call details remain observation-level metadata.
 
 ### Architecture Diagram
 
@@ -226,20 +227,20 @@ Phase metrics:
 
 ### Phase P01: Canonical Tag Facets
 
-Scope and objectives: Derive low-cardinality trace tag values from the same rollup data used for navigation, including observed MCP server facets. Impacted requirements: REQ-402, REQ-403, REQ-404, REQ-408, REQ-409, REQ-411, REQ-412, REQ-413, REQ-420.
+Scope and objectives: Derive low-cardinality trace tag values from the same rollup data used for navigation, including every navigation value and observed MCP server facets. Impacted requirements: REQ-402, REQ-403, REQ-404, REQ-408, REQ-409, REQ-411, REQ-412, REQ-413, REQ-420.
 
 Steps:
 
 - Step 0 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P01-start`.
 - Step 1 RED: create/update `TEST-402` in `internal/codextrace/insight_test.go` for `REQ-402`, `REQ-403`, `REQ-404`, `REQ-408`, `REQ-409`, `REQ-411`, `REQ-412`, and `REQ-420`; run `go test ./internal/codextrace -run TestInsightTagFacets -count=1`; expected FAIL because the rollup currently exposes `navigation` but no trace tag values or MCP server facets.
-- Step 2 GREEN: implement minimal rollup additions for observed MCP server counts and a single sorted tag-value helper; run `go test ./internal/codextrace -run TestInsightTagFacets -count=1`; expected PASS.
-- Step 3 REFACTOR: route `Metadata()["navigation"]` and tag values through one canonical facet helper with a small tag projection filter; run `go test ./internal/codextrace -run 'TestInsightCountMetadataSingleRepresentation|TestInsightTagFacets|TestInsightRollupDeterminism' -count=1`; expected PASS.
+- Step 2 GREEN: implement minimal rollup additions for observed MCP server counts and a single sorted tag-value helper that returns `navigationValues()` plus observed `mcp:<server>` values; run `go test ./internal/codextrace -run TestInsightTagFacets -count=1`; expected PASS.
+- Step 3 REFACTOR: keep `Metadata()["navigation"]` and tag values routed through the same canonical facet helper without a curated tag subset; run `go test ./internal/codextrace -run 'TestInsightCountMetadataSingleRepresentation|TestInsightTagFacets|TestInsightRollupDeterminism' -count=1`; expected PASS.
 - Step 4 MEASURE: run `EVAL-402` command `go test ./internal/codextrace -run TestEvalInsightTagFacetDeterminism -count=5 -parallel 4`; expected thresholds met.
 - Step 5 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P01-done`.
 
 Exit gates:
 
-- Green criteria: tags are sorted, unique, low-cardinality, lowercase, and omit exact MCP tool names.
+- Green criteria: tags are sorted, unique, low-cardinality, lowercase, include every navigation value, and omit exact MCP tool names.
 - Yellow criteria: helper names are clear but tests reveal minor repeated expected tag literals.
 - Red criteria: tags include exact MCP tool names, configured-but-unused MCPs, file paths, or prompt/output text.
 
@@ -250,8 +251,8 @@ Phase metrics:
 - Internal interactions: 3, parser metadata, rollup, rollup tests.
 - External interactions: 0, no Langfuse call in this phase.
 - Complexity %: 28, MCP server counts add a new rollup dimension.
-- Feature creep %: 10, one observed-server rule avoids maintaining a current-MCP list.
-- Technical debt %: 8, one helper reduces duplicated taxonomy.
+- Feature creep %: 8, one navigation-derived tag rule plus one observed-server rule avoids maintaining another tag taxonomy.
+- Technical debt %: 6, one helper eliminates duplicated taxonomy.
 - YAGNI score: 86, no dynamic tag config is introduced.
 - MoSCoW: Must.
 - Local/non-local scope: Local.
@@ -292,22 +293,22 @@ Phase metrics:
 
 ### Phase P03: Langfuse OTel Tag Export
 
-Scope and objectives: Emit trace tags to Langfuse through OTel without changing child observation metadata policy. Impacted requirements: REQ-406, REQ-416, REQ-419.
+Scope and objectives: Emit trace tags to Langfuse through OTel on root and child spans without copying root `codex_insight` metadata to child observations. Impacted requirements: REQ-406, REQ-416, REQ-419.
 
 Steps:
 
 - Step 0 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P03-start`.
-- Step 1 RED: create/update `TEST-404` in `internal/langfuse/spans_test.go` for `REQ-406`, `REQ-416`, and `REQ-419`; run `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnAgent -count=1`; expected FAIL because `codex.agent` currently lacks `langfuse.trace.tags`.
-- Step 2 GREEN: append `langfuse.trace.tags` to `codex.agent` attributes from the canonical rollup tag helper in `internal/langfuse/export.go`; run `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnAgent -count=1`; expected PASS.
-- Step 3 REFACTOR: keep tag attribute serialization in one exporter helper next to `insightMetadataAttributes`; run `go test ./internal/langfuse -run 'TestCountMetadataExportedOnAgent|TestLangfuseTraceTagsExportedOnAgent|TestLangfuseVersionReleaseAndFailedCommandLevel' -count=1`; expected PASS.
+- Step 1 RED: create/update `TEST-404` in `internal/langfuse/spans_test.go` for `REQ-406`, `REQ-416`, and `REQ-419`; run `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1`; expected FAIL because spans currently lack `langfuse.trace.tags`.
+- Step 2 GREEN: append `langfuse.trace.tags` to `codex.agent` and child span attributes from the canonical rollup tag helper in `internal/langfuse/export.go`; run `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1`; expected PASS.
+- Step 3 REFACTOR: keep tag attribute serialization in one exporter helper next to `insightMetadataAttributes`; run `go test ./internal/langfuse -run 'TestCountMetadataExportedOnAgent|TestLangfuseTraceTagsExportedOnSpans|TestLangfuseVersionReleaseAndFailedCommandLevel' -count=1`; expected PASS.
 - Step 4 MEASURE: run `EVAL-404` command `go test ./internal/langfuse -run TestEvalLangfuseTagProjection -count=5 -parallel 4`; expected thresholds met.
 - Step 5 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P03-done`.
 
 Exit gates:
 
-- Green criteria: `codex.agent` contains `langfuse.trace.tags` with expected values and child observations do not repeat root insight metadata.
+- Green criteria: `codex.agent` and child spans contain the same `langfuse.trace.tags` values and child observations do not repeat root `codex_insight` metadata.
 - Yellow criteria: in-memory serialization differs visually from expected Langfuse UI display but OTel attributes are correct.
-- Red criteria: exporter emits a metadata key named `tags`, repeats root tag attributes on every child span, or drops existing trace metadata.
+- Red criteria: exporter emits a metadata key named `tags`, recomputes tags per child span, repeats root `codex_insight` metadata on every child span, or drops existing trace metadata.
 
 Phase metrics:
 
@@ -317,7 +318,7 @@ Phase metrics:
 - External interactions: 1, Langfuse OTel semantic mapping.
 - Complexity %: 20, one root attribute is added.
 - Feature creep %: 7, no live backfill behavior is added.
-- Technical debt %: 8, helper placement prevents scattered attribute code.
+- Technical debt %: 7, one shared tag-attribute helper prevents scattered attribute code.
 - YAGNI score: 88, no translation or config layer is added.
 - MoSCoW: Must.
 - Local/non-local scope: Local with external API semantics.
@@ -325,21 +326,21 @@ Phase metrics:
 
 ### Phase P04: Documentation and Install Behavior
 
-Scope and objectives: Document the core tag list, observed MCP server tag rule, MCP metadata, future-export install behavior, and backfill path. Impacted requirements: REQ-407, REQ-410, REQ-415, REQ-417.
+Scope and objectives: Document the navigation-derived tag rule, observed MCP server tag rule, MCP metadata, future-export install behavior, and backfill path. Impacted requirements: REQ-407, REQ-410, REQ-415, REQ-417.
 
 Steps:
 
 - Step 0 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P04-start`.
-- Step 1 RED: create/update `TEST-405` in `test/docs_static_test.go` for `REQ-407`, `REQ-410`, `REQ-415`, and `REQ-417`; run `go test ./test -run TestDocsTagsAndMCPUsage -count=1`; expected FAIL because `README.md` and `TESTING.md` do not yet list the core tag set, observed MCP server tag rule, MCP metadata fields, or install/backfill behavior.
-- Step 2 GREEN: update `README.md` and `TESTING.md` with the core tag list, observed MCP server tag rule, observation metadata fields, no-new-CLI statement, and existing install watcher behavior; run `go test ./test -run TestDocsTagsAndMCPUsage -count=1`; expected PASS.
+- Step 1 RED: create/update `TEST-405` in `test/docs_static_test.go` for `REQ-407`, `REQ-410`, `REQ-415`, and `REQ-417`; run `go test ./test -run TestDocsTagsAndMCPUsage -count=1`; expected FAIL because `README.md` and `TESTING.md` do not yet describe the navigation-derived tag rule, observed MCP server tag rule, MCP metadata fields, or install/backfill behavior.
+- Step 2 GREEN: update `README.md` and `TESTING.md` with the navigation-derived tag rule, observed MCP server tag rule, observation metadata fields, no-new-CLI statement, and existing install watcher behavior; run `go test ./test -run TestDocsTagsAndMCPUsage -count=1`; expected PASS.
 - Step 3 REFACTOR: keep tag documentation in `README.md` and keep `TESTING.md` focused on commands; run `go test ./test -run 'TestDocsNavigationFacetsAndSavedViews|TestDocsTagsAndMCPUsage|TestInstallUninstallScripts' -count=1`; expected PASS.
 - Step 4 MEASURE: run `EVAL-405` command `go test ./test -run TestEvalDocsTraceContractCompleteness -count=3 -parallel 2`; expected thresholds met.
 - Step 5 RESTORE POINT: run `git tag -f restore/langfuse-tags-mcp-P04-done`.
 
 Exit gates:
 
-- Green criteria: docs list core tags and the observed MCP server tag rule, say tags apply to future watcher exports after `install.sh`, and describe explicit re-export for old rows.
-- Yellow criteria: docs are correct but contain repeated tag literals outside one concise list.
+- Green criteria: docs describe tags as `codex_insight.navigation` values plus observed `mcp:<server>` tags, say tags apply to future watcher exports after `install.sh`, and describe explicit re-export for old rows.
+- Yellow criteria: docs are correct but repeat tag derivation rules outside one concise section.
 - Red criteria: docs imply a new watcher, a new CLI flag, or automatic backfill.
 
 Phase metrics:
@@ -350,7 +351,7 @@ Phase metrics:
 - External interactions: 0, no Langfuse call in this phase.
 - Complexity %: 12, documentation-only after code behavior exists.
 - Feature creep %: 6, no new user workflow is introduced.
-- Technical debt %: 7, one docs section reduces tag-contract drift.
+- Technical debt %: 6, one docs section reduces tag-contract drift.
 - YAGNI score: 91, no installer change is planned.
 - MoSCoW: Should.
 - Local/non-local scope: Local.
@@ -372,8 +373,8 @@ Steps:
 
 Exit gates:
 
-- Green criteria: full suite, eval suite, and diff check pass.
-- Yellow criteria: all tests pass but local Langfuse live tag display has not been exercised in the current shell.
+- Green criteria: full suite, eval suite, diff check, and CHECK-401 production smoke pass.
+- Yellow criteria: all automated tests pass but CHECK-401 has not been exercised in the current shell.
 - Red criteria: any required test fails, diff check fails, or tag behavior depends on a new runtime flag.
 
 Phase metrics:
@@ -409,7 +410,7 @@ evaluations:
     purpose: dev
     metrics:
       determinism: "canonical tag JSON identical across repeated rollups"
-      tag_contract: "tags are core tags or mcp:<observed-server> values"
+      tag_contract: "tags are navigation values or mcp:<observed-server> values"
     thresholds:
       determinism: "100%"
       tag_contract: "100%"
@@ -432,8 +433,8 @@ evaluations:
   - id: EVAL-404
     purpose: dev
     metrics:
-      span_projection_accuracy: "codex.agent has expected langfuse.trace.tags"
-      child_metadata_policy: "children do not repeat root insight metadata"
+      span_projection_accuracy: "codex.agent and child spans have expected langfuse.trace.tags"
+      child_metadata_policy: "children do not repeat root codex_insight metadata"
     thresholds:
       span_projection_accuracy: "100%"
       child_metadata_policy: "100%"
@@ -443,7 +444,7 @@ evaluations:
   - id: EVAL-405
     purpose: holdout
     metrics:
-      docs_contract_terms: "README and TESTING include core tag list, observed MCP server tag rule, MCP metadata, install behavior, and backfill wording"
+      docs_contract_terms: "README and TESTING include navigation-derived tag rule, observed MCP server tag rule, MCP metadata, install behavior, and backfill wording"
     thresholds:
       docs_contract_terms: "100%"
     seeds:
@@ -536,7 +537,7 @@ evaluations:
   - command: `go test ./internal/codextrace -run TestInsightTagFacets -count=1`
   - fixtures/mocks/data: `parseCompleteFixture(t)` from `testdata/rollouts/complete-tools.jsonl`; synthetic no-MCP and user-defined-MCP turns built in test code
   - deterministic controls: sorted string comparison; no random input; one observed-server rule
-  - pass_criteria: file contains `// TEST-402`; tags exactly match expected core and observed-MCP values for fixture turns; no exact MCP tool name appears; user-defined MCP server appears in metadata and as an `mcp:<server>` tag
+  - pass_criteria: file contains `// TEST-402`; tags exactly match navigation values plus expected observed-MCP values for fixture turns; no exact MCP tool name appears; user-defined MCP server appears in metadata and as an `mcp:<server>` tag
   - expected_runtime: 2s
 - id: TEST-403
   - name: Golden Langfuse tags contract
@@ -549,14 +550,14 @@ evaluations:
   - pass_criteria: file contains `// TEST-403`; exportable fixtures have expected `tags`; non-exportable fixtures do not require tags; forbidden tag substrings are absent
   - expected_runtime: 5s
 - id: TEST-404
-  - name: Langfuse trace tags exported on agent
+  - name: Langfuse trace tags exported on spans
   - type: unit
   - verifies: REQ-406, REQ-416, REQ-419
   - location: `internal/langfuse/spans_test.go`
-  - command: `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnAgent -count=1`
+  - command: `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1`
   - fixtures/mocks/data: in-memory exporter in `internal/langfuse/memory_test.go`; `testdata/rollouts/complete-tools.jsonl`
   - deterministic controls: fixed span IDs from existing ID generator; no network; no live Langfuse dependency
-  - pass_criteria: file contains `// TEST-404`; `codex.agent` has `langfuse.trace.tags`; expected tags include `files:changed`, `tool:mcp`, `mcp:github`, and `tool:web_search`; tags omit `issues/list`
+  - pass_criteria: file contains `// TEST-404`; `codex.agent` and child spans have the same `langfuse.trace.tags`; expected tags include every navigation value from `complete-tools` plus `mcp:github`; tags omit `issues/list` and child spans omit `langfuse.trace.metadata.codex_insight.*`
   - expected_runtime: 2s
 - id: TEST-405
   - name: Docs tags and MCP usage
@@ -566,7 +567,7 @@ evaluations:
   - command: `go test ./test -run TestDocsTagsAndMCPUsage -count=1`
   - fixtures/mocks/data: `README.md`, `TESTING.md`, `install.sh`
   - deterministic controls: exact substring assertions; no network
-  - pass_criteria: file contains `// TEST-405`; docs include the core tag list, observed MCP server tag rule, `mcp_server`, `mcp_tool`, `langfuse.trace.tags`, `install.sh`, `codex-langfuse-watch.service`, and explicit old-trace re-export wording
+  - pass_criteria: file contains `// TEST-405`; docs include the navigation-derived tag rule, observed MCP server tag rule, `mcp_server`, `mcp_tool`, `langfuse.trace.tags`, `install.sh`, `codex-langfuse-watch.service`, and explicit old-trace re-export wording
   - expected_runtime: 2s
 - id: TEST-406
   - name: Full acceptance Langfuse tags and MCP
@@ -576,16 +577,17 @@ evaluations:
   - command: `go test ./test -run TestFullAcceptanceLangfuseTagsAndMCP -count=1`
   - fixtures/mocks/data: `complete-tools`, `complete-no-tools`, `failed-command`, and user-defined-MCP synthetic fixture if introduced in P01
   - deterministic controls: fixture-only data; exact sorted tag comparisons; no live Langfuse dependency
-  - pass_criteria: file contains `// TEST-406`; acceptance validates MCP metadata, tag derivation, no exact MCP tool tags, no tags for unused MCPs, no CLI surface change, and install script service name
+  - pass_criteria: file contains `// TEST-406`; acceptance validates MCP metadata, navigation-derived tag derivation, root and child span tag export, no exact MCP tool tags, no tags for unused MCPs, no CLI surface change, and install script service name
   - expected_runtime: 10s
 
 ### 7.4 Manual Checks, Optional
 
-- CHECK-401: Optional local Langfuse smoke procedure after all automated gates pass:
+- CHECK-401: Required before declaring production-ready; optional for local code acceptance after all automated gates pass:
   - Build the exporter with `go build -o ~/.codex/bin/codex-langfuse-exporter ./cmd/codex-langfuse-exporter`.
   - Export the fixture with `~/.codex/bin/codex-langfuse-exporter --path testdata/rollouts/complete-tools.jsonl --no-verify`.
   - Open `http://localhost:3000/project/codex-local/traces`.
-  - Confirm the latest exported trace displays tags including `files:changed`, `tool:mcp`, `mcp:github`, and `tool:web_search`.
+  - Confirm the latest exported trace displays tags including `files:changed`, `command:other`, `tool:apply_patch`, `tool:mcp`, `mcp:github`, and `tool:web_search`.
+  - Open the trace observations and confirm an observation span carries the same trace tag set for observation-level tag filtering while not carrying `langfuse.trace.metadata.codex_insight.*`.
   - Record the trace ID and timestamp in the execution log.
 
 ## 8. Data Contract
@@ -616,12 +618,26 @@ tracecontract.Trace:
         - enum:
             - files:changed
             - files:read_only
+            - verification:not_applicable
+            - verification:not_run
+            - verification:passed
             - verification:failed
+            - command:test
+            - command:build
+            - command:lint
+            - command:format
+            - command:git
+            - command:read
             - command:search
-            - command:network
             - command:install
+            - command:systemd
+            - command:network
+            - command:other
+            - tool:exec_command
+            - tool:apply_patch
             - tool:web_search
             - tool:mcp
+            - tool:tool_search
         - pattern: "^mcp:[a-z0-9][a-z0-9._-]*$"
           source: "observed codex.tool.mcp mcp_server metadata"
   observations:
@@ -634,9 +650,12 @@ tracecontract.Trace:
 Invariants:
 
 - Tags are sorted ascending and unique.
-- Tags are emitted only when the underlying fact appears in the exported turn.
+- Tags are emitted only when the underlying navigation value or observed MCP server fact appears in the exported turn.
+- Non-MCP-server tags match `InsightRollup.navigationValues()` exactly.
 - `files:changed` and `files:read_only` are mutually exclusive.
 - `verification:failed` is emitted only when `verification_status == "failed"`.
+- `command:<kind>` tags are emitted for every observed `command_kind` enum value.
+- `tool:<family>` tags are emitted for every observed tool family counted by `BuildInsightRollup`.
 - `tool:mcp` is emitted only when `mcp_tool_count > 0`.
 - `mcp:<server>` tags are emitted only for observed MCP servers in the trace.
 - `mcp_tool` metadata may contain slash-separated tool names; tags may not.
@@ -676,7 +695,7 @@ Privacy/data quality constraints:
 | P01 | REQ-403 | TEST-402 | `internal/codextrace/insight_test.go` | `go test ./internal/codextrace -run TestInsightTagFacets -count=1` |
 | P01 | REQ-404 | TEST-402 | `internal/codextrace/insight_test.go` | `go test ./internal/codextrace -run TestInsightTagFacets -count=1` |
 | P02 | REQ-405 | TEST-403 | `test/contract_fixture_test.go` | `go test ./test -run TestGoldenLangfuseTagsContract -count=1` |
-| P03 | REQ-406 | TEST-404 | `internal/langfuse/spans_test.go` | `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnAgent -count=1` |
+| P03 | REQ-406 | TEST-404 | `internal/langfuse/spans_test.go` | `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1` |
 | P04 | REQ-407 | TEST-405 | `test/docs_static_test.go` | `go test ./test -run TestDocsTagsAndMCPUsage -count=1` |
 | P01 | REQ-408 | TEST-402 | `internal/codextrace/insight_test.go` | `go test ./internal/codextrace -run TestInsightTagFacets -count=1` |
 | P01 | REQ-409 | TEST-402 | `internal/codextrace/insight_test.go` | `go test ./internal/codextrace -run TestInsightTagFacets -count=1` |
@@ -686,7 +705,7 @@ Privacy/data quality constraints:
 | P01 | REQ-413 | TEST-402 | `internal/codextrace/insight_test.go` | `go test ./internal/codextrace -run TestInsightTagFacets -count=1` |
 | P00 | REQ-414 | TEST-401 | `internal/codextrace/tools_test.go` | `go test ./internal/codextrace -run TestMCPObservationMetadata -count=1` |
 | P04 | REQ-415 | TEST-405 | `test/docs_static_test.go` | `go test ./test -run TestDocsTagsAndMCPUsage -count=1` |
-| P03 | REQ-416 | TEST-404 | `internal/langfuse/spans_test.go` | `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnAgent -count=1` |
+| P03 | REQ-416 | TEST-404 | `internal/langfuse/spans_test.go` | `go test ./internal/langfuse -run TestLangfuseTraceTagsExportedOnSpans -count=1` |
 | P04 | REQ-417 | TEST-405 | `test/docs_static_test.go` | `go test ./test -run TestDocsTagsAndMCPUsage -count=1` |
 | P00 | REQ-418 | TEST-401 | `internal/codextrace/tools_test.go` | `go test ./internal/codextrace -run TestMCPObservationMetadata -count=1` |
 | P02 | REQ-419 | TEST-403 | `test/contract_fixture_test.go` | `go test ./test -run TestGoldenLangfuseTagsContract -count=1` |

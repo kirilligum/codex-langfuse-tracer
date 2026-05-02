@@ -30,7 +30,7 @@ func (m *memoryExporter) Snapshots() spanSnapshots {
 	for _, span := range m.spans {
 		attrs := map[string]string{}
 		for _, attr := range span.Attributes() {
-			attrs[string(attr.Key)] = attr.Value.AsString()
+			attrs[string(attr.Key)] = attr.Value.Emit()
 		}
 		parent := ""
 		if span.Parent().IsValid() {

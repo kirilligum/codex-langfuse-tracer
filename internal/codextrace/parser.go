@@ -169,8 +169,12 @@ func parseEventMessage(turn *Turn, payload map[string]any, timestamp string, pen
 		}
 		input := StableJSON(payload["invocation"])
 		output := StableJSON(payload["result"])
+		metadata := metadataWithoutLargeFields(payload, map[string]bool{"invocation": true, "result": true, "duration": true})
+		for key, value := range MCPToolMetadata(payload) {
+			metadata[key] = value
+		}
 		addTerminalEntry(turn, timestamp, "tool.mcp", toolTerminalText(input, output))
-		addObservation(turn, "codex.tool.mcp", timestamp, input, output, metadataWithoutLargeFields(payload, map[string]bool{"invocation": true, "result": true, "duration": true}), "tool", payload["duration"])
+		addObservation(turn, "codex.tool.mcp", timestamp, input, output, metadata, "tool", payload["duration"])
 	case "web_search_end":
 		callID := stringValue(payload["call_id"])
 		if callID != "" {

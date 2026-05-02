@@ -108,6 +108,49 @@ func TestCountMetadataExportedOnAgent(t *testing.T) {
 	}
 }
 
+// TEST-404
+func TestLangfuseTraceTagsExportedOnSpans(t *testing.T) {
+	t.Parallel()
+	validateLangfuseTraceTagsExportedOnSpans(t)
+}
+
+func validateLangfuseTraceTagsExportedOnSpans(t *testing.T) {
+	t.Helper()
+	turn := completeTurn(t)
+	rawTags, err := json.Marshal(codextrace.BuildInsightRollup(turn).Tags())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTags := string(rawTags)
+	if wantTags == "" {
+		t.Fatal("fixture must produce tags")
+	}
+
+	spans := emitTurnSpans(t, turn)
+	for _, name := range []string{"codex.agent", "codex.transcript", "codex.tool.exec_command", "codex.tool.mcp"} {
+		span := spans.ByName(name)
+		if span.Name == "" {
+			t.Fatalf("missing span %s", name)
+		}
+		if span.Attributes["langfuse.trace.tags"] != wantTags {
+			t.Fatalf("%s langfuse.trace.tags = %q want %q\nattrs=%#v", name, span.Attributes["langfuse.trace.tags"], wantTags, span.Attributes)
+		}
+	}
+	if strings.Contains(wantTags, "issues/list") {
+		t.Fatalf("exact MCP tool leaked into tags: %q", wantTags)
+	}
+	for _, span := range spans {
+		if span.Name == "codex.agent" {
+			continue
+		}
+		for key := range span.Attributes {
+			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+				t.Fatalf("%s repeats root insight attribute %s", span.Name, key)
+			}
+		}
+	}
+}
+
 // TEST-301
 func TestLangfuseGenerationModelUsageAndNoCostDetails(t *testing.T) {
 	t.Parallel()
@@ -239,6 +282,12 @@ func emitTurnSpans(t *testing.T, turn codextrace.Turn) spanSnapshots {
 func TestEvalInsightMetadataProjection(t *testing.T) {
 	t.Parallel()
 	validateInsightMetadataExportedOnAgent(t)
+}
+
+// EVAL-404
+func TestEvalLangfuseTagProjection(t *testing.T) {
+	t.Parallel()
+	validateLangfuseTraceTagsExportedOnSpans(t)
 }
 
 func completeTurn(t *testing.T) codextrace.Turn {

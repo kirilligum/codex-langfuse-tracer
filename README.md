@@ -201,9 +201,29 @@ Cost tracking uses Langfuse's model and usage handling. The exporter sends `lang
 
 `command_kind` uses a fixed enum: `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
 
+`codex.tool.mcp` metadata includes:
+
+- `mcp_server`
+- `mcp_tool`
+
+MCP metadata is derived only from observed `mcp_tool_call_end` events. Configured but unused MCP servers are not exported as usage. Exact MCP tools such as `issues/list` stay in observation metadata and are not trace tags.
+
+Trace tags are emitted through `langfuse.trace.tags`. The tag contract is `codex_insight.navigation values plus observed mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
+
 ## Filtering And Saved Views
 
 Use trace filters for turn-level navigation and observation filters for individual tool calls.
+
+Trace tags are the fastest reusable trace filters:
+
+- `files:changed`
+- `files:read_only`
+- `command:<kind>` for each observed `command_kind`
+- `tool:<family>` for each observed tool family
+- `verification:<status>`
+- `mcp:<server>` for each observed MCP server
+
+Use `mcp_server` and `mcp_tool` on `codex.tool.mcp` observations when you need exact MCP call details.
 
 Trace filters use root `codex_insight` metadata:
 
@@ -228,6 +248,8 @@ Observation filters use observation metadata:
 
 Create these with `Views -> Create Custom View` after applying the filter and sort order. Clear temporary filters such as `Session ID` before saving a reusable view.
 
+After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse rows are not automatically backfilled; use an explicit re-export command when old rows need the new fields.
+
 ## Manual Export
 
 The watcher is the normal production path. Manual export is for explicit backfill or debugging.
@@ -248,6 +270,12 @@ Export a specific rollout file:
 
 ```sh
 ~/.codex/bin/codex-langfuse-exporter --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
+```
+
+Explicit re-export for backfill uses the same command shape:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --path <rollout.jsonl> --no-verify
 ```
 
 Skip post-export verification:
