@@ -144,6 +144,8 @@ func baseObservationAttributes(turn codextrace.Turn, environment, observationTyp
 		attribute.String("langfuse.trace.name", buildinfo.TraceName),
 		attribute.String("langfuse.session.id", turn.SessionID),
 		attribute.String("langfuse.environment", environment),
+		attribute.String("langfuse.version", buildinfo.Version),
+		attribute.String("langfuse.release", buildinfo.Version),
 		attribute.String("langfuse.observation.type", observationType),
 		attribute.String("langfuse.observation.input", strconv.Quote(codextrace.ExportText(input))),
 		attribute.String("langfuse.observation.output", strconv.Quote(codextrace.ExportText(output))),
@@ -167,6 +169,9 @@ func turnAttributes(turn codextrace.Turn, environment, observationType string, i
 
 func transcriptAttributes(turn codextrace.Turn, environment string) []attribute.KeyValue {
 	attrs := turnAttributes(turn, environment, "generation", false)
+	if turn.Model != "" {
+		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
+	}
 	usage := map[string]int{}
 	if turn.TokenUsage != nil {
 		if turn.TokenUsage.InputTokens != 0 {
@@ -197,7 +202,24 @@ func observationAttributes(turn codextrace.Turn, observation codextrace.Observat
 	if len(observation.Metadata) > 0 {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata", jsonString(observation.Metadata)))
 	}
+	if statusMessage := failedObservationStatusMessage(observation); statusMessage != "" {
+		attrs = append(attrs,
+			attribute.String("langfuse.observation.level", "ERROR"),
+			attribute.String("langfuse.observation.status_message", statusMessage),
+		)
+	}
 	return attrs
+}
+
+func failedObservationStatusMessage(observation codextrace.Observation) string {
+	if observation.Name != "codex.tool.exec_command" {
+		return ""
+	}
+	failureType := stringValue(observation.Metadata["failure_type"])
+	if failureType == "nonzero_exit" || failureType == "timeout" {
+		return failureType
+	}
+	return ""
 }
 
 func metadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
@@ -210,9 +232,6 @@ func metadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
 	}
 	if turn.CWD != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata.cwd", turn.CWD))
-	}
-	if turn.Model != "" {
-		attrs = append(attrs, attribute.String("langfuse.observation.metadata.model", turn.Model))
 	}
 	return attrs
 }

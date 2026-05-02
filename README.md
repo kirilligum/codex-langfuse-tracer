@@ -146,7 +146,7 @@ If your `~/.codex/config.toml` has a native `[otel]` section and Langfuse shows 
 The exporter sends these observations when Codex records the data locally:
 
 - `codex.agent`: root agent observation with trace-table input and output.
-- `codex.transcript`: generation observation with the user prompt, final assistant answer, and token usage.
+- `codex.transcript`: generation observation with the user prompt, final assistant answer, model name, and token usage.
 - `codex.terminal`: ordered visible CLI event stream for the turn.
 - `codex.message.commentary`: assistant progress updates shown in the CLI.
 - `codex.reasoning.summary`: visible reasoning summaries when Codex records a non-empty summary.
@@ -175,22 +175,21 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 - `failed_command_count`
 - `patch_count`
 - `changed_file_count`
-- `has_file_changes`
-- `is_read_only`
 - `changed_extensions`
 - `touched_test_files`
 - `verification_command_count`
 - `verification_status`
 - `last_verification_command`
 - `last_verification_status`
-- `command_kinds`
-- `ran_<kind>_command` and `<kind>_command_count` for each command kind
-- `used_web_search`
-- `web_search_count`
+- `navigation`
+- `<kind>_command_count` for each command kind
+- `<tool_family>_tool_count` for each tool family
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
 
-Navigation facets are always-on. `is_read_only` means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call.
+Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `codex_insight.navigation` is the single trace-table filter index because Langfuse trace metadata filters are string-based in the UI and do not support a reusable numeric `greater than 0` saved view for metadata counts.
+
+Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on `codex.transcript`; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
 
 `codex.tool.exec_command` metadata includes:
 
@@ -208,14 +207,14 @@ Use trace filters for turn-level navigation and observation filters for individu
 
 Trace filters use root `codex_insight` metadata:
 
-- `Traces: read only`: `Metadata codex_insight.is_read_only equals true`
-- `Traces: changed files`: `Metadata codex_insight.has_file_changes equals true`
-- `Traces: search commands`: `Metadata codex_insight.ran_search_command equals true`
-- `Traces: read commands`: `Metadata codex_insight.ran_read_command equals true`
-- `Traces: network commands`: `Metadata codex_insight.ran_network_command equals true`
-- `Traces: install commands`: `Metadata codex_insight.ran_install_command equals true`
-- `Traces: web search`: `Metadata codex_insight.used_web_search equals true`
-- `Traces: failed verification`: `Metadata codex_insight.verification_status equals failed`
+- `Traces: read only`: `Metadata codex_insight.navigation contains files:read_only`
+- `Traces: changed files`: `Metadata codex_insight.navigation contains files:changed`
+- `Traces: search commands`: `Metadata codex_insight.navigation contains command:search`
+- `Traces: read commands`: `Metadata codex_insight.navigation contains command:read`
+- `Traces: network commands`: `Metadata codex_insight.navigation contains command:network`
+- `Traces: install commands`: `Metadata codex_insight.navigation contains command:install`
+- `Traces: web search`: `Metadata codex_insight.navigation contains tool:web_search`
+- `Traces: failed verification`: `Metadata codex_insight.navigation contains verification:failed`
 
 Observation filters use observation metadata:
 
@@ -270,6 +269,7 @@ The exporter does not emit:
 - byte-for-byte TUI recordings
 - per-file observation fanout
 - inferred "model context" observations
+- local cost calculations or `cost_details`
 
 `codex.terminal` is an ordered stream of terminal-relevant events Codex records locally. It is not a full terminal recording.
 

@@ -19,15 +19,7 @@ func TestFullAcceptance(t *testing.T) {
 	if buildinfo.InstalledBinaryName != "codex-langfuse-exporter" {
 		t.Fatalf("wrong binary name: %s", buildinfo.InstalledBinaryName)
 	}
-	turns, err := codextrace.ParseTurns(filepath.Join("..", "testdata", "rollouts", "complete-tools.jsonl"))
-	if err != nil {
-		t.Fatalf("ParseTurns: %v", err)
-	}
-	exportable := codextrace.ExportableTurns(turns)
-	if len(exportable) != 1 {
-		t.Fatalf("exportable turns = %d", len(exportable))
-	}
-	contract := tracecontract.FromTurn(exportable[0])
+	contract := contractFromFixture(t, "complete-tools")
 	if contract.SchemaVersion != 1 || contract.Name != buildinfo.TraceName {
 		t.Fatalf("bad contract identity: %+v", contract)
 	}
@@ -76,5 +68,63 @@ func TestFullAcceptance(t *testing.T) {
 	cancel()
 	if ctx.Err() == nil {
 		t.Fatal("context sanity check failed")
+	}
+}
+
+// TEST-305
+func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
+	t.Parallel()
+
+	complete := contractFromFixture(t, "complete-tools")
+	if complete.Model != "gpt-5.5" {
+		t.Fatalf("model = %q", complete.Model)
+	}
+	if complete.TokenUsage["input"] != 100 || complete.TokenUsage["output"] != 40 || complete.TokenUsage["total"] != 140 {
+		t.Fatalf("token usage = %#v", complete.TokenUsage)
+	}
+	for key, want := range map[string]int{
+		"changed_file_count":      1,
+		"other_command_count":     1,
+		"exec_command_tool_count": 1,
+		"apply_patch_tool_count":  1,
+		"web_search_tool_count":   1,
+		"mcp_tool_count":          1,
+		"tool_search_tool_count":  1,
+	} {
+		requireMetadataInt(t, complete.Metadata, key, want)
+	}
+	if complete.Metadata["navigation"] != "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run" {
+		t.Fatalf("navigation = %#v", complete.Metadata["navigation"])
+	}
+	requireNoForbiddenContractKeys(t, complete.Metadata)
+	for _, observation := range complete.Observations {
+		requireNoForbiddenContractKeys(t, observation.Metadata)
+	}
+
+	failed := contractFromFixture(t, "failed-command")
+	requireMetadataInt(t, failed.Metadata, "failed_command_count", 1)
+	if failed.Metadata["verification_status"] != "failed" {
+		t.Fatalf("verification_status = %#v", failed.Metadata["verification_status"])
+	}
+	requireNoForbiddenContractKeys(t, failed.Metadata)
+}
+
+func contractFromFixture(t *testing.T, name string) tracecontract.Trace {
+	t.Helper()
+	turns, err := codextrace.ParseTurns(filepath.Join("..", "testdata", "rollouts", name+".jsonl"))
+	if err != nil {
+		t.Fatalf("ParseTurns(%s): %v", name, err)
+	}
+	exportable := codextrace.ExportableTurns(turns)
+	if len(exportable) != 1 {
+		t.Fatalf("%s exportable turns = %d", name, len(exportable))
+	}
+	return tracecontract.FromTurn(exportable[0])
+}
+
+func requireMetadataInt(t *testing.T, metadata map[string]any, key string, want int) {
+	t.Helper()
+	if metadata[key] != want {
+		t.Fatalf("metadata[%s] = %#v, want %d\nmetadata=%s", key, metadata[key], want, canonicalJSON(metadata))
 	}
 }

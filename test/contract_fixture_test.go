@@ -202,26 +202,22 @@ func validateInsightFixtureCoverage(t *testing.T) {
 	requireNoRawTransportOrDuration(t, golden)
 }
 
-func validateNavigationFixtureCoverage(t *testing.T) {
+func validateSingleRepresentationFixtureCoverage(t *testing.T) {
 	t.Helper()
 	golden := completeToolsGolden(t)
 	metadata := requireMap(t, golden, "metadata")
 	want := map[string]any{
-		"has_file_changes":      true,
-		"is_read_only":          false,
-		"command_kinds":         []any{"other"},
-		"used_web_search":       true,
-		"web_search_count":      float64(1),
-		"ran_other_command":     true,
-		"other_command_count":   float64(1),
-		"ran_search_command":    false,
-		"search_command_count":  float64(0),
-		"ran_read_command":      false,
-		"read_command_count":    float64(0),
-		"ran_network_command":   false,
-		"network_command_count": float64(0),
-		"ran_install_command":   false,
-		"install_command_count": float64(0),
+		"other_command_count":     float64(1),
+		"search_command_count":    float64(0),
+		"read_command_count":      float64(0),
+		"network_command_count":   float64(0),
+		"install_command_count":   float64(0),
+		"apply_patch_tool_count":  float64(1),
+		"exec_command_tool_count": float64(1),
+		"web_search_tool_count":   float64(1),
+		"mcp_tool_count":          float64(1),
+		"tool_search_tool_count":  float64(1),
+		"navigation":              "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run",
 	}
 	for key, value := range want {
 		if canonicalJSON(metadata[key]) != canonicalJSON(value) {
@@ -230,14 +226,11 @@ func validateNavigationFixtureCoverage(t *testing.T) {
 	}
 	for _, kind := range []string{"test", "build", "lint", "format", "git", "systemd"} {
 		countKey := kind + "_command_count"
-		ranKey := "ran_" + kind + "_command"
 		if canonicalJSON(metadata[countKey]) != "0" {
 			t.Fatalf("%s = %s, want 0", countKey, canonicalJSON(metadata[countKey]))
 		}
-		if metadata[ranKey] != false {
-			t.Fatalf("%s = %#v, want false", ranKey, metadata[ranKey])
-		}
 	}
+	requireNoForbiddenContractKeys(t, golden)
 	requireNoRawTransportOrDuration(t, golden)
 	commandMetadata := requireObservationMetadata(t, golden, "codex.tool.exec_command")
 	if commandMetadata["command_kind"] != "other" {
@@ -252,16 +245,42 @@ func validateNavigationFixtureCoverage(t *testing.T) {
 	}
 }
 
+func requireNoForbiddenContractKeys(t *testing.T, value any) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if isForbiddenContractKey(key) {
+				t.Fatalf("golden contains forbidden projection key %q in %s", key, canonicalJSON(value))
+			}
+			requireNoForbiddenContractKeys(t, child)
+		}
+	case []any:
+		for _, child := range typed {
+			requireNoForbiddenContractKeys(t, child)
+		}
+	}
+}
+
+func isForbiddenContractKey(key string) bool {
+	switch key {
+	case "has_file_changes", "is_read_only", "command_kinds", "web_search_count", "trace_facets", "navigation_facets", "cost_details", "tool_name", "tags", "available_tool_names":
+		return true
+	default:
+		return strings.HasPrefix(key, "ran_") || strings.HasPrefix(key, "used_")
+	}
+}
+
 // TEST-101
 func TestGoldenInsightMetadataSchema(t *testing.T) {
 	t.Parallel()
 	validateInsightFixtureCoverage(t)
 }
 
-// TEST-202
-func TestGoldenNavigationFacetsMetadataSchema(t *testing.T) {
+// TEST-304
+func TestGoldenLangfuseSingleRepresentation(t *testing.T) {
 	t.Parallel()
-	validateNavigationFixtureCoverage(t)
+	validateSingleRepresentationFixtureCoverage(t)
 }
 
 // TEST-020

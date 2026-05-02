@@ -9,44 +9,34 @@
   "model": "gpt-5.5",
   "cwd": "/tmp/web",
   "metadata": {
+    "apply_patch_tool_count": 0,
     "build_command_count": 0,
     "changed_extensions": [],
     "changed_file_count": 0,
     "command_count": 0,
-    "command_kinds": [],
+    "exec_command_tool_count": 0,
     "failed_command_count": 0,
     "format_command_count": 0,
     "git_command_count": 0,
-    "has_file_changes": false,
     "install_command_count": 0,
-    "is_read_only": true,
     "last_verification_command": "",
     "last_verification_status": "",
     "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only tool:web_search verification:not_applicable",
     "network_command_count": 0,
     "other_command_count": 0,
     "patch_count": 0,
-    "ran_build_command": false,
-    "ran_format_command": false,
-    "ran_git_command": false,
-    "ran_install_command": false,
-    "ran_lint_command": false,
-    "ran_network_command": false,
-    "ran_other_command": false,
-    "ran_read_command": false,
-    "ran_search_command": false,
-    "ran_systemd_command": false,
-    "ran_test_command": false,
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
     "test_command_count": 0,
     "tool_count": 1,
+    "tool_search_tool_count": 0,
     "touched_test_files": [],
-    "used_web_search": true,
     "verification_command_count": 0,
     "verification_status": "not_applicable",
-    "web_search_count": 1
+    "web_search_tool_count": 1
   },
   "exportable": true,
   "observations": [
@@ -66,16 +56,18 @@
       "name": "codex.tool.web_search",
       "type": "tool",
       "input": "{\n  \"action\": {\n    \"query\": \"current docs\",\n    \"results\": 2\n  },\n  \"query\": \"current docs\"\n}",
-      "output": "{\n  \"query\": \"current docs\",\n  \"results\": 2\n}"
+      "output": "{\n  \"query\": \"current docs\",\n  \"results\": 2\n}",
+      "metadata": {
+        "call_id": "web-contract",
+        "status": "completed",
+        "type": "web_search_end"
+      }
     },
     {
       "name": "codex.terminal",
       "type": "span",
       "input": "",
-      "output_contains": [
-        "tool.web_search",
-        "The rollout records only web search action metadata."
-      ],
+      "output": "## 2026-05-01T12:10:02Z user\nSearch current docs\n\n## 2026-05-01T12:10:03Z tool.web_search\nInput:\n{\n  \"action\": {\n    \"query\": \"current docs\",\n    \"results\": 2\n  },\n  \"query\": \"current docs\"\n}\n\nOutput:\n{\n  \"query\": \"current docs\",\n  \"results\": 2\n}\n\n## 2026-05-01T12:10:04Z assistant.final\nThe rollout records only web search action metadata.",
       "metadata": {
         "event_count": 3,
         "turn_id": "turn-web"

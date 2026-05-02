@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,11 +172,11 @@ func TestInsightRollupFailedVerification(t *testing.T) {
 	}
 }
 
-// TEST-201
-func TestInsightNavigationFacets(t *testing.T) {
+// TEST-302
+func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 	t.Parallel()
 
-	readOnlyTurn := Turn{
+	turn := Turn{
 		Observations: []Observation{
 			{Name: "codex.tool.exec_command", Type: "tool", Input: "sed -n '1,80p' README.md", Metadata: map[string]any{}},
 			{Name: "codex.tool.exec_command", Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
@@ -183,41 +184,37 @@ func TestInsightNavigationFacets(t *testing.T) {
 			{Name: "codex.tool.exec_command", Type: "tool", Input: "npm install", Metadata: map[string]any{}},
 			{Name: "codex.tool.exec_command", Type: "tool", Input: "printf 'ok\n'", Metadata: map[string]any{}},
 			{Name: "codex.tool.web_search", Type: "tool", Metadata: map[string]any{}},
+			{Name: "codex.tool.mcp", Type: "tool", Metadata: map[string]any{}},
 		},
 	}
-	readOnlyMetadata := BuildInsightRollup(readOnlyTurn).Metadata()
-	wantNavigationValues := map[string]any{
-		"has_file_changes":      false,
-		"is_read_only":          true,
-		"ran_read_command":      true,
-		"read_command_count":    1,
-		"ran_search_command":    true,
-		"search_command_count":  1,
-		"ran_network_command":   true,
-		"network_command_count": 1,
-		"ran_install_command":   true,
-		"install_command_count": 1,
-		"ran_other_command":     true,
-		"other_command_count":   1,
-		"used_web_search":       true,
-		"web_search_count":      1,
+	metadata := BuildInsightRollup(turn).Metadata()
+	want := map[string]any{
+		"read_command_count":         1,
+		"search_command_count":       1,
+		"network_command_count":      1,
+		"install_command_count":      1,
+		"other_command_count":        1,
+		"test_command_count":         0,
+		"build_command_count":        0,
+		"lint_command_count":         0,
+		"format_command_count":       0,
+		"git_command_count":          0,
+		"systemd_command_count":      0,
+		"exec_command_tool_count":    5,
+		"apply_patch_tool_count":     0,
+		"web_search_tool_count":      1,
+		"mcp_tool_count":             1,
+		"tool_search_tool_count":     0,
+		"changed_file_count":         0,
+		"verification_command_count": 0,
+		"navigation":                 "command:install command:network command:other command:read command:search files:read_only tool:exec_command tool:mcp tool:web_search verification:not_applicable",
 	}
-	for key, want := range wantNavigationValues {
-		if got := readOnlyMetadata[key]; got != want {
-			t.Fatalf("metadata[%q] = %#v, want %#v\nmetadata=%s", key, got, want, canonicalInsightJSON(readOnlyMetadata))
+	for key, want := range want {
+		if got := metadata[key]; got != want {
+			t.Fatalf("metadata[%q] = %#v, want %#v\nmetadata=%s", key, got, want, canonicalInsightJSON(metadata))
 		}
 	}
-	if got := readOnlyMetadata["command_kinds"]; !reflect.DeepEqual(got, []string{"install", "network", "other", "read", "search"}) {
-		t.Fatalf("command_kinds = %#v", got)
-	}
-	for _, kind := range []string{"test", "build", "lint", "format", "git", "systemd"} {
-		if got := readOnlyMetadata[kind+"_command_count"]; got != 0 {
-			t.Fatalf("%s_command_count = %#v, want 0", kind, got)
-		}
-		if got := readOnlyMetadata["ran_"+kind+"_command"]; got != false {
-			t.Fatalf("ran_%s_command = %#v, want false", kind, got)
-		}
-	}
+	requireNoDuplicateInsightFields(t, metadata)
 
 	changedTurn := Turn{
 		Observations: []Observation{
@@ -231,12 +228,16 @@ func TestInsightNavigationFacets(t *testing.T) {
 		},
 	}
 	changedMetadata := BuildInsightRollup(changedTurn).Metadata()
-	if changedMetadata["has_file_changes"] != true || changedMetadata["is_read_only"] != false {
-		t.Fatalf("changed file facets mismatch: %s", canonicalInsightJSON(changedMetadata))
+	if changedMetadata["apply_patch_tool_count"] != 1 || changedMetadata["changed_file_count"] != 1 {
+		t.Fatalf("changed file count metadata mismatch: %s", canonicalInsightJSON(changedMetadata))
 	}
 	if _, ok := changedMetadata["changed_files"]; ok {
 		t.Fatalf("root metadata must omit changed_files: %s", canonicalInsightJSON(changedMetadata))
 	}
+	if changedMetadata["navigation"] != "files:changed tool:apply_patch verification:not_run" {
+		t.Fatalf("changed navigation = %#v, metadata=%s", changedMetadata["navigation"], canonicalInsightJSON(changedMetadata))
+	}
+	requireNoDuplicateInsightFields(t, changedMetadata)
 }
 
 // TEST-105
@@ -291,6 +292,15 @@ func TestEvalInsightRollupLatency(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
 		t.Fatalf("100 rollups took %s, want <= 10ms", elapsed)
+	}
+}
+
+func requireNoDuplicateInsightFields(t *testing.T, metadata map[string]any) {
+	t.Helper()
+	for key := range metadata {
+		if strings.HasPrefix(key, "ran_") || strings.HasPrefix(key, "used_") || key == "has_file_changes" || key == "is_read_only" || key == "command_kinds" || key == "web_search_count" || key == "trace_facets" || key == "navigation_facets" {
+			t.Fatalf("metadata contains duplicate navigation field %q in %s", key, canonicalInsightJSON(metadata))
+		}
 	}
 }
 

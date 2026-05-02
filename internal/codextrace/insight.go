@@ -34,18 +34,26 @@ var commandKinds = []string{
 	CommandKindOther,
 }
 
+var toolFamilies = []string{
+	"exec_command",
+	"apply_patch",
+	"web_search",
+	"mcp",
+	"tool_search",
+}
+
 type InsightRollup struct {
 	ToolCount                int
 	CommandCount             int
 	FailedCommandCount       int
 	PatchCount               int
 	ChangedFileCount         int
-	WebSearchCount           int
 	VerificationCommandCount int
 	VerificationStatus       string
 	LastVerificationCommand  string
 	LastVerificationStatus   string
 	CommandKindCounts        map[string]int
+	ToolFamilyCounts         map[string]int
 	ChangedExtensions        []string
 	TouchedTestFiles         []string
 }
@@ -96,6 +104,7 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 	rollup := InsightRollup{
 		VerificationStatus: "not_applicable",
 		CommandKindCounts:  newCommandKindCounts(),
+		ToolFamilyCounts:   newToolFamilyCounts(),
 	}
 	changedFiles := map[string]bool{}
 	verificationFailed := false
@@ -103,6 +112,9 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 	for _, observation := range turn.Observations {
 		if observation.Type == "tool" {
 			rollup.ToolCount++
+			if family := toolFamily(observation.Name); family != "" {
+				rollup.ToolFamilyCounts[family]++
+			}
 		}
 		switch observation.Name {
 		case "codex.tool.exec_command":
@@ -135,8 +147,6 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 					changedFiles[path] = true
 				}
 			}
-		case "codex.tool.web_search":
-			rollup.WebSearchCount++
 		}
 	}
 
@@ -158,7 +168,6 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 }
 
 func (r InsightRollup) Metadata() map[string]any {
-	hasFileChanges := r.PatchCount > 0 || r.ChangedFileCount > 0
 	metadata := map[string]any{
 		"tool_count":                 r.ToolCount,
 		"command_count":              r.CommandCount,
@@ -169,20 +178,38 @@ func (r InsightRollup) Metadata() map[string]any {
 		"verification_status":        r.VerificationStatus,
 		"last_verification_command":  r.LastVerificationCommand,
 		"last_verification_status":   r.LastVerificationStatus,
-		"has_file_changes":           hasFileChanges,
-		"is_read_only":               !hasFileChanges,
-		"command_kinds":              commandKindsWithActivity(r.CommandKindCounts),
-		"used_web_search":            r.WebSearchCount > 0,
-		"web_search_count":           r.WebSearchCount,
 		"changed_extensions":         r.ChangedExtensions,
 		"touched_test_files":         r.TouchedTestFiles,
+		"navigation":                 strings.Join(r.navigationValues(), " "),
 	}
 	for _, kind := range commandKinds {
-		count := r.CommandKindCounts[kind]
-		metadata[kind+"_command_count"] = count
-		metadata["ran_"+kind+"_command"] = count > 0
+		metadata[kind+"_command_count"] = r.CommandKindCounts[kind]
+	}
+	for _, family := range toolFamilies {
+		metadata[family+"_tool_count"] = r.ToolFamilyCounts[family]
 	}
 	return metadata
+}
+
+func (r InsightRollup) navigationValues() []string {
+	values := []string{"verification:" + r.VerificationStatus}
+	if r.PatchCount > 0 || r.ChangedFileCount > 0 {
+		values = append(values, "files:changed")
+	} else {
+		values = append(values, "files:read_only")
+	}
+	for _, kind := range commandKinds {
+		if r.CommandKindCounts[kind] > 0 {
+			values = append(values, "command:"+kind)
+		}
+	}
+	for _, family := range toolFamilies {
+		if r.ToolFamilyCounts[family] > 0 {
+			values = append(values, "tool:"+family)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func CommandInsightMetadata(payload map[string]any) map[string]any {
@@ -219,6 +246,31 @@ func newCommandKindCounts() map[string]int {
 	return counts
 }
 
+func newToolFamilyCounts() map[string]int {
+	counts := make(map[string]int, len(toolFamilies))
+	for _, family := range toolFamilies {
+		counts[family] = 0
+	}
+	return counts
+}
+
+func toolFamily(name string) string {
+	switch name {
+	case "codex.tool.exec_command":
+		return "exec_command"
+	case "codex.tool.apply_patch":
+		return "apply_patch"
+	case "codex.tool.web_search":
+		return "web_search"
+	case "codex.tool.mcp":
+		return "mcp"
+	case "codex.tool.tool_search":
+		return "tool_search"
+	default:
+		return ""
+	}
+}
+
 func normalizeCommandKind(kind string) string {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	for _, candidate := range commandKinds {
@@ -227,17 +279,6 @@ func normalizeCommandKind(kind string) string {
 		}
 	}
 	return CommandKindOther
-}
-
-func commandKindsWithActivity(counts map[string]int) []string {
-	active := make([]string, 0, len(commandKinds))
-	for _, kind := range commandKinds {
-		if counts[kind] > 0 {
-			active = append(active, kind)
-		}
-	}
-	sort.Strings(active)
-	return active
 }
 
 func isFailedCommand(failureType string) bool {

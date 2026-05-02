@@ -90,13 +90,18 @@ func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	for _, required := range []string{
-		"has_file_changes",
-		"is_read_only",
-		"ran_search_command",
-		"ran_read_command",
-		"ran_network_command",
-		"ran_install_command",
-		"used_web_search",
+		"codex_insight.navigation",
+		"files:read_only",
+		"files:changed",
+		"command:search",
+		"command:read",
+		"command:network",
+		"command:install",
+		"tool:web_search",
+		"verification:failed",
+		"langfuse.observation.model.name",
+		"langfuse.observation.usage_details",
+		"cost_details",
 		"command_kind",
 		"Views -> Create Custom View",
 		"Traces: read only",
@@ -117,9 +122,9 @@ func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"TestInsightNavigationFacets",
-		"TestGoldenNavigationFacetsMetadataSchema",
-		"TestNavigationFacetsMetadataExportedOnAgent",
+		"TestInsightCountMetadataSingleRepresentation",
+		"TestGoldenLangfuseSingleRepresentation",
+		"TestCountMetadataExportedOnAgent",
 		"TestDocsNavigationFacetsAndSavedViews",
 	} {
 		if !strings.Contains(testingDoc, required) {

@@ -5,52 +5,40 @@
   "session_id": "sess-complete",
   "turn_id": "turn-1",
   "input": "Summarize the repo and run checks",
-  "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted.",
+  "output": "Checks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted.",
   "model": "gpt-5.5",
   "cwd": "/tmp/codex-langfuse-fixture",
   "metadata": {
+    "apply_patch_tool_count": 1,
     "build_command_count": 0,
     "changed_extensions": [
       ".md"
     ],
     "changed_file_count": 1,
     "command_count": 1,
-    "command_kinds": [
-      "other"
-    ],
+    "exec_command_tool_count": 1,
     "failed_command_count": 0,
     "format_command_count": 0,
     "git_command_count": 0,
-    "has_file_changes": true,
     "install_command_count": 0,
-    "is_read_only": false,
     "last_verification_command": "",
     "last_verification_status": "",
     "lint_command_count": 0,
+    "mcp_tool_count": 1,
+    "navigation": "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run",
     "network_command_count": 0,
     "other_command_count": 1,
     "patch_count": 1,
-    "ran_build_command": false,
-    "ran_format_command": false,
-    "ran_git_command": false,
-    "ran_install_command": false,
-    "ran_lint_command": false,
-    "ran_network_command": false,
-    "ran_other_command": true,
-    "ran_read_command": false,
-    "ran_search_command": false,
-    "ran_systemd_command": false,
-    "ran_test_command": false,
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
     "test_command_count": 0,
     "tool_count": 5,
+    "tool_search_tool_count": 1,
     "touched_test_files": [],
-    "used_web_search": true,
     "verification_command_count": 0,
     "verification_status": "not_run",
-    "web_search_count": 1
+    "web_search_tool_count": 1
   },
   "token_usage": {
     "cached_input": 20,
@@ -65,25 +53,31 @@
       "name": "codex.agent",
       "type": "agent",
       "input": "Summarize the repo and run checks",
-      "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted."
+      "output": "Checks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted."
     },
     {
       "name": "codex.transcript",
       "type": "generation",
       "input": "Summarize the repo and run checks",
-      "output": "Checks passed with sk-lf-<redacted> and gh<redacted> redacted."
+      "output": "Checks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted."
     },
     {
       "name": "codex.message.commentary",
       "type": "span",
       "input": "",
-      "output": "I will inspect the files and run the checks."
+      "output": "I will inspect the files and run the checks.",
+      "metadata": {
+        "phase": "analysis"
+      }
     },
     {
       "name": "codex.reasoning.summary",
       "type": "span",
       "input": "",
-      "output": "Need inspect files before editing."
+      "output": "Need inspect files before editing.",
+      "metadata": {
+        "response_item_type": "reasoning"
+      }
     },
     {
       "name": "codex.tool.exec_command",
@@ -91,11 +85,13 @@
       "input": "printf 'ok\\n'",
       "output": "## stdout\nok\n",
       "metadata": {
+        "call_id": "exec-1",
         "command_kind": "other",
         "duration_ms": 1250,
         "exit_code": 0,
         "failure_type": "none",
-        "status": "completed"
+        "status": "completed",
+        "type": "exec_command_end"
       }
     },
     {
@@ -105,6 +101,7 @@
       "output": "## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```",
       "metadata": {
         "added_files": [],
+        "call_id": "patch-1",
         "changed_file_count": 1,
         "changed_files": [
           "README.md"
@@ -116,36 +113,46 @@
         "modified_files": [
           "README.md"
         ],
-        "moved_files": []
+        "moved_files": [],
+        "type": "patch_apply_end"
       }
     },
     {
       "name": "codex.tool.mcp",
       "type": "tool",
       "input": "{\n  \"server\": \"github\",\n  \"tool\": \"issues/list\"\n}",
-      "output": "{\n  \"count\": 0\n}"
+      "output": "{\n  \"count\": 0\n}",
+      "metadata": {
+        "call_id": "mcp-1",
+        "type": "mcp_tool_call_end"
+      }
     },
     {
       "name": "codex.tool.web_search",
       "type": "tool",
       "input": "{\n  \"action\": {\n    \"results\": 1\n  },\n  \"query\": \"Langfuse Agent Graph\"\n}",
-      "output": "{\n  \"results\": 1\n}"
+      "output": "{\n  \"results\": 1\n}",
+      "metadata": {
+        "call_id": "web-1",
+        "type": "web_search_end"
+      }
     },
     {
       "name": "codex.tool.tool_search",
       "type": "tool",
       "input": "{\n  \"query\": \"langfuse\"\n}",
-      "output": "[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]"
+      "output": "[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]",
+      "metadata": {
+        "call_id": "search-1",
+        "response_item_type": "tool_search_output",
+        "status": "completed"
+      }
     },
     {
       "name": "codex.terminal",
       "type": "span",
       "input": "",
-      "output_contains": [
-        "## 2026-05-01T10:00:02Z user",
-        "## 2026-05-01T10:00:13Z assistant.final",
-        "tool.apply_patch"
-      ],
+      "output": "## 2026-05-01T10:00:02Z user\nSummarize the repo and run checks\n\n## 2026-05-01T10:00:03Z assistant.commentary\nI will inspect the files and run the checks.\n\n## 2026-05-01T10:00:04Z assistant.reasoning\nNeed inspect files before editing.\n\n## 2026-05-01T10:00:05Z tool.exec_command\nCommand:\nprintf 'ok\\n'\n\nOutput:\n## stdout\nok\n\n\nStatus: completed exit_code=0\n\n## 2026-05-01T10:00:07Z tool.apply_patch\nInput:\n{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch\"\n}\n\nOutput:\n## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```\n\n## 2026-05-01T10:00:08Z tool.mcp\nInput:\n{\n  \"server\": \"github\",\n  \"tool\": \"issues/list\"\n}\n\nOutput:\n{\n  \"count\": 0\n}\n\n## 2026-05-01T10:00:09Z tool.web_search\nInput:\n{\n  \"action\": {\n    \"results\": 1\n  },\n  \"query\": \"Langfuse Agent Graph\"\n}\n\nOutput:\n{\n  \"results\": 1\n}\n\n## 2026-05-01T10:00:11Z tool.tool_search\nInput:\n{\n  \"query\": \"langfuse\"\n}\n\nOutput:\n[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]\n\n## 2026-05-01T10:00:13Z assistant.final\nChecks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted.",
       "metadata": {
         "event_count": 9,
         "turn_id": "turn-1"
