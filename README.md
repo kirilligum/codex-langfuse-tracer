@@ -199,6 +199,8 @@ Cost tracking uses Langfuse's model and usage handling. The exporter sends `lang
 
 The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. Usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; cached input and reasoning output are subtracted from the parent input/output buckets to avoid double counting.
 
+When OpenAI pricing changes or Codex emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
+
 Langfuse calculates cost during ingestion. Existing rows are not backfilled automatically; use an explicit re-export for old sessions after model pricing is synced:
 
 ```sh
