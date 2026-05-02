@@ -175,14 +175,22 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 - `failed_command_count`
 - `patch_count`
 - `changed_file_count`
+- `has_file_changes`
+- `is_read_only`
 - `changed_extensions`
 - `touched_test_files`
 - `verification_command_count`
 - `verification_status`
 - `last_verification_command`
 - `last_verification_status`
+- `command_kinds`
+- `ran_<kind>_command` and `<kind>_command_count` for each command kind
+- `used_web_search`
+- `web_search_count`
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
+
+Navigation facets are always-on. `is_read_only` means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call.
 
 `codex.tool.exec_command` metadata includes:
 
@@ -193,6 +201,33 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 - `failure_type`
 
 `command_kind` uses a fixed enum: `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
+
+## Filtering And Saved Views
+
+Use trace filters for turn-level navigation and observation filters for individual tool calls.
+
+Trace filters use root `codex_insight` metadata:
+
+- `Traces: read only`: `Metadata codex_insight.is_read_only equals true`
+- `Traces: changed files`: `Metadata codex_insight.has_file_changes equals true`
+- `Traces: search commands`: `Metadata codex_insight.ran_search_command equals true`
+- `Traces: read commands`: `Metadata codex_insight.ran_read_command equals true`
+- `Traces: network commands`: `Metadata codex_insight.ran_network_command equals true`
+- `Traces: install commands`: `Metadata codex_insight.ran_install_command equals true`
+- `Traces: web search`: `Metadata codex_insight.used_web_search equals true`
+- `Traces: failed verification`: `Metadata codex_insight.verification_status equals failed`
+
+Observation filters use observation metadata:
+
+- `Observations: command search`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals search`
+- `Observations: command read`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals read`
+- `Observations: command network`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals network`
+- `Observations: command install`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals install`
+- `Observations: failed commands`: `Name equals codex.tool.exec_command` and `Metadata failure_type equals nonzero_exit`
+- `Observations: apply patches`: `Name equals codex.tool.apply_patch`
+- `Observations: web search`: `Name equals codex.tool.web_search`
+
+Create these with `Views -> Create Custom View` after applying the filter and sort order. Clear temporary filters such as `Session ID` before saving a reusable view.
 
 ## Manual Export
 

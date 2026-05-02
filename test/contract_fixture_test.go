@@ -202,10 +202,66 @@ func validateInsightFixtureCoverage(t *testing.T) {
 	requireNoRawTransportOrDuration(t, golden)
 }
 
+func validateNavigationFixtureCoverage(t *testing.T) {
+	t.Helper()
+	golden := completeToolsGolden(t)
+	metadata := requireMap(t, golden, "metadata")
+	want := map[string]any{
+		"has_file_changes":      true,
+		"is_read_only":          false,
+		"command_kinds":         []any{"other"},
+		"used_web_search":       true,
+		"web_search_count":      float64(1),
+		"ran_other_command":     true,
+		"other_command_count":   float64(1),
+		"ran_search_command":    false,
+		"search_command_count":  float64(0),
+		"ran_read_command":      false,
+		"read_command_count":    float64(0),
+		"ran_network_command":   false,
+		"network_command_count": float64(0),
+		"ran_install_command":   false,
+		"install_command_count": float64(0),
+	}
+	for key, value := range want {
+		if canonicalJSON(metadata[key]) != canonicalJSON(value) {
+			t.Fatalf("metadata[%s] = %s want %s\nmetadata=%s", key, canonicalJSON(metadata[key]), canonicalJSON(value), canonicalJSON(metadata))
+		}
+	}
+	for _, kind := range []string{"test", "build", "lint", "format", "git", "systemd"} {
+		countKey := kind + "_command_count"
+		ranKey := "ran_" + kind + "_command"
+		if canonicalJSON(metadata[countKey]) != "0" {
+			t.Fatalf("%s = %s, want 0", countKey, canonicalJSON(metadata[countKey]))
+		}
+		if metadata[ranKey] != false {
+			t.Fatalf("%s = %#v, want false", ranKey, metadata[ranKey])
+		}
+	}
+	requireNoRawTransportOrDuration(t, golden)
+	commandMetadata := requireObservationMetadata(t, golden, "codex.tool.exec_command")
+	if commandMetadata["command_kind"] != "other" {
+		t.Fatalf("command_kind = %#v, want other", commandMetadata["command_kind"])
+	}
+	if _, ok := commandMetadata["duration_ms"]; !ok {
+		t.Fatalf("command metadata missing duration_ms: %#v", commandMetadata)
+	}
+	patchMetadata := requireObservationMetadata(t, golden, "codex.tool.apply_patch")
+	if _, ok := patchMetadata["changed_files"]; !ok {
+		t.Fatalf("patch metadata missing changed_files: %#v", patchMetadata)
+	}
+}
+
 // TEST-101
 func TestGoldenInsightMetadataSchema(t *testing.T) {
 	t.Parallel()
 	validateInsightFixtureCoverage(t)
+}
+
+// TEST-202
+func TestGoldenNavigationFacetsMetadataSchema(t *testing.T) {
+	t.Parallel()
+	validateNavigationFixtureCoverage(t)
 }
 
 // TEST-020

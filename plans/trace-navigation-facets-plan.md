@@ -48,7 +48,7 @@
   - Update `internal/codextrace/insight.go`.
   - Update focused tests in `internal/codextrace`, `internal/langfuse`, `internal/tracecontract`, and `test`.
   - Update golden fixtures only through the existing contract flow.
-  - Update `README.md`, `TESTING.md`, and `PROJECT_CONTEXT.md` with filter and saved-view guidance.
+  - Update `README.md` and `TESTING.md` with filter and saved-view guidance; keep `AGENTS.md` as the concise repo guidance file.
 - Non-goals:
   - No new observation names.
   - No new config flags, environment toggles, package scripts, or Makefile targets.
@@ -255,7 +255,7 @@ Scope and objectives: Document the field semantics and the saved-view workflow. 
 
 - Step 0: create restore point with `git tag -f restore/trace-navigation-facets-P02-start`.
 - Step 1 RED: create/update `TEST-204` in `test/docs_static_test.go` for REQ-205, REQ-206, and REQ-207; run `go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1`; expected FAIL because docs do not yet list the new filters, view names, and read-only definition.
-- Step 2 GREEN: update `README.md`, `PROJECT_CONTEXT.md`, and `TESTING.md` with the field list, trace-vs-observation filter examples, and saved-view procedure; run `go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1`; expected PASS.
+- Step 2 GREEN: update `README.md` and `TESTING.md` with the field list, trace-vs-observation filter examples, and saved-view procedure; run `go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1`; expected PASS.
 - Step 3 REFACTOR: keep the concise field list in one primary doc and cross-reference it from the others; run `go test ./test -run 'TestDocsNavigationFacetsAndSavedViews|TestDocsTraceInsightMetadata' -count=1`; expected PASS.
 - Step 4 MEASURE: run `go test ./test -run TestDocs -count=1`; expected PASS.
 - Step 5: create restore point with `git tag -f restore/trace-navigation-facets-P02-done`.
@@ -272,7 +272,7 @@ Phase metrics:
 |---|---:|---|
 | Confidence % | 82 | Static docs tests cover the user workflow terms. |
 | Long-term robustness % | 80 | Saved-view names become documented operator workflow. |
-| Internal interactions | 4 | README, PROJECT_CONTEXT, TESTING, docs test. |
+| Internal interactions | 3 | README, TESTING, docs test. |
 | External interactions | 1 | Human Langfuse view creation after repo tests pass. |
 | Complexity % | 20 | Documentation-only after fields exist. |
 | Feature creep % | 5 | Only required views are listed. |
@@ -385,7 +385,7 @@ evals:
   - location: `test/docs_static_test.go`
   - traceability tag: `// TEST-204`
   - command: `go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1`
-  - fixtures/mocks/data: `README.md`, `TESTING.md`, `PROJECT_CONTEXT.md`.
+  - fixtures/mocks/data: `README.md`, `TESTING.md`.
   - deterministic controls: repo-local file reads only.
   - pass_criteria: docs define trace filters, observation filters, saved view names, `Views -> Create Custom View`, no-config behavior, and the strict `is_read_only` definition.
   - expected_runtime: 1s

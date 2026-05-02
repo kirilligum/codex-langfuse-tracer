@@ -62,14 +62,40 @@ func TestInsightMetadataExportedOnAgent(t *testing.T) {
 	validateInsightMetadataExportedOnAgent(t)
 }
 
+// TEST-203
+func TestNavigationFacetsMetadataExportedOnAgent(t *testing.T) {
+	t.Parallel()
+
+	spans := emitCompleteTurnSpans(t)
+	agent := spans.ByName("codex.agent")
+	for _, key := range []string{
+		"langfuse.trace.metadata.codex_insight.has_file_changes",
+		"langfuse.trace.metadata.codex_insight.is_read_only",
+		"langfuse.trace.metadata.codex_insight.command_kinds",
+		"langfuse.trace.metadata.codex_insight.ran_other_command",
+		"langfuse.trace.metadata.codex_insight.other_command_count",
+		"langfuse.trace.metadata.codex_insight.used_web_search",
+		"langfuse.trace.metadata.codex_insight.web_search_count",
+	} {
+		if _, ok := agent.Attributes[key]; !ok {
+			t.Fatalf("agent missing %s in %#v", key, agent.Attributes)
+		}
+	}
+	for _, span := range spans {
+		if span.Name == "codex.agent" {
+			continue
+		}
+		for key := range span.Attributes {
+			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+				t.Fatalf("%s repeats root insight attribute %s", span.Name, key)
+			}
+		}
+	}
+}
+
 func validateInsightMetadataExportedOnAgent(t *testing.T) {
 	t.Helper()
-	turn := completeTurn(t)
-	exporter := &memoryExporter{}
-	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("EmitTurn: %v", err)
-	}
-	spans := exporter.Snapshots()
+	spans := emitCompleteTurnSpans(t)
 	agent := spans.ByName("codex.agent")
 	for _, key := range []string{
 		"langfuse.trace.metadata.codex_insight.tool_count",
@@ -102,6 +128,16 @@ func validateInsightMetadataExportedOnAgent(t *testing.T) {
 			t.Fatalf("command metadata missing %s in %#v", key, metadata)
 		}
 	}
+}
+
+func emitCompleteTurnSpans(t *testing.T) spanSnapshots {
+	t.Helper()
+	turn := completeTurn(t)
+	exporter := &memoryExporter{}
+	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitTurn: %v", err)
+	}
+	return exporter.Snapshots()
 }
 
 // EVAL-104

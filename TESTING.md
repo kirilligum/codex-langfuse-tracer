@@ -32,6 +32,15 @@ Langfuse OTLP projection and trace verification:
 go test ./internal/langfuse -count=1
 ```
 
+Navigation facet checks:
+
+```sh
+go test ./internal/codextrace -run TestInsightNavigationFacets -count=1
+go test ./test -run TestGoldenNavigationFacetsMetadataSchema -count=1
+go test ./internal/langfuse -run TestNavigationFacetsMetadataExportedOnAgent -count=1
+go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1
+```
+
 ## Fuzz Smoke
 
 ```sh

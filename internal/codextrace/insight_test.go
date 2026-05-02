@@ -171,6 +171,74 @@ func TestInsightRollupFailedVerification(t *testing.T) {
 	}
 }
 
+// TEST-201
+func TestInsightNavigationFacets(t *testing.T) {
+	t.Parallel()
+
+	readOnlyTurn := Turn{
+		Observations: []Observation{
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "sed -n '1,80p' README.md", Metadata: map[string]any{}},
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "curl -fsS https://example.com", Metadata: map[string]any{}},
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "npm install", Metadata: map[string]any{}},
+			{Name: "codex.tool.exec_command", Type: "tool", Input: "printf 'ok\n'", Metadata: map[string]any{}},
+			{Name: "codex.tool.web_search", Type: "tool", Metadata: map[string]any{}},
+		},
+	}
+	readOnlyMetadata := BuildInsightRollup(readOnlyTurn).Metadata()
+	wantNavigationValues := map[string]any{
+		"has_file_changes":      false,
+		"is_read_only":          true,
+		"ran_read_command":      true,
+		"read_command_count":    1,
+		"ran_search_command":    true,
+		"search_command_count":  1,
+		"ran_network_command":   true,
+		"network_command_count": 1,
+		"ran_install_command":   true,
+		"install_command_count": 1,
+		"ran_other_command":     true,
+		"other_command_count":   1,
+		"used_web_search":       true,
+		"web_search_count":      1,
+	}
+	for key, want := range wantNavigationValues {
+		if got := readOnlyMetadata[key]; got != want {
+			t.Fatalf("metadata[%q] = %#v, want %#v\nmetadata=%s", key, got, want, canonicalInsightJSON(readOnlyMetadata))
+		}
+	}
+	if got := readOnlyMetadata["command_kinds"]; !reflect.DeepEqual(got, []string{"install", "network", "other", "read", "search"}) {
+		t.Fatalf("command_kinds = %#v", got)
+	}
+	for _, kind := range []string{"test", "build", "lint", "format", "git", "systemd"} {
+		if got := readOnlyMetadata[kind+"_command_count"]; got != 0 {
+			t.Fatalf("%s_command_count = %#v, want 0", kind, got)
+		}
+		if got := readOnlyMetadata["ran_"+kind+"_command"]; got != false {
+			t.Fatalf("ran_%s_command = %#v, want false", kind, got)
+		}
+	}
+
+	changedTurn := Turn{
+		Observations: []Observation{
+			{
+				Name: "codex.tool.apply_patch",
+				Type: "tool",
+				Metadata: map[string]any{
+					"changed_files": []string{"internal/codextrace/insight.go"},
+				},
+			},
+		},
+	}
+	changedMetadata := BuildInsightRollup(changedTurn).Metadata()
+	if changedMetadata["has_file_changes"] != true || changedMetadata["is_read_only"] != false {
+		t.Fatalf("changed file facets mismatch: %s", canonicalInsightJSON(changedMetadata))
+	}
+	if _, ok := changedMetadata["changed_files"]; ok {
+		t.Fatalf("root metadata must omit changed_files: %s", canonicalInsightJSON(changedMetadata))
+	}
+}
+
 // TEST-105
 func TestInsightRollupDeterminism(t *testing.T) {
 	t.Parallel()

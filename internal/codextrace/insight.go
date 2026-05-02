@@ -20,16 +20,32 @@ const (
 	CommandKindOther   = "other"
 )
 
+var commandKinds = []string{
+	CommandKindTest,
+	CommandKindBuild,
+	CommandKindLint,
+	CommandKindFormat,
+	CommandKindGit,
+	CommandKindRead,
+	CommandKindSearch,
+	CommandKindInstall,
+	CommandKindSystemd,
+	CommandKindNetwork,
+	CommandKindOther,
+}
+
 type InsightRollup struct {
 	ToolCount                int
 	CommandCount             int
 	FailedCommandCount       int
 	PatchCount               int
 	ChangedFileCount         int
+	WebSearchCount           int
 	VerificationCommandCount int
 	VerificationStatus       string
 	LastVerificationCommand  string
 	LastVerificationStatus   string
+	CommandKindCounts        map[string]int
 	ChangedExtensions        []string
 	TouchedTestFiles         []string
 }
@@ -77,7 +93,10 @@ func ClassifyCommand(command string) string {
 }
 
 func BuildInsightRollup(turn Turn) InsightRollup {
-	rollup := InsightRollup{VerificationStatus: "not_applicable"}
+	rollup := InsightRollup{
+		VerificationStatus: "not_applicable",
+		CommandKindCounts:  newCommandKindCounts(),
+	}
 	changedFiles := map[string]bool{}
 	verificationFailed := false
 
@@ -92,6 +111,8 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 			if commandKind == "" {
 				commandKind = ClassifyCommand(observation.Input)
 			}
+			commandKind = normalizeCommandKind(commandKind)
+			rollup.CommandKindCounts[commandKind]++
 			failureType := stringValue(observation.Metadata["failure_type"])
 			if failureType == "" {
 				failureType = commandFailureType(observation.Metadata)
@@ -114,6 +135,8 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 					changedFiles[path] = true
 				}
 			}
+		case "codex.tool.web_search":
+			rollup.WebSearchCount++
 		}
 	}
 
@@ -135,7 +158,8 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 }
 
 func (r InsightRollup) Metadata() map[string]any {
-	return map[string]any{
+	hasFileChanges := r.PatchCount > 0 || r.ChangedFileCount > 0
+	metadata := map[string]any{
 		"tool_count":                 r.ToolCount,
 		"command_count":              r.CommandCount,
 		"failed_command_count":       r.FailedCommandCount,
@@ -145,9 +169,20 @@ func (r InsightRollup) Metadata() map[string]any {
 		"verification_status":        r.VerificationStatus,
 		"last_verification_command":  r.LastVerificationCommand,
 		"last_verification_status":   r.LastVerificationStatus,
+		"has_file_changes":           hasFileChanges,
+		"is_read_only":               !hasFileChanges,
+		"command_kinds":              commandKindsWithActivity(r.CommandKindCounts),
+		"used_web_search":            r.WebSearchCount > 0,
+		"web_search_count":           r.WebSearchCount,
 		"changed_extensions":         r.ChangedExtensions,
 		"touched_test_files":         r.TouchedTestFiles,
 	}
+	for _, kind := range commandKinds {
+		count := r.CommandKindCounts[kind]
+		metadata[kind+"_command_count"] = count
+		metadata["ran_"+kind+"_command"] = count > 0
+	}
+	return metadata
 }
 
 func CommandInsightMetadata(payload map[string]any) map[string]any {
@@ -174,6 +209,35 @@ func isVerificationCommand(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func newCommandKindCounts() map[string]int {
+	counts := make(map[string]int, len(commandKinds))
+	for _, kind := range commandKinds {
+		counts[kind] = 0
+	}
+	return counts
+}
+
+func normalizeCommandKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	for _, candidate := range commandKinds {
+		if kind == candidate {
+			return candidate
+		}
+	}
+	return CommandKindOther
+}
+
+func commandKindsWithActivity(counts map[string]int) []string {
+	active := make([]string, 0, len(commandKinds))
+	for _, kind := range commandKinds {
+		if counts[kind] > 0 {
+			active = append(active, kind)
+		}
+	}
+	sort.Strings(active)
+	return active
 }
 
 func isFailedCommand(failureType string) bool {
