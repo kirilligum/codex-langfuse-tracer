@@ -24,6 +24,7 @@ fi
 mkdir -p "$(dirname "$exporter_dst")"
 mkdir -p "$systemd_user_dir"
 (cd "$repo_dir" && go build -o "$exporter_dst" ./cmd/codex-langfuse-exporter)
+"$exporter_dst" --sync-model-pricing --quiet
 install -m 644 "$service_src" "$service_dst"
 rm -f "$old_wrapper_dst"
 rm -f "$old_python_dst"
@@ -35,4 +36,4 @@ systemctl --user restart codex-langfuse-watch.service
 echo "installed exporter: $exporter_dst"
 echo "installed service: $service_dst"
 echo "restarted service: codex-langfuse-watch.service"
-echo "configure Langfuse credentials in ~/.codex/config.toml before expecting traces."
+echo "synced Langfuse model pricing from ~/.codex/config.toml"

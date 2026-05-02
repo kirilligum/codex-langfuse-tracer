@@ -9,6 +9,7 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 )
 
+// TEST-403
 func TestFromTurnNormalizesTrace(t *testing.T) {
 	t.Parallel()
 
@@ -25,7 +26,7 @@ func TestFromTurnNormalizesTrace(t *testing.T) {
 	if trace.SchemaVersion != 1 || trace.TraceID != "1e087e4ea8aa8d8e29e604d2cd8704d9" {
 		t.Fatalf("bad trace identity: %+v", trace)
 	}
-	if trace.TokenUsage["input"] != 100 || trace.TokenUsage["reasoning_output"] != 10 {
+	if trace.TokenUsage["input"] != 80 || trace.TokenUsage["input_cached_tokens"] != 20 || trace.TokenUsage["output"] != 30 || trace.TokenUsage["output_reasoning_tokens"] != 10 {
 		t.Fatalf("token usage not normalized: %#v", trace.TokenUsage)
 	}
 	if trace.Metadata["tool_count"] != 5 || trace.Metadata["verification_status"] != "not_run" {
@@ -49,7 +50,7 @@ func TestFromTurnNormalizesTrace(t *testing.T) {
 func TestUsageDetailsEmptyWhenMissing(t *testing.T) {
 	t.Parallel()
 
-	if got := usageDetails(codextrace.Turn{}); got != nil {
-		t.Fatalf("usageDetails(empty) = %#v, want nil", got)
+	if got := FromTurn(codextrace.Turn{}).TokenUsage; got != nil {
+		t.Fatalf("empty turn token usage = %#v, want nil", got)
 	}
 }

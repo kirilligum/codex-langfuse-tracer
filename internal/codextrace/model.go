@@ -30,6 +30,31 @@ type TokenUsage struct {
 	ReasoningOutputTokens int
 }
 
+func (u TokenUsage) LangfuseUsageDetails() map[string]int {
+	usage := map[string]int{}
+	input := u.InputTokens - u.CachedInputTokens
+	if input > 0 {
+		usage["input"] = input
+	}
+	if u.CachedInputTokens > 0 {
+		usage["input_cached_tokens"] = u.CachedInputTokens
+	}
+	output := u.OutputTokens - u.ReasoningOutputTokens
+	if output > 0 {
+		usage["output"] = output
+	}
+	if u.ReasoningOutputTokens > 0 {
+		usage["output_reasoning_tokens"] = u.ReasoningOutputTokens
+	}
+	if u.TotalTokens > 0 {
+		usage["total"] = u.TotalTokens
+	}
+	if len(usage) == 0 {
+		return nil
+	}
+	return usage
+}
+
 type TerminalEntry struct {
 	Timestamp string
 	Label     string

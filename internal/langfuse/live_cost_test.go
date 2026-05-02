@@ -29,6 +29,12 @@ func TestLiveLangfuseTranscriptModelUsageAndCost(t *testing.T) {
 	if liveStringValue(transcript["model"]) == "" {
 		t.Fatalf("codex.transcript model is empty; usage cannot match Langfuse model pricing: %s", liveCostSummary(transcript))
 	}
+	if liveStringValue(transcript["modelId"]) == "" {
+		t.Fatalf("codex.transcript modelId is empty; Langfuse did not attach model pricing: %s", liveCostSummary(transcript))
+	}
+	if liveFloatValue(transcript["inputPrice"]) <= 0 || liveFloatValue(transcript["outputPrice"]) <= 0 {
+		t.Fatalf("codex.transcript prices are empty; Langfuse did not attach input/output pricing: %s", liveCostSummary(transcript))
+	}
 	usage := liveMapValue(transcript["usageDetails"])
 	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
 		t.Fatalf("codex.transcript usageDetails incomplete: %s", liveCostSummary(transcript))

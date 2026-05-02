@@ -77,6 +77,7 @@ func TestFullAcceptance(t *testing.T) {
 }
 
 // TEST-305
+// TEST-403
 func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 	t.Parallel()
 
@@ -84,7 +85,7 @@ func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 	if complete.Model != "gpt-5.5" {
 		t.Fatalf("model = %q", complete.Model)
 	}
-	if complete.TokenUsage["input"] != 100 || complete.TokenUsage["output"] != 40 || complete.TokenUsage["total"] != 140 {
+	if complete.TokenUsage["input"] != 80 || complete.TokenUsage["input_cached_tokens"] != 20 || complete.TokenUsage["output"] != 30 || complete.TokenUsage["output_reasoning_tokens"] != 10 || complete.TokenUsage["total"] != 140 {
 		t.Fatalf("token usage = %#v", complete.TokenUsage)
 	}
 	for key, want := range map[string]int{

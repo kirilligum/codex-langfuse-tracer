@@ -74,7 +74,7 @@ chmod 600 ~/.codex/config.toml
 ./install.sh
 ```
 
-The installer builds the Go binary, installs the user service, reloads systemd, enables the service, and restarts it.
+The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it.
 
 Installed files:
 
@@ -190,6 +190,20 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `codex_insight.navigation` is the single trace-table filter index because Langfuse trace metadata filters are string-based in the UI and do not support a reusable numeric `greater than 0` saved view for metadata counts.
 
 Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on `codex.transcript`; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
+
+`install.sh` runs `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` before restarting `codex-langfuse-watch.service`. The same setup can be run directly:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --sync-model-pricing
+```
+
+The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. Usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; cached input and reasoning output are subtracted from the parent input/output buckets to avoid double counting.
+
+Langfuse calculates cost during ingestion. Existing rows are not backfilled automatically; use an explicit re-export for old sessions after model pricing is synced:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --session-id <session-id> --no-verify
+```
 
 `codex.tool.exec_command` metadata includes:
 

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +12,8 @@ import (
 	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
 )
 
 // TEST-002
@@ -65,6 +71,78 @@ func TestCLIFlags(t *testing.T) {
 		if !strings.Contains(err.Error(), "exactly one source mode") {
 			t.Fatalf("parseArgs(%v) error = %q", args, err)
 		}
+	}
+}
+
+// TEST-406
+func TestSyncModelPricingMode(t *testing.T) {
+	home := t.TempDir()
+	configPath := writeLangfuseConfig(t, home, "http://127.0.0.1")
+
+	opts, err := parseArgs([]string{"--sync-model-pricing"})
+	if err != nil {
+		t.Fatalf("parse sync mode: %v", err)
+	}
+	if opts.Mode() != "sync-model-pricing" {
+		t.Fatalf("mode = %q", opts.Mode())
+	}
+	for _, args := range [][]string{
+		{"--sync-model-pricing", "--latest"},
+		{"--sync-model-pricing", "--path", "/tmp/rollout.jsonl"},
+		{"--sync-model-pricing", "--watch"},
+	} {
+		if _, err := parseArgs(args); err == nil {
+			t.Fatalf("parseArgs(%v) succeeded, want mutually exclusive mode error", args)
+		}
+	}
+
+	calls := 0
+	oldSync := syncModelPricing
+	syncModelPricing = func(ctx context.Context, cfg config.LangfuseConfig) (langfuse.ModelSyncSummary, error) {
+		calls++
+		if cfg.Host != "http://127.0.0.1" {
+			t.Fatalf("cfg host = %q", cfg.Host)
+		}
+		return langfuse.ModelSyncSummary{Existing: 1, Created: 2}, nil
+	}
+	t.Cleanup(func() { syncModelPricing = oldSync })
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--sync-model-pricing", "--config", configPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run sync exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if calls != 1 {
+		t.Fatalf("sync calls = %d, want 1", calls)
+	}
+	if !strings.Contains(stdout.String(), "model_pricing existing=1 created=2 conflicting=0") {
+		t.Fatalf("missing sync summary stdout=%s", stdout.String())
+	}
+
+	rolloutPath := copyRolloutFixture(t, home, "complete-tools.jsonl")
+	otelPosts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/public/otel/v1/traces":
+			otelPosts++
+			w.WriteHeader(http.StatusOK)
+		case "/api/public/models":
+			t.Fatalf("export mode called model sync endpoint")
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	exportConfigPath := writeLangfuseConfig(t, home, server.URL)
+	code = run(context.Background(), []string{"--path", rolloutPath, "--config", exportConfigPath, "--no-verify"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run export exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if calls != 1 {
+		t.Fatalf("sync was called during export mode: %d", calls)
+	}
+	if otelPosts != 1 {
+		t.Fatalf("otel posts = %d, want 1", otelPosts)
 	}
 }
 

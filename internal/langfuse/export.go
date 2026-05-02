@@ -174,23 +174,9 @@ func transcriptAttributes(turn codextrace.Turn, environment string, traceTags []
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
 	}
-	usage := map[string]int{}
+	var usage map[string]int
 	if turn.TokenUsage != nil {
-		if turn.TokenUsage.InputTokens != 0 {
-			usage["input"] = turn.TokenUsage.InputTokens
-		}
-		if turn.TokenUsage.OutputTokens != 0 {
-			usage["output"] = turn.TokenUsage.OutputTokens
-		}
-		if turn.TokenUsage.TotalTokens != 0 {
-			usage["total"] = turn.TokenUsage.TotalTokens
-		}
-		if turn.TokenUsage.CachedInputTokens != 0 {
-			usage["cached_input"] = turn.TokenUsage.CachedInputTokens
-		}
-		if turn.TokenUsage.ReasoningOutputTokens != 0 {
-			usage["reasoning_output"] = turn.TokenUsage.ReasoningOutputTokens
-		}
+		usage = turn.TokenUsage.LangfuseUsageDetails()
 	}
 	if len(usage) > 0 {
 		attrs = append(attrs, attribute.String("langfuse.observation.usage_details", jsonString(usage)))

@@ -7,7 +7,7 @@
 - Owners: repository maintainers
 - Date: 2026-05-02
 - Document ID: CLT-LF-COST-SRS-001
-- Summary: This plan replaces the temporary live-cost probe with a production path for Langfuse `Total Cost` columns. The exporter will keep one tracing path through OTLP generation spans, normalize token usage into Langfuse pricing keys, seed required Langfuse model definitions from one source-dated Go pricing catalog, and prove costs through deterministic Go tests plus one opt-in live Langfuse test for session `019de6d8-fb40-74a0-af20-46b088397c53`.
+- Summary: This plan replaces the one-off live-cost check with a production path for Langfuse `Total Cost` columns. The exporter will keep one tracing path through OTLP generation spans, normalize token usage into Langfuse pricing keys, seed required Langfuse model definitions from one source-dated Go pricing catalog, and prove costs through deterministic Go tests plus one opt-in live Langfuse test for session `019de6d8-fb40-74a0-af20-46b088397c53`.
 
 ## 2. Design consensus and trade-offs
 
@@ -15,7 +15,7 @@
 |---|---|---|
 | Native Langfuse cost calculation | FOR | `README.md` states that the exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` and does not emit `cost_details`. Local Langfuse code at `/home/kirill/p/langfuse/worker/src/services/IngestionService/index.ts` multiplies matching `usage_details` keys by model pricing keys and stores `calculatedTotalCost`. |
 | Exporter-side cost multiplication | AGAINST | The repository has no durable source for pricing policy, model aliases, cached-token rules, or future model price changes. Adding `cost_details` would create a second cost engine beside Langfuse. |
-| Direct public ingestion probe | AGAINST | The probe proved the Langfuse API path, but production traces already use OTLP at `/api/public/otel/v1/traces` through `internal/langfuse/export.go`. Keeping a direct ingestion path would duplicate export behavior. |
+| Direct public ingestion check | AGAINST | The one-off check proved the Langfuse API path, but production traces already use OTLP at `/api/public/otel/v1/traces` through `internal/langfuse/export.go`. Keeping a direct ingestion path would duplicate export behavior. |
 | Langfuse model definition sync | DECISION | Add one setup path that creates missing custom model definitions using `GET /api/public/models` and `POST /api/public/models`. The local Langfuse API definition at `/home/kirill/p/langfuse/fern/apis/server/definition/models.yml` supports `modelName`, `matchPattern`, `unit`, and `pricingTiers`. |
 | Pricing tiers over flat prices | DECISION | Langfuse marks flat `inputPrice`, `outputPrice`, and `totalPrice` as deprecated in the model API definition and documents `pricingTiers` as the preferred shape. |
 | Pricing storage | DECISION | Store pricing in one source-dated Go catalog under `internal/langfuse`; do not add a user pricing config file or a separate pricing data parser. |
@@ -55,7 +55,7 @@
   - Avoid a second pricing engine in this repository.
   - Preserve the always-on watcher model documented in `README.md`.
 - Success metrics:
-  - `codex.transcript` observations for `gpt-5.5` have non-null `modelId`, non-null `usagePricingTierName`, and `calculatedTotalCost > 0` after re-export.
+  - `codex.transcript` observations for `gpt-5.5` have non-null `modelId`, positive `inputPrice`, positive `outputPrice`, and `calculatedTotalCost > 0` after re-export.
   - Trace API for session `019de6d8-fb40-74a0-af20-46b088397c53` returns `totalCost > 0`.
   - Default Go suite passes with the live test skipped when `LIVE_LANGFUSE_SESSION_ID` is unset.
   - `install.sh` creates missing model definitions before restarting `codex-langfuse-watch.service`.
@@ -141,7 +141,7 @@
 - Invalid or conflicting model definitions return a non-secret error that includes model name and mismatched fields.
 - Sync summary reports counts for existing, created, and conflicting definitions.
 - Install exits nonzero if pricing sync fails, so the service is not restarted with missing cost prerequisites.
-- Live cost failures include cost-relevant public fields only: `model`, `modelId`, `usageDetails`, `costDetails`, `calculatedTotalCost`, `usagePricingTierName`, and trace ID.
+- Live cost failures include cost-relevant public fields only: `model`, `modelId`, `usageDetails`, `calculatedTotalCost`, `inputPrice`, `outputPrice`, `usagePricingTierName`, and trace ID.
 
 ### Acceptance criteria at requirement level
 
@@ -351,12 +351,12 @@ Data store: Langfuse project
 - Restore point: run `git tag -f langfuse-cost-pricing-P04-start`; expected PASS because Git records the pre-phase commit.
 - Step 1 RED: create/update `TEST-306` in `internal/langfuse/live_cost_test.go` for `REQ-409`, `REQ-411`, and `REQ-413`; run `LIVE_LANGFUSE_SESSION_ID=019de6d8-fb40-74a0-af20-46b088397c53 go test ./internal/langfuse -run TestLiveLangfuseTranscriptModelUsageAndCost -count=1`; expected FAIL because the current local Langfuse project has no matching `gpt-5.5` model definition or the target trace was ingested before sync.
 - Step 2 GREEN: implement minimal operational change by running `./install.sh` and `~/.codex/bin/codex-langfuse-exporter --session-id 019de6d8-fb40-74a0-af20-46b088397c53 --no-verify`; run `LIVE_LANGFUSE_SESSION_ID=019de6d8-fb40-74a0-af20-46b088397c53 go test ./internal/langfuse -run TestLiveLangfuseTranscriptModelUsageAndCost -count=1`; expected PASS.
-- Step 3 REFACTOR: remove probe-only shell fragments from notes and keep `internal/langfuse/live_cost_test.go` as the only live cost validation; run `go test ./... -count=1`; expected PASS.
+- Step 3 REFACTOR: remove one-off validation shell fragments from notes and keep `internal/langfuse/live_cost_test.go` as the only live cost validation; run `go test ./... -count=1`; expected PASS.
 - Step 4 MEASURE: run `LIVE_LANGFUSE_SESSION_ID=019de6d8-fb40-74a0-af20-46b088397c53 go test ./internal/langfuse -run TestLiveLangfuseTranscriptModelUsageAndCost -count=1`; expected thresholds met for `EVAL-404`.
 - Exit gates:
   - Green criteria: trace total cost and transcript calculated total cost are both positive.
   - Yellow criteria: local Langfuse returns HTTP 404 during ingestion delay but passes before runtime budget expires.
-  - Red criteria: `modelId` remains null or `usagePricingTierName` remains null after reinstall and re-export.
+  - Red criteria: `modelId` remains null, `inputPrice <= 0`, or `outputPrice <= 0` after reinstall and re-export.
 - Phase metrics:
   - Confidence %: 90; live validation exercises the same API fields that back the Langfuse UI cost column.
   - Long-term robustness %: 86; old traces need explicit re-export but new traces use install-time pricing sync.
@@ -364,7 +364,7 @@ Data store: Langfuse project
   - External interactions: 2; Langfuse API and systemd user service.
   - Complexity %: 24; operational validation only after code path exists.
   - Feature creep %: 3; no extra live tooling.
-  - Technical debt %: 7; probe script is not retained.
+  - Technical debt %: 7; one-off validation script is not retained.
   - YAGNI score: 90; validates one real session and no broad historical migration.
   - MoSCoW: Must.
   - Local/non-local scope: Non-local.
@@ -581,7 +581,7 @@ evals:
   - command: `LIVE_LANGFUSE_SESSION_ID=019de6d8-fb40-74a0-af20-46b088397c53 go test ./internal/langfuse -run TestLiveLangfuseTranscriptModelUsageAndCost -count=1`
   - fixtures/mocks/data: local Langfuse project from `~/.codex/config.toml`, session `019de6d8-fb40-74a0-af20-46b088397c53`.
   - deterministic controls: fixed session ID, test skipped when env var is unset, cost threshold positive only.
-  - pass_criteria: transcript model is non-empty, usageDetails include nonzero input/output/total, `calculatedTotalCost > 0`, and trace `totalCost > 0`.
+  - pass_criteria: transcript model and modelId are non-empty, inputPrice and outputPrice are positive, usageDetails include nonzero input/output/total, `calculatedTotalCost > 0`, and trace `totalCost > 0`.
   - expected_runtime: 60s
 - id: TEST-305
   - name: Full acceptance Langfuse filter and cost contract
@@ -731,7 +731,7 @@ type CodexModelPricing struct {
 - ADR-002: Use Langfuse pricing tiers, not deprecated flat model price fields.
 - ADR-003: Install-time model definition sync is the single setup path.
 - ADR-004: Any pricing threshold or price-value change requires source-date update and tests.
-- ADR-005: Direct public ingestion remains a validation probe pattern only and is not production export behavior.
+- ADR-005: Direct public ingestion was one-off validation only and is not production export behavior.
 - ADR-006: Source-dated Go pricing catalog is the only pricing policy source.
 - ADR-007: Known-session live proof plus deterministic tests is the validation scope; no fresh-session generator.
 

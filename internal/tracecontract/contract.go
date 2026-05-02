@@ -52,8 +52,10 @@ func FromTurn(turn codextrace.Turn) Trace {
 			{Name: "codex.transcript", Type: "generation", Input: codextrace.ExportText(turn.InputText()), Output: codextrace.ExportText(turn.OutputText())},
 		},
 	}
-	if usage := usageDetails(turn); len(usage) > 0 {
-		trace.TokenUsage = usage
+	if turn.TokenUsage != nil {
+		if usage := turn.TokenUsage.LangfuseUsageDetails(); len(usage) > 0 {
+			trace.TokenUsage = usage
+		}
 	}
 	for _, observation := range turn.Observations {
 		trace.Observations = append(trace.Observations, normalizeObservation(observation))
@@ -76,27 +78,4 @@ func normalizeObservation(observation codextrace.Observation) Observation {
 		Output:   codextrace.ExportText(observation.Output),
 		Metadata: metadata,
 	}
-}
-
-func usageDetails(turn codextrace.Turn) map[string]int {
-	if turn.TokenUsage == nil {
-		return nil
-	}
-	usage := map[string]int{}
-	if turn.TokenUsage.InputTokens != 0 {
-		usage["input"] = turn.TokenUsage.InputTokens
-	}
-	if turn.TokenUsage.OutputTokens != 0 {
-		usage["output"] = turn.TokenUsage.OutputTokens
-	}
-	if turn.TokenUsage.TotalTokens != 0 {
-		usage["total"] = turn.TokenUsage.TotalTokens
-	}
-	if turn.TokenUsage.CachedInputTokens != 0 {
-		usage["cached_input"] = turn.TokenUsage.CachedInputTokens
-	}
-	if turn.TokenUsage.ReasoningOutputTokens != 0 {
-		usage["reasoning_output"] = turn.TokenUsage.ReasoningOutputTokens
-	}
-	return usage
 }

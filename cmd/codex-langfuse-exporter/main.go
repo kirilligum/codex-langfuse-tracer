@@ -22,6 +22,7 @@ type options struct {
 	Path                  string
 	Latest                bool
 	Watch                 bool
+	SyncModelPricing      bool
 	TurnID                string
 	ConfigPath            string
 	StateFile             string
@@ -34,8 +35,12 @@ type options struct {
 	VerifyIntervalSeconds float64
 }
 
+var syncModelPricing = langfuse.SyncModelPricing
+
 func (o options) Mode() string {
 	switch {
+	case o.SyncModelPricing:
+		return "sync-model-pricing"
 	case o.SessionID != "":
 		return "session-id"
 	case o.Path != "":
@@ -66,6 +71,7 @@ func parseArgs(args []string) (options, error) {
 	fs.StringVar(&opts.Path, "path", "", "Path to a Codex rollout JSONL file")
 	fs.BoolVar(&opts.Latest, "latest", false, "Export the latest Codex rollout JSONL file")
 	fs.BoolVar(&opts.Watch, "watch", false, "Continuously export newly completed Codex turns")
+	fs.BoolVar(&opts.SyncModelPricing, "sync-model-pricing", false, "Create missing Langfuse model pricing definitions")
 	fs.StringVar(&opts.TurnID, "turn-id", "", "Only export one turn id from the selected session")
 	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "Path to ~/.codex/config.toml")
 	fs.StringVar(&opts.StateFile, "state-file", opts.StateFile, "Path to watch state file")
@@ -84,13 +90,13 @@ func parseArgs(args []string) (options, error) {
 	}
 
 	selected := 0
-	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch} {
+	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch, opts.SyncModelPricing} {
 		if ok {
 			selected++
 		}
 	}
 	if selected != 1 {
-		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, or --watch")
+		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, or --sync-model-pricing")
 	}
 	return opts, nil
 }
@@ -105,6 +111,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 1
+	}
+	if opts.SyncModelPricing {
+		summary, err := syncModelPricing(ctx, cfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: %v\n", err)
+			return 1
+		}
+		if !opts.Quiet {
+			fmt.Fprintf(stdout, "model_pricing existing=%d created=%d conflicting=%d\n", summary.Existing, summary.Created, summary.Conflicting)
+		}
+		return 0
 	}
 	if opts.Watch {
 		err := watch.WatchSessions(ctx, watch.ScanOptions{
@@ -193,7 +210,7 @@ func selectedSessionPath(opts options) (string, error) {
 	case opts.SessionID != "":
 		return codextrace.FindSessionByID(opts.SessionID, config.CodexHome())
 	default:
-		return "", errors.New("exactly one source mode is required: --session-id, --path, --latest, or --watch")
+		return "", errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, or --sync-model-pricing")
 	}
 }
 

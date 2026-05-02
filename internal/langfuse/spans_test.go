@@ -152,6 +152,7 @@ func validateLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 }
 
 // TEST-301
+// TEST-402
 func TestLangfuseGenerationModelUsageAndNoCostDetails(t *testing.T) {
 	t.Parallel()
 
@@ -165,11 +166,11 @@ func TestLangfuseGenerationModelUsageAndNoCostDetails(t *testing.T) {
 		t.Fatalf("parse usage details: %v", err)
 	}
 	wantUsage := map[string]int{
-		"input":            100,
-		"output":           40,
-		"total":            140,
-		"cached_input":     20,
-		"reasoning_output": 10,
+		"input":                   80,
+		"input_cached_tokens":     20,
+		"output":                  30,
+		"output_reasoning_tokens": 10,
+		"total":                   140,
 	}
 	if !reflect.DeepEqual(usage, wantUsage) {
 		t.Fatalf("usage = %#v, want %#v", usage, wantUsage)

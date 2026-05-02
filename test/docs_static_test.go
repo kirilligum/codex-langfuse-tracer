@@ -171,6 +171,64 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 	}
 }
 
+// TEST-408
+func TestDocsLangfuseCostPricing(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	for _, required := range []string{
+		"--sync-model-pricing",
+		"https://openai.com/api/pricing/",
+		"2026-05-02",
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"input_cached_tokens",
+		"output_reasoning_tokens",
+		"install.sh",
+		"explicit re-export",
+		"~/.codex/bin/codex-langfuse-exporter --session-id",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+}
+
+// TEST-409
+func TestNoLocalCostDetailsOrDirectIngestionShortcut(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range []string{
+		filepath.Join("..", "internal", "langfuse", "*.go"),
+		filepath.Join("..", "cmd", "codex-langfuse-exporter", "*.go"),
+	} {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(raw)
+			if strings.Contains(text, "cost_details") {
+				t.Fatalf("%s emits local cost_details", path)
+			}
+			if strings.Contains(text, "/api/public/ingestion") {
+				t.Fatalf("%s uses direct ingestion export path", path)
+			}
+		}
+	}
+	if !strings.Contains(readRepoDoc(t, "README.md"), "/api/public/otel/v1/traces") {
+		t.Fatal("README must keep OTLP as the trace export path")
+	}
+}
+
 func readRepoDoc(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", path))

@@ -52,10 +52,10 @@
     "verification:not_run"
   ],
   "token_usage": {
-    "cached_input": 20,
-    "input": 100,
-    "output": 40,
-    "reasoning_output": 10,
+    "input": 80,
+    "input_cached_tokens": 20,
+    "output": 30,
+    "output_reasoning_tokens": 10,
     "total": 140
   },
   "exportable": true,
