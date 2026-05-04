@@ -22,7 +22,7 @@
 | Usage key normalization | DECISION | Current exporter emits `cached_input` and `reasoning_output`; Langfuse default model prices use keys such as `input_cached_tokens` and `output_reasoning_tokens`. A single `TokenUsage.LangfuseUsageDetails()` method will map Codex token counts to pricing keys. |
 | Cached and reasoning token accounting | DECISION | Full-rate parent buckets must exclude detailed buckets: `input = InputTokens - CachedInputTokens`, `output = OutputTokens - ReasoningOutputTokens`. This avoids charging cached or reasoning tokens twice when separate pricing keys exist. |
 | Conflicting existing custom model definitions | DECISION | If a project already has a custom definition for a managed Codex model name with different match pattern or prices, the sync command fails with a diagnostic. It does not mutate user-owned pricing silently. |
-| Model coverage scope | DECISION | Seed only the explicit catalog entries `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`; tests validate repository fixture model coverage, but install/setup does not scan recent rollout history. New model names require an explicit pricing data change and tests. |
+| Model coverage scope | DECISION | Seed only explicit catalog entries: `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`. `gpt-5.3-codex-spark` uses the official `gpt-5.3-codex` price record by explicit decision, not fallback aliasing. Tests validate repository fixture model coverage, but install/setup does not scan recent rollout history. New model names require an explicit pricing data change and tests. |
 | Observability producer boundary | DECISION | The tracer is an observation producer. It emits model and usage facts through OTLP; Langfuse joins those facts to rate cards and materializes costs. This mirrors OpenTelemetry semantic attribution and cloud-billing usage-record/rate-card separation. |
 | Direct model setup | DECISION | `--sync-model-pricing` shall use one direct setup function: list existing models, create missing required definitions, accept exact matches, and fail on conflicts. It shall not update or delete existing definitions. |
 | Runtime versus setup separation | DECISION | The watcher runtime remains parse-and-export only. Model definition sync runs from explicit CLI setup and `install.sh`, so a normal completed Codex turn does not pay external model-list latency before export. |
@@ -96,7 +96,7 @@
 - Assumptions:
   - Codex rollout `token_count` payloads provide `input_tokens`, `output_tokens`, `total_tokens`, `cached_input_tokens`, and `reasoning_output_tokens`.
   - `reasoning_output_tokens` are charged at the same output rate as visible output tokens.
-  - `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini` are the only Codex model names that need initial pricing records in this repository.
+  - `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark` are the only Codex model names that need initial pricing records in this repository.
   - Live validation can use local Langfuse host and keys from `~/.codex/config.toml`.
 
 ## 4. SRS / canonical requirements
@@ -129,7 +129,7 @@
 
 ### Data requirements
 
-- REQ-418 type data: Pricing records shall store USD per token values, not USD per million tokens, in one Go catalog under `internal/langfuse`. Acceptance: `gpt-5.5` input is `0.000005`, cached input is `0.0000005`, output is `0.00003`, and reasoning output is `0.00003` from the 2026-05-02 official OpenAI pricing page.
+- REQ-418 type data: Pricing records shall store USD per token values, not USD per million tokens, in one Go catalog under `internal/langfuse`. Acceptance: `gpt-5.5` input is `0.000005`, cached input is `0.0000005`, output is `0.00003`, and reasoning output is `0.00003` from the 2026-05-02 official OpenAI pricing page; `gpt-5.3-codex-spark` input is `0.00000175`, cached input is `0.000000175`, output is `0.000014`, and reasoning output is `0.000014` from the 2026-05-02 official GPT-5.3-Codex model page.
 - REQ-419 type data: Required pricing keys shall be exactly `input`, `input_cached_tokens`, `output`, and `output_reasoning_tokens`. Acceptance: static tests reject obsolete `cached_input` and `reasoning_output` in exported/golden cost usage.
 - REQ-420 type data: Pricing records shall include `sourceURL` and `sourceDate` metadata in code or documentation. Acceptance: static docs tests find the OpenAI pricing URL and `2026-05-02`.
 - REQ-421 type reliability: Model definition sync shall use one deterministic setup function with only three per-model outcomes: created, already matching, or conflict. Acceptance: decision-table tests cover all outcomes and no PATCH, PUT, or DELETE path exists.
@@ -521,7 +521,7 @@ evals:
   - command: `go test ./internal/langfuse -run 'TestModelDefinitionSyncCreatesMissingModels|TestModelPricingCatalogUsesOpenAIKeys|TestModelPricingCatalogCoversRepositoryFixtures' -count=1`
   - fixtures/mocks/data: `httptest.Server` returning empty model list and capturing POST bodies; repository rollout fixtures named in `testdata/manifest.json`.
   - deterministic controls: fixed model catalog, fake Basic auth keys, fixture files only, no external network.
-  - pass_criteria: POST bodies include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `unit:"TOKENS"`, one default tier, expected price keys, official source URL, and source date; every non-empty fixture model is present in the Go pricing catalog.
+  - pass_criteria: POST bodies include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `unit:"TOKENS"`, one default tier, expected price keys, official source URL, and source date; every non-empty fixture model is present in the Go pricing catalog.
   - expected_runtime: 2s
 - id: TEST-405
   - name: Model definition sync idempotency and conflict handling
@@ -641,6 +641,7 @@ type CodexModelPricing struct {
 | gpt-5.5 | `(?i)^(openai/)?gpt-5[.]5$` | 0.000005 | 0.0000005 | 0.00003 | 0.00003 | https://openai.com/api/pricing/ on 2026-05-02 |
 | gpt-5.4 | `(?i)^(openai/)?gpt-5[.]4$` | 0.0000025 | 0.00000025 | 0.000015 | 0.000015 | https://openai.com/api/pricing/ on 2026-05-02 |
 | gpt-5.4-mini | `(?i)^(openai/)?gpt-5[.]4-mini$` | 0.00000075 | 0.000000075 | 0.0000045 | 0.0000045 | https://openai.com/api/pricing/ on 2026-05-02 |
+| gpt-5.3-codex-spark | `(?i)^(openai/)?gpt-5[.]3-codex-spark$` | 0.00000175 | 0.000000175 | 0.000014 | 0.000014 | https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02 |
 
 ### Invariants
 

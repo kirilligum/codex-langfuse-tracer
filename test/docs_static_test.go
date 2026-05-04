@@ -84,7 +84,7 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 }
 
 // TEST-204
-func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
+func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 	t.Parallel()
 
 	readme := readRepoDoc(t, "README.md")
@@ -103,18 +103,28 @@ func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
 		"langfuse.observation.usage_details",
 		"cost_details",
 		"command_kind",
-		"Views -> Create Custom View",
-		"Traces: read only",
+		"Trace tags are the primary reusable trace filters",
+		"mcp:<server>",
 		"Observations: command search",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
 		}
 	}
+	for _, forbidden := range []string{
+		"Saved Views",
+		"saved views",
+		"Views -> Create Custom View",
+		"reusable view",
+	} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("README still contains saved-view wording %q", forbidden)
+		}
+	}
 	for _, required := range []string{
 		"no observed local file changes",
 		"always-on",
-		"trace filters",
+		"trace tags",
 		"observation filters",
 	} {
 		if !strings.Contains(strings.ToLower(readme), required) {
@@ -125,7 +135,7 @@ func TestDocsNavigationFacetsAndSavedViews(t *testing.T) {
 		"TestInsightCountMetadataSingleRepresentation",
 		"TestGoldenLangfuseSingleRepresentation",
 		"TestCountMetadataExportedOnAgent",
-		"TestDocsNavigationFacetsAndSavedViews",
+		"TestDocsNavigationFacetsAndFilters",
 	} {
 		if !strings.Contains(testingDoc, required) {
 			t.Fatalf("TESTING missing %q", required)
@@ -161,6 +171,7 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 		"TestLangfuseTraceTagsExportedOnSpans",
 		"TestGoldenLangfuseTagsContract",
 		"TestInsightTagFacets",
+		"TestDocsNavigationFacetsAndFilters",
 	} {
 		if !strings.Contains(testingDoc, required) {
 			t.Fatalf("TESTING missing %q", required)
@@ -183,6 +194,8 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 		"gpt-5.5",
 		"gpt-5.4",
 		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"https://developers.openai.com/api/docs/models/gpt-5.3-codex",
 		"input_cached_tokens",
 		"output_reasoning_tokens",
 		"When OpenAI pricing changes",

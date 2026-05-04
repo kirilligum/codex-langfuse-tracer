@@ -50,11 +50,11 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncModelPricing: %v", err)
 	}
-	if summary.Created != 3 || summary.Existing != 0 || summary.Conflicting != 0 {
+	if summary.Created != 4 || summary.Existing != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if len(posts) != 3 {
-		t.Fatalf("POST count = %d, want 3", len(posts))
+	if len(posts) != 4 {
+		t.Fatalf("POST count = %d, want 4", len(posts))
 	}
 
 	seen := map[string]bool{}
@@ -84,7 +84,7 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 			t.Fatalf("%s has total price in %#v", modelName, prices)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"} {
+	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"} {
 		if !seen[model] {
 			t.Fatalf("missing created model %s in %#v", model, posts)
 		}
@@ -96,8 +96,8 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 	t.Parallel()
 
 	catalog := codexModelPricingCatalog()
-	if len(catalog) != 3 {
-		t.Fatalf("catalog length = %d, want 3", len(catalog))
+	if len(catalog) != 4 {
+		t.Fatalf("catalog length = %d, want 4", len(catalog))
 	}
 	seen := map[string]bool{}
 	for _, model := range catalog {
@@ -105,7 +105,7 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 		if model.Unit != "TOKENS" {
 			t.Fatalf("%s unit = %q", model.ModelName, model.Unit)
 		}
-		if model.SourceURL != "https://openai.com/api/pricing/" || model.SourceDate != "2026-05-02" {
+		if model.SourceURL == "" || model.SourceDate != "2026-05-02" {
 			t.Fatalf("%s source = %s %s", model.ModelName, model.SourceURL, model.SourceDate)
 		}
 		keys := make([]string, 0, len(model.Prices))
@@ -118,8 +118,25 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 			t.Fatalf("%s price keys = %#v, want %#v", model.ModelName, keys, wantKeys)
 		}
 	}
-	if !seen["gpt-5.5"] || !seen["gpt-5.4"] || !seen["gpt-5.4-mini"] {
-		t.Fatalf("catalog models = %#v", seen)
+	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"} {
+		if !seen[model] {
+			t.Fatalf("catalog models = %#v", seen)
+		}
+	}
+	if source := catalogByName(catalog, "gpt-5.3-codex-spark").SourceURL; source != "https://developers.openai.com/api/docs/models/gpt-5.3-codex" {
+		t.Fatalf("gpt-5.3-codex-spark source = %q", source)
+	}
+	if price := catalogByName(catalog, "gpt-5.3-codex-spark").Prices["input"]; price != 0.00000175 {
+		t.Fatalf("gpt-5.3-codex-spark input price = %.12f", price)
+	}
+	if price := catalogByName(catalog, "gpt-5.3-codex-spark").Prices["input_cached_tokens"]; price != 0.000000175 {
+		t.Fatalf("gpt-5.3-codex-spark cached input price = %.12f", price)
+	}
+	if price := catalogByName(catalog, "gpt-5.3-codex-spark").Prices["output"]; price != 0.000014 {
+		t.Fatalf("gpt-5.3-codex-spark output price = %.12f", price)
+	}
+	if price := catalogByName(catalog, "gpt-5.3-codex-spark").Prices["output_reasoning_tokens"]; price != 0.000014 {
+		t.Fatalf("gpt-5.3-codex-spark reasoning output price = %.12f", price)
 	}
 	if price := catalogByName(catalog, "gpt-5.5").Prices["input"]; price != 0.000005 {
 		t.Fatalf("gpt-5.5 input price = %.12f", price)
@@ -201,7 +218,7 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 	if posts != 0 {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
-	if summary.Existing != 3 || summary.Created != 0 || summary.Conflicting != 0 {
+	if summary.Existing != 4 || summary.Created != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }

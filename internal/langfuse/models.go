@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	pricingSourceURL  = "https://openai.com/api/pricing/"
-	pricingSourceDate = "2026-05-02"
+	pricingSourceURL     = "https://openai.com/api/pricing/"
+	gpt53CodexSourceURL  = "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+	pricingSourceDate    = "2026-05-02"
+	gpt53CodexSourceDate = "2026-05-02"
 )
 
 type ModelSyncSummary struct {
@@ -92,6 +94,19 @@ func codexModelPricingCatalog() []codexModelPricing {
 				"input_cached_tokens":     0.0000005,
 				"output":                  0.00003,
 				"output_reasoning_tokens": 0.00003,
+			},
+		},
+		{
+			ModelName:    "gpt-5.3-codex-spark",
+			MatchPattern: `(?i)^(openai/)?gpt-5[.]3-codex-spark$`,
+			Unit:         "TOKENS",
+			SourceURL:    gpt53CodexSourceURL,
+			SourceDate:   gpt53CodexSourceDate,
+			Prices: map[string]float64{
+				"input":                   0.00000175,
+				"input_cached_tokens":     0.000000175,
+				"output":                  0.000014,
+				"output_reasoning_tokens": 0.000014,
 			},
 		},
 		{

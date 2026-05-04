@@ -38,7 +38,7 @@ Count metadata and Langfuse projection checks:
 go test ./internal/codextrace -run TestInsightCountMetadataSingleRepresentation -count=1
 go test ./test -run TestGoldenLangfuseSingleRepresentation -count=1
 go test ./internal/langfuse -run TestCountMetadataExportedOnAgent -count=1
-go test ./test -run TestDocsNavigationFacetsAndSavedViews -count=1
+go test ./test -run TestDocsNavigationFacetsAndFilters -count=1
 ```
 
 Tags and MCP usage checks:

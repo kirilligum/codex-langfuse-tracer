@@ -187,7 +187,7 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
 
-Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `codex_insight.navigation` is the single trace-table filter index because Langfuse trace metadata filters are string-based in the UI and do not support a reusable numeric `greater than 0` saved view for metadata counts.
+Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `codex_insight.navigation` is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 
 Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on `codex.transcript`; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
 
@@ -197,7 +197,7 @@ Cost tracking uses Langfuse's model and usage handling. The exporter sends `lang
 ~/.codex/bin/codex-langfuse-exporter --sync-model-pricing
 ```
 
-The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. Usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; cached input and reasoning output are subtracted from the parent input/output buckets to avoid double counting.
+The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. Usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; cached input and reasoning output are subtracted from the parent input/output buckets to avoid double counting.
 
 When OpenAI pricing changes or Codex emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
 
@@ -226,11 +226,11 @@ MCP metadata is derived only from observed `mcp_tool_call_end` events. Configure
 
 Trace tags are emitted through `langfuse.trace.tags`. The tag contract is `codex_insight.navigation values plus observed mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
 
-## Filtering And Saved Views
+## Filtering
 
-Use trace filters for turn-level navigation and observation filters for individual tool calls.
+Use trace tags for turn-level navigation and observation filters for individual tool calls.
 
-Trace tags are the fastest reusable trace filters:
+Trace tags are the primary reusable trace filters:
 
 - `files:changed`
 - `files:read_only`
@@ -239,18 +239,9 @@ Trace tags are the fastest reusable trace filters:
 - `verification:<status>`
 - `mcp:<server>` for each observed MCP server
 
+Common tag filters include `command:search`, `command:read`, `command:network`, `command:install`, `tool:web_search`, and `verification:failed`.
+
 Use `mcp_server` and `mcp_tool` on `codex.tool.mcp` observations when you need exact MCP call details.
-
-Trace filters use root `codex_insight` metadata:
-
-- `Traces: read only`: `Metadata codex_insight.navigation contains files:read_only`
-- `Traces: changed files`: `Metadata codex_insight.navigation contains files:changed`
-- `Traces: search commands`: `Metadata codex_insight.navigation contains command:search`
-- `Traces: read commands`: `Metadata codex_insight.navigation contains command:read`
-- `Traces: network commands`: `Metadata codex_insight.navigation contains command:network`
-- `Traces: install commands`: `Metadata codex_insight.navigation contains command:install`
-- `Traces: web search`: `Metadata codex_insight.navigation contains tool:web_search`
-- `Traces: failed verification`: `Metadata codex_insight.navigation contains verification:failed`
 
 Observation filters use observation metadata:
 
@@ -261,8 +252,6 @@ Observation filters use observation metadata:
 - `Observations: failed commands`: `Name equals codex.tool.exec_command` and `Metadata failure_type equals nonzero_exit`
 - `Observations: apply patches`: `Name equals codex.tool.apply_patch`
 - `Observations: web search`: `Name equals codex.tool.web_search`
-
-Create these with `Views -> Create Custom View` after applying the filter and sort order. Clear temporary filters such as `Session ID` before saving a reusable view.
 
 After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse rows are not automatically backfilled; use an explicit re-export command when old rows need the new fields.
 
