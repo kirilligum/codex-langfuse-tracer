@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 )
@@ -30,7 +31,7 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	if agent.TraceID != turn.TraceID {
 		t.Fatalf("agent trace id = %q want %q", agent.TraceID, turn.TraceID)
 	}
-	if agent.SpanID != codextrace.StableSpanID("codex-agent", turn.TraceID, turn.TurnID, "") {
+	if agent.SpanID != agenttrace.StableSpanID("codex-agent", turn.TraceID, turn.TurnID, "") {
 		t.Fatalf("agent span id = %q", agent.SpanID)
 	}
 	if agent.ParentSpanID != "" {
@@ -39,7 +40,7 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	if agent.Attributes["langfuse.observation.type"] != "agent" {
 		t.Fatalf("agent type attr = %q", agent.Attributes["langfuse.observation.type"])
 	}
-	if agent.Attributes["langfuse.trace.input"] != codextrace.ExportText(turn.InputText()) {
+	if agent.Attributes["langfuse.trace.input"] != agenttrace.ExportText(turn.InputText()) {
 		t.Fatalf("trace input attr = %q", agent.Attributes["langfuse.trace.input"])
 	}
 
@@ -57,6 +58,61 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	}
 }
 
+// TEST-505
+func TestProviderProjectionNames(t *testing.T) {
+	t.Parallel()
+
+	turn := agenttrace.Turn{
+		Provider:       agenttrace.ProviderClaude,
+		SessionID:      "claude-provider",
+		TurnID:         "turn-provider",
+		TraceID:        agenttrace.StableTraceID(agenttrace.ProviderClaude, "claude-provider", "turn-provider"),
+		StartTS:        "2026-05-04T12:00:00Z",
+		EndTS:          "2026-05-04T12:00:01Z",
+		UserMessages:   []string{"Run pwd"},
+		AssistantTexts: []string{"Done"},
+		Model:          "claude-haiku-4-5-20251001",
+		Completed:      true,
+		TerminalEntries: []agenttrace.TerminalEntry{
+			{Timestamp: "2026-05-04T12:00:00Z", Label: "user", Text: "Run pwd"},
+			{Timestamp: "2026-05-04T12:00:01Z", Label: "assistant.final", Text: "Done"},
+		},
+		Observations: []agenttrace.Observation{
+			{Name: agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), Type: "tool", Input: "pwd", Output: "/tmp", Metadata: map[string]any{"status": "success", "failure_type": "none"}},
+		},
+	}
+	spans := emitTurnSpans(t, turn)
+	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), "claude.terminal"} {
+		if span := spans.ByName(name); span.Name == "" {
+			t.Fatalf("missing provider span %s in %#v", name, spanNames(spans))
+		}
+	}
+	for _, name := range []string{"codex.agent", "codex.transcript", "codex.terminal"} {
+		if span := spans.ByName(name); span.Name != "" {
+			t.Fatalf("unexpected codex span %s in Claude projection", name)
+		}
+	}
+	agent := spans.ByName("claude.agent")
+	if agent.Attributes["langfuse.trace.name"] != "claude.turn.transcript" {
+		t.Fatalf("trace name attr = %q", agent.Attributes["langfuse.trace.name"])
+	}
+	if agent.Attributes["langfuse.trace.metadata.claude_session_id"] != "claude-provider" {
+		t.Fatalf("provider metadata missing in %#v", agent.Attributes)
+	}
+	if _, ok := agent.Attributes["langfuse.trace.metadata.codex_session_id"]; ok {
+		t.Fatalf("Claude span has codex metadata: %#v", agent.Attributes)
+	}
+	if agent.Attributes["langfuse.trace.metadata.claude_insight.command_tool_count"] != "1" {
+		t.Fatalf("Claude insight metadata missing command count: %#v", agent.Attributes)
+	}
+	if agent.Attributes["langfuse.trace.metadata.claude_insight.navigation"] != "command:other files:read_only tool:command verification:not_applicable" {
+		t.Fatalf("Claude navigation metadata = %q", agent.Attributes["langfuse.trace.metadata.claude_insight.navigation"])
+	}
+	if _, ok := agent.Attributes["langfuse.trace.metadata.codex_insight.navigation"]; ok {
+		t.Fatalf("Claude span has codex insight metadata: %#v", agent.Attributes)
+	}
+}
+
 // TEST-107
 func TestInsightMetadataExportedOnAgent(t *testing.T) {
 	t.Parallel()
@@ -71,8 +127,8 @@ func TestCountMetadataExportedOnAgent(t *testing.T) {
 	for _, key := range []string{
 		"langfuse.trace.metadata.codex_insight.other_command_count",
 		"langfuse.trace.metadata.codex_insight.web_search_tool_count",
-		"langfuse.trace.metadata.codex_insight.apply_patch_tool_count",
-		"langfuse.trace.metadata.codex_insight.exec_command_tool_count",
+		"langfuse.trace.metadata.codex_insight.file_change_tool_count",
+		"langfuse.trace.metadata.codex_insight.command_tool_count",
 		"langfuse.trace.metadata.codex_insight.navigation",
 	} {
 		if _, ok := agent.Attributes[key]; !ok {
@@ -114,10 +170,16 @@ func TestLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 	validateLangfuseTraceTagsExportedOnSpans(t)
 }
 
+// TEST-527
+func TestLangfuseProviderNeutralSemanticTagsExportedOnSpans(t *testing.T) {
+	t.Parallel()
+	validateLangfuseTraceTagsExportedOnSpans(t)
+}
+
 func validateLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 	t.Helper()
 	turn := completeTurn(t)
-	rawTags, err := json.Marshal(codextrace.BuildInsightRollup(turn).Tags())
+	rawTags, err := json.Marshal(agenttrace.BuildInsightRollup(turn).Tags())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +189,7 @@ func validateLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 	}
 
 	spans := emitTurnSpans(t, turn)
-	for _, name := range []string{"codex.agent", "codex.transcript", "codex.tool.exec_command", "codex.tool.mcp"} {
+	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand), agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP)} {
 		span := spans.ByName(name)
 		if span.Name == "" {
 			t.Fatalf("missing span %s", name)
@@ -200,7 +262,7 @@ func TestLangfuseVersionReleaseAndFailedCommandLevel(t *testing.T) {
 	errorCommands := 0
 	successCommands := 0
 	for _, span := range emitTurnSpans(t, failedCommandTurn(t)) {
-		if span.Name != "codex.tool.exec_command" {
+		if span.Name != agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand) {
 			continue
 		}
 		var metadata map[string]any
@@ -253,7 +315,7 @@ func validateInsightMetadataExportedOnAgent(t *testing.T) {
 		}
 	}
 
-	command := spans.ByName("codex.tool.exec_command")
+	command := spans.ByName(agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand))
 	var metadata map[string]any
 	if err := json.Unmarshal([]byte(command.Attributes["langfuse.observation.metadata"]), &metadata); err != nil {
 		t.Fatalf("parse command metadata: %v", err)
@@ -270,13 +332,21 @@ func emitCompleteTurnSpans(t *testing.T) spanSnapshots {
 	return emitTurnSpans(t, completeTurn(t))
 }
 
-func emitTurnSpans(t *testing.T, turn codextrace.Turn) spanSnapshots {
+func emitTurnSpans(t *testing.T, turn agenttrace.Turn) spanSnapshots {
 	t.Helper()
 	exporter := &memoryExporter{}
 	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitTurn: %v", err)
 	}
 	return exporter.Snapshots()
+}
+
+func spanNames(spans spanSnapshots) []string {
+	names := make([]string, 0, len(spans))
+	for _, span := range spans {
+		names = append(names, span.Name)
+	}
+	return names
 }
 
 // EVAL-104
@@ -291,26 +361,59 @@ func TestEvalLangfuseTagProjection(t *testing.T) {
 	validateLangfuseTraceTagsExportedOnSpans(t)
 }
 
-func completeTurn(t *testing.T) codextrace.Turn {
+// EVAL-005
+func TestEvalProviderProjectionDeterminism(t *testing.T) {
+	t.Parallel()
+
+	turns := []agenttrace.Turn{completeTurn(t), {
+		Provider:       agenttrace.ProviderClaude,
+		SessionID:      "claude-determinism",
+		TurnID:         "turn-determinism",
+		TraceID:        agenttrace.StableTraceID(agenttrace.ProviderClaude, "claude-determinism", "turn-determinism"),
+		StartTS:        "2026-05-04T12:00:00Z",
+		EndTS:          "2026-05-04T12:00:01Z",
+		UserMessages:   []string{"Run pwd"},
+		AssistantTexts: []string{"Done"},
+		Completed:      true,
+		Observations: []agenttrace.Observation{
+			{Name: agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), Type: "tool", Input: "pwd", Output: "/tmp", Metadata: map[string]any{"status": "success", "failure_type": "none"}},
+		},
+	}}
+	for _, turn := range turns {
+		first := canonicalSpanJSON(emitTurnSpans(t, turn))
+		for i := 0; i < 10; i++ {
+			if got := canonicalSpanJSON(emitTurnSpans(t, turn)); got != first {
+				t.Fatalf("%s projection is nondeterministic\nfirst=%s\ngot=%s", turn.Provider, first, got)
+			}
+		}
+	}
+}
+
+func completeTurn(t *testing.T) agenttrace.Turn {
 	t.Helper()
-	turns, err := codextrace.ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "complete-tools.jsonl"))
+	turns, err := codextrace.ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	exportable := codextrace.ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("exportable turns = %d", len(exportable))
 	}
 	return exportable[0]
 }
 
-func failedCommandTurn(t *testing.T) codextrace.Turn {
+func canonicalSpanJSON(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
+}
+
+func failedCommandTurn(t *testing.T) agenttrace.Turn {
 	t.Helper()
-	turns, err := codextrace.ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "failed-command.jsonl"))
+	turns, err := codextrace.ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "failed-command.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	exportable := codextrace.ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("exportable failed turns = %d", len(exportable))
 	}

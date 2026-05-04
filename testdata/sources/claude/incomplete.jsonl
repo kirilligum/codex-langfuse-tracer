@@ -1,0 +1,1 @@
+{"type":"user","sessionId":"claude-incomplete","cwd":"/tmp/claude-incomplete","uuid":"claude-incomplete-user","timestamp":"2026-05-04T12:05:00Z","message":{"role":"user","content":[{"type":"text","text":"Start but do not finish."}]}}

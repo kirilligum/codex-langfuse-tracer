@@ -6,10 +6,12 @@ Use these files as the source of truth:
 
 - `README.md`: user-facing install, configuration, usage, safety, and troubleshooting.
 - `TESTING.md`: local verification commands and production gate.
-- `testdata/manifest.json`: single rollout fixture inventory.
-- `testdata/rollouts/` and `testdata/golden/`: normalized trace contract corpus.
+- `testdata/manifest.json`: single fixture inventory.
+- `testdata/sources/` and `testdata/golden/`: normalized trace contract corpus.
 
 Do not add a second fixture registry, wrapper export path, native Codex OTEL path, include/exclude config surface, or per-file observation fanout unless real usage proves it is necessary.
+
+Do not add Claude polling, Claude wrapper execution, native Claude telemetry forwarding, alternate state files, or direct hook export. Keep Claude pricing definitions source-backed in `internal/langfuse/models.go`; do not add local cost math. Do not mutate Claude settings automatically; document the hook command and let users install it.
 
 Default verification before handing off changes:
 

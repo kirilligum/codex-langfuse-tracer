@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"fmt"
@@ -24,11 +24,11 @@ func ObservationBounds(timestamp string, duration any) (string, string) {
 }
 
 func durationToNS(value any) int64 {
-	duration := mapValue(value)
+	duration := MapValue(value)
 	if len(duration) == 0 {
 		return 0
 	}
-	return int64(intValue(duration["secs"]))*1_000_000_000 + int64(intValue(duration["nanos"]))
+	return int64(IntValue(duration["secs"]))*1_000_000_000 + int64(IntValue(duration["nanos"]))
 }
 
 func int64Value(value string) int64 {

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 )
 
 // TEST-404
@@ -50,11 +50,11 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncModelPricing: %v", err)
 	}
-	if summary.Created != 4 || summary.Existing != 0 || summary.Conflicting != 0 {
+	if summary.Created != 5 || summary.Existing != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if len(posts) != 4 {
-		t.Fatalf("POST count = %d, want 4", len(posts))
+	if len(posts) != 5 {
+		t.Fatalf("POST count = %d, want 5", len(posts))
 	}
 
 	seen := map[string]bool{}
@@ -75,7 +75,7 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 		}
 		tier := defaultTier(t, post)
 		prices := mapValue(tier["prices"])
-		for _, key := range []string{"input", "input_cached_tokens", "output", "output_reasoning_tokens"} {
+		for _, key := range expectedPriceKeys(modelName) {
 			if _, ok := prices[key]; !ok {
 				t.Fatalf("%s missing price key %s in %#v", modelName, key, prices)
 			}
@@ -84,20 +84,20 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 			t.Fatalf("%s has total price in %#v", modelName, prices)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"} {
+	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-haiku-4-5-20251001"} {
 		if !seen[model] {
 			t.Fatalf("missing created model %s in %#v", model, posts)
 		}
 	}
 }
 
-// TEST-404
-func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
+// TEST-528
+func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 	t.Parallel()
 
-	catalog := codexModelPricingCatalog()
-	if len(catalog) != 4 {
-		t.Fatalf("catalog length = %d, want 4", len(catalog))
+	catalog := modelPricingCatalog()
+	if len(catalog) != 5 {
+		t.Fatalf("catalog length = %d, want 5", len(catalog))
 	}
 	seen := map[string]bool{}
 	for _, model := range catalog {
@@ -105,7 +105,7 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 		if model.Unit != "TOKENS" {
 			t.Fatalf("%s unit = %q", model.ModelName, model.Unit)
 		}
-		if model.SourceURL == "" || model.SourceDate != "2026-05-02" {
+		if model.SourceURL == "" || model.SourceDate == "" {
 			t.Fatalf("%s source = %s %s", model.ModelName, model.SourceURL, model.SourceDate)
 		}
 		keys := make([]string, 0, len(model.Prices))
@@ -113,12 +113,12 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 			keys = append(keys, key)
 		}
 		slices.Sort(keys)
-		wantKeys := []string{"input", "input_cached_tokens", "output", "output_reasoning_tokens"}
+		wantKeys := expectedPriceKeys(model.ModelName)
 		if !slices.Equal(keys, wantKeys) {
 			t.Fatalf("%s price keys = %#v, want %#v", model.ModelName, keys, wantKeys)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"} {
+	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-haiku-4-5-20251001"} {
 		if !seen[model] {
 			t.Fatalf("catalog models = %#v", seen)
 		}
@@ -150,13 +150,34 @@ func TestModelPricingCatalogUsesOpenAIKeys(t *testing.T) {
 	if price := catalogByName(catalog, "gpt-5.5").Prices["output_reasoning_tokens"]; price != 0.00003 {
 		t.Fatalf("gpt-5.5 reasoning output price = %.12f", price)
 	}
+	haiku := catalogByName(catalog, "claude-haiku-4-5-20251001")
+	if haiku.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || haiku.SourceDate != "2026-05-04" {
+		t.Fatalf("Claude Haiku source = %s %s", haiku.SourceURL, haiku.SourceDate)
+	}
+	if haiku.MatchPattern != `(?i)^claude-haiku-4-5-20251001$` {
+		t.Fatalf("Claude Haiku match pattern = %q", haiku.MatchPattern)
+	}
+	for key, want := range map[string]float64{
+		"input":                       0.000001,
+		"cache_creation_input_tokens": 0.00000125,
+		"cache_read_input_tokens":     0.00000010,
+		"output":                      0.000005,
+	} {
+		if got := haiku.Prices[key]; got != want {
+			t.Fatalf("Claude Haiku %s price = %.12f, want %.12f", key, got, want)
+		}
+	}
 }
 
 // TEST-404
 func TestModelPricingCatalogCoversRepositoryFixtures(t *testing.T) {
 	t.Parallel()
+	validatePricingCatalogCoversRepositoryFixtures(t)
+}
 
-	catalog := codexModelPricingCatalog()
+func validatePricingCatalogCoversRepositoryFixtures(t *testing.T) {
+	t.Helper()
+	catalog := modelPricingCatalog()
 	covered := map[string]bool{}
 	for _, model := range catalog {
 		covered[model.ModelName] = true
@@ -168,23 +189,31 @@ func TestModelPricingCatalogCoversRepositoryFixtures(t *testing.T) {
 	}
 	var manifest struct {
 		Fixtures []struct {
-			Rollout string `json:"rollout"`
+			Provider string `json:"provider"`
+			Source   string `json:"source"`
 		} `json:"fixtures"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	for _, fixture := range manifest.Fixtures {
-		turns, err := codextrace.ParseTurns(filepath.Join("..", "..", fixture.Rollout))
+		turns, err := providers.ParseTurns(fixture.Provider, filepath.Join("..", "..", fixture.Source))
 		if err != nil {
 			continue
 		}
 		for _, turn := range turns {
 			if turn.Model != "" && !covered[turn.Model] {
-				t.Fatalf("fixture model %q from %s is not covered by pricing catalog", turn.Model, fixture.Rollout)
+				t.Fatalf("fixture model %q from %s is not covered by pricing catalog", turn.Model, fixture.Source)
 			}
 		}
 	}
+}
+
+// EVAL-522
+func TestEvalPricingCatalogCoverage(t *testing.T) {
+	t.Parallel()
+
+	validatePricingCatalogCoversRepositoryFixtures(t)
 }
 
 // TEST-405
@@ -196,8 +225,8 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/public/models":
-			models := make([]modelPayload, 0, len(codexModelPricingCatalog()))
-			for _, model := range codexModelPricingCatalog() {
+			models := make([]modelPayload, 0, len(modelPricingCatalog()))
+			for _, model := range modelPricingCatalog() {
 				models = append(models, modelPayloadFromPricing(model))
 			}
 			writeJSON(t, w, map[string]any{"data": models, "meta": map[string]any{}})
@@ -218,7 +247,7 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 	if posts != 0 {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
-	if summary.Existing != 4 || summary.Created != 0 || summary.Conflicting != 0 {
+	if summary.Existing != 5 || summary.Created != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -229,7 +258,7 @@ func TestModelDefinitionSyncRejectsConflictingModel(t *testing.T) {
 
 	cfg := config.LangfuseConfig{PublicKey: "pk-test", SecretKey: "sk-test"}
 	posts := 0
-	conflict := modelPayloadFromPricing(catalogByName(codexModelPricingCatalog(), "gpt-5.5"))
+	conflict := modelPayloadFromPricing(catalogByName(modelPricingCatalog(), "gpt-5.5"))
 	conflict.MatchPattern = `(?i)^wrong-model$`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -327,11 +356,18 @@ func defaultTier(t *testing.T, model map[string]any) map[string]any {
 	return tier
 }
 
-func catalogByName(catalog []codexModelPricing, name string) codexModelPricing {
+func expectedPriceKeys(modelName string) []string {
+	if strings.HasPrefix(modelName, "claude-") {
+		return []string{"cache_creation_input_tokens", "cache_read_input_tokens", "input", "output"}
+	}
+	return []string{"input", "input_cached_tokens", "output", "output_reasoning_tokens"}
+}
+
+func catalogByName(catalog []modelPricing, name string) modelPricing {
 	for _, model := range catalog {
 		if model.ModelName == name {
 			return model
 		}
 	}
-	return codexModelPricing{}
+	return modelPricing{}
 }

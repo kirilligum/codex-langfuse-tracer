@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
 )
 
@@ -26,6 +28,9 @@ func TestCLIFlags(t *testing.T) {
 	}
 	if !opts.Latest || opts.Mode() != "latest" {
 		t.Fatalf("latest mode not selected: %+v", opts)
+	}
+	if opts.Provider != "codex" {
+		t.Fatalf("default provider = %q, want codex", opts.Provider)
 	}
 	if opts.Environment != buildinfo.DefaultEnvironment {
 		t.Fatalf("environment = %q, want %q", opts.Environment, buildinfo.DefaultEnvironment)
@@ -74,6 +79,49 @@ func TestCLIFlags(t *testing.T) {
 	}
 }
 
+// TEST-506
+func TestCLIProviderSelection(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseArgs([]string{"--provider", "claude", "--path", "/tmp/transcript.jsonl"})
+	if err != nil {
+		t.Fatalf("parse Claude path: %v", err)
+	}
+	if opts.Provider != "claude" || opts.Mode() != "path" || opts.Path != "/tmp/transcript.jsonl" {
+		t.Fatalf("Claude provider options = %+v", opts)
+	}
+	for _, args := range [][]string{
+		{"--provider", "unknown", "--path", "/tmp/source.jsonl"},
+		{"--provider", "claude", "--latest"},
+		{"--provider", "claude", "--session-id", "abc"},
+		{"--provider", "claude", "--watch"},
+		{"--provider", "claude", "--sync-model-pricing"},
+	} {
+		_, err := parseArgs(args)
+		if err == nil {
+			t.Fatalf("parseArgs(%v) succeeded, want provider error", args)
+		}
+	}
+}
+
+// EVAL-006
+func TestEvalProviderCLISurface(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"--latest"},
+		{"--provider", "codex", "--latest"},
+		{"--provider", "claude", "--path", "/tmp/transcript.jsonl"},
+	} {
+		if _, err := parseArgs(args); err != nil {
+			t.Fatalf("parseArgs(%v): %v", args, err)
+		}
+	}
+	if _, err := parseArgs([]string{"--provider", "claude", "--latest"}); err == nil || !strings.Contains(err.Error(), "Claude provider supports only --path") {
+		t.Fatalf("Claude latest error = %v", err)
+	}
+}
+
 // TEST-406
 func TestSyncModelPricingMode(t *testing.T) {
 	home := t.TempDir()
@@ -119,7 +167,7 @@ func TestSyncModelPricingMode(t *testing.T) {
 		t.Fatalf("missing sync summary stdout=%s", stdout.String())
 	}
 
-	rolloutPath := copyRolloutFixture(t, home, "complete-tools.jsonl")
+	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
 	otelPosts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -143,6 +191,38 @@ func TestSyncModelPricingMode(t *testing.T) {
 	}
 	if otelPosts != 1 {
 		t.Fatalf("otel posts = %d, want 1", otelPosts)
+	}
+}
+
+func TestProviderDispatchRejectsUnknownProvider(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseProviderTurns("unknown", "/tmp/source.jsonl")
+	if err == nil || !errors.Is(err, errUnsupportedProvider) {
+		t.Fatalf("unknown provider error = %v", err)
+	}
+}
+
+// TEST-507
+func TestClaudeHookCLIModeDoesNotLoadConfig(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	oldStdin := stdin
+	stdin = strings.NewReader(`{"session_id":"claude-cli","transcript_path":"/tmp/claude-cli.jsonl","cwd":"/tmp/project","hook_event_name":"Stop"}`)
+	t.Cleanup(func() { stdin = oldStdin })
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--claude-hook", "--state-file", statePath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run hook exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	state, err := exportstate.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	if state == nil || len(state.Queue) != 1 || state.Queue[0].SourcePath != "/tmp/claude-cli.jsonl" {
+		t.Fatalf("hook queue = %+v", state)
 	}
 }
 

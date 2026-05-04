@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -27,7 +27,7 @@ func AuthHeader(cfg config.LangfuseConfig) string {
 	return "Basic " + token
 }
 
-func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn codextrace.Turn, environment, serviceName string) (int, error) {
+func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, environment, serviceName string) (int, error) {
 	recorder := &statusRecorder{base: http.DefaultTransport}
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(strings.TrimRight(cfg.Host, "/")+"/api/public/otel/v1/traces"),
@@ -76,7 +76,7 @@ func (s *statusRecorder) StatusCode() int {
 	return s.statusCode
 }
 
-func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter) error {
+func EmitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter) error {
 	ids, err := spanIDs(turn)
 	if err != nil {
 		return err
@@ -94,13 +94,14 @@ func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceNam
 		sdktrace.WithBatcher(exporter),
 	)
 	tracer := provider.Tracer(buildinfo.ScopeName, trace.WithInstrumentationVersion(buildinfo.Version))
-	traceTags := codextrace.BuildInsightRollup(turn).Tags()
+	traceTags := agenttrace.BuildInsightRollup(turn).Tags()
+	profile := turn.Profile()
 
-	agentCtx, agent := tracer.Start(ctx, "codex.agent",
+	agentCtx, agent := tracer.Start(ctx, profile.AgentName,
 		trace.WithTimestamp(parseTime(turn.StartTS)),
 		trace.WithAttributes(turnAttributes(turn, environment, "agent", true, traceTags)...),
 	)
-	transcriptCtx, transcript := tracer.Start(agentCtx, "codex.transcript",
+	transcriptCtx, transcript := tracer.Start(agentCtx, profile.TranscriptName,
 		trace.WithTimestamp(parseTime(turn.StartTS)),
 		trace.WithAttributes(transcriptAttributes(turn, environment, traceTags)...),
 	)
@@ -110,14 +111,14 @@ func EmitTurn(ctx context.Context, turn codextrace.Turn, environment, serviceNam
 	for index, observation := range turn.Observations {
 		emitObservation(agentCtx, tracer, turn, observation, environment, strconv.Itoa(index), traceTags)
 	}
-	if terminal := codextrace.TerminalObservation(turn); terminal != nil {
+	if terminal := agenttrace.TerminalObservation(turn); terminal != nil {
 		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal", traceTags)
 	}
 	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	return provider.Shutdown(ctx)
 }
 
-func emitObservation(ctx context.Context, tracer trace.Tracer, turn codextrace.Turn, observation codextrace.Observation, environment, key string, traceTags []string) {
+func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, key string, traceTags []string) {
 	_, span := tracer.Start(ctx, observation.Name,
 		trace.WithTimestamp(nsTime(observation.StartTimeUnixNS)),
 		trace.WithAttributes(observationAttributes(turn, observation, environment, traceTags)...),
@@ -126,40 +127,43 @@ func emitObservation(ctx context.Context, tracer trace.Tracer, turn codextrace.T
 	_ = key
 }
 
-func spanIDs(turn codextrace.Turn) ([]string, error) {
+func spanIDs(turn agenttrace.Turn) ([]string, error) {
+	profile := turn.Profile()
 	ids := []string{
-		codextrace.StableSpanID("codex-agent", turn.TraceID, turn.TurnID, ""),
-		codextrace.StableSpanID("codex-transcript", turn.TraceID, turn.TurnID, ""),
+		agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
+		agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
 	}
 	for index := range turn.Observations {
-		ids = append(ids, codextrace.StableSpanID("codex-observation", turn.TraceID, turn.TurnID, strconv.Itoa(index)))
+		ids = append(ids, agenttrace.StableSpanID(profile.ObservationPrefix, turn.TraceID, turn.TurnID, strconv.Itoa(index)))
 	}
-	if codextrace.TerminalObservation(turn) != nil {
-		ids = append(ids, codextrace.StableSpanID("codex-observation", turn.TraceID, turn.TurnID, "terminal"))
+	if agenttrace.TerminalObservation(turn) != nil {
+		ids = append(ids, agenttrace.StableSpanID(profile.ObservationPrefix, turn.TraceID, turn.TurnID, "terminal"))
 	}
 	return ids, nil
 }
 
-func baseObservationAttributes(turn codextrace.Turn, environment, observationType, input, output string) []attribute.KeyValue {
+func baseObservationAttributes(turn agenttrace.Turn, environment, observationType, input, output string) []attribute.KeyValue {
+	profile := turn.Profile()
 	return []attribute.KeyValue{
-		attribute.String("langfuse.trace.name", buildinfo.TraceName),
+		attribute.String("langfuse.trace.name", profile.TraceName),
+		attribute.String("langfuse.trace.metadata.provider", profile.Provider),
 		attribute.String("langfuse.session.id", turn.SessionID),
 		attribute.String("langfuse.environment", environment),
 		attribute.String("langfuse.version", buildinfo.Version),
 		attribute.String("langfuse.release", buildinfo.Version),
 		attribute.String("langfuse.observation.type", observationType),
-		attribute.String("langfuse.observation.input", strconv.Quote(codextrace.ExportText(input))),
-		attribute.String("langfuse.observation.output", strconv.Quote(codextrace.ExportText(output))),
+		attribute.String("langfuse.observation.input", strconv.Quote(agenttrace.ExportText(input))),
+		attribute.String("langfuse.observation.output", strconv.Quote(agenttrace.ExportText(output))),
 	}
 }
 
-func turnAttributes(turn codextrace.Turn, environment, observationType string, includeTraceIO bool, traceTags []string) []attribute.KeyValue {
+func turnAttributes(turn agenttrace.Turn, environment, observationType string, includeTraceIO bool, traceTags []string) []attribute.KeyValue {
 	attrs := baseObservationAttributes(turn, environment, observationType, turn.InputText(), turn.OutputText())
 	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	if includeTraceIO {
 		attrs = append(attrs,
-			attribute.String("langfuse.trace.input", codextrace.ExportText(turn.InputText())),
-			attribute.String("langfuse.trace.output", codextrace.ExportText(turn.OutputText())),
+			attribute.String("langfuse.trace.input", agenttrace.ExportText(turn.InputText())),
+			attribute.String("langfuse.trace.output", agenttrace.ExportText(turn.OutputText())),
 		)
 	}
 	attrs = append(attrs, metadataAttributes(turn)...)
@@ -169,7 +173,7 @@ func turnAttributes(turn codextrace.Turn, environment, observationType string, i
 	return attrs
 }
 
-func transcriptAttributes(turn codextrace.Turn, environment string, traceTags []string) []attribute.KeyValue {
+func transcriptAttributes(turn agenttrace.Turn, environment string, traceTags []string) []attribute.KeyValue {
 	attrs := turnAttributes(turn, environment, "generation", false, traceTags)
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
@@ -184,7 +188,7 @@ func transcriptAttributes(turn codextrace.Turn, environment string, traceTags []
 	return attrs
 }
 
-func observationAttributes(turn codextrace.Turn, observation codextrace.Observation, environment string, traceTags []string) []attribute.KeyValue {
+func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observation, environment string, traceTags []string) []attribute.KeyValue {
 	attrs := baseObservationAttributes(turn, environment, observation.Type, observation.Input, observation.Output)
 	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	attrs = append(attrs, metadataAttributes(turn)...)
@@ -200,8 +204,8 @@ func observationAttributes(turn codextrace.Turn, observation codextrace.Observat
 	return attrs
 }
 
-func failedObservationStatusMessage(observation codextrace.Observation) string {
-	if observation.Name != "codex.tool.exec_command" {
+func failedObservationStatusMessage(observation agenttrace.Observation) string {
+	if observation.Type != "tool" {
 		return ""
 	}
 	failureType := stringValue(observation.Metadata["failure_type"])
@@ -211,11 +215,12 @@ func failedObservationStatusMessage(observation codextrace.Observation) string {
 	return ""
 }
 
-func metadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
+func metadataAttributes(turn agenttrace.Turn) []attribute.KeyValue {
+	profile := turn.Profile()
 	attrs := []attribute.KeyValue{
-		attribute.String("langfuse.trace.metadata.codex_session_id", turn.SessionID),
-		attribute.String("langfuse.trace.metadata.codex_turn_id", turn.TurnID),
-		attribute.Bool("langfuse.trace.metadata.codex_transcript_exported", true),
+		attribute.String("langfuse.trace.metadata."+profile.MetadataPrefix+"_session_id", turn.SessionID),
+		attribute.String("langfuse.trace.metadata."+profile.MetadataPrefix+"_turn_id", turn.TurnID),
+		attribute.Bool("langfuse.trace.metadata."+profile.MetadataPrefix+"_transcript_exported", true),
 		attribute.String("langfuse.observation.metadata.session_id", turn.SessionID),
 		attribute.String("langfuse.observation.metadata.turn_id", turn.TurnID),
 	}
@@ -232,8 +237,9 @@ func traceTagAttributes(tags []string) []attribute.KeyValue {
 	return []attribute.KeyValue{attribute.StringSlice("langfuse.trace.tags", tags)}
 }
 
-func insightMetadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
-	metadata := codextrace.BuildInsightRollup(turn).Metadata()
+func insightMetadataAttributes(turn agenttrace.Turn) []attribute.KeyValue {
+	metadata := agenttrace.BuildInsightRollup(turn).Metadata()
+	profile := turn.Profile()
 	keys := make([]string, 0, len(metadata))
 	for key := range metadata {
 		keys = append(keys, key)
@@ -241,7 +247,7 @@ func insightMetadataAttributes(turn codextrace.Turn) []attribute.KeyValue {
 	sort.Strings(keys)
 	attrs := make([]attribute.KeyValue, 0, len(keys))
 	for _, key := range keys {
-		attrKey := "langfuse.trace.metadata.codex_insight." + key
+		attrKey := "langfuse.trace.metadata." + profile.InsightMetadataKey + "." + key
 		switch value := metadata[key].(type) {
 		case int:
 			attrs = append(attrs, attribute.Int(attrKey, value))
@@ -275,7 +281,7 @@ func FetchTrace(ctx context.Context, cfg config.LangfuseConfig, traceID string) 
 	return body, nil
 }
 
-func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn codextrace.Turn, timeout, interval time.Duration) (bool, bool, error) {
+func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (bool, bool, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -283,7 +289,7 @@ func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn codextra
 		if err != nil {
 			lastErr = err
 		} else {
-			hasInput, hasOutput := traceMatches(traceBody, codextrace.ExportText(turn.InputText()), codextrace.ExportText(turn.OutputText()))
+			hasInput, hasOutput := traceMatches(traceBody, turn.Profile().TranscriptName, agenttrace.ExportText(turn.InputText()), agenttrace.ExportText(turn.OutputText()))
 			if hasInput && hasOutput {
 				return true, true, nil
 			}
@@ -302,12 +308,12 @@ func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn codextra
 	}
 }
 
-func traceMatches(traceBody map[string]any, input, output string) (bool, bool) {
+func traceMatches(traceBody map[string]any, transcriptName, input, output string) (bool, bool) {
 	hasInput := stringValue(traceBody["input"]) == input
 	hasOutput := stringValue(traceBody["output"]) == output
 	for _, raw := range sliceValue(traceBody["observations"]) {
 		observation := mapValue(raw)
-		if stringValue(observation["name"]) != "codex.transcript" {
+		if stringValue(observation["name"]) != transcriptName {
 			continue
 		}
 		hasInput = hasInput || stringValue(observation["input"]) == input

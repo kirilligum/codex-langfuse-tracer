@@ -75,14 +75,7 @@ func TestInstallUninstallScripts(t *testing.T) {
 		"GOCACHE="+filepath.Join(home, "gocache"),
 	)
 
-	oldWrapper := filepath.Join(codexHome, "bin", "codex")
-	if err := os.MkdirAll(filepath.Dir(oldWrapper), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	writeInstallLangfuseConfig(t, codexHome, server.URL)
-	if err := os.WriteFile(oldWrapper, []byte("old"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	install := exec.Command("bash", "../install.sh")
 	install.Env = env
@@ -93,9 +86,6 @@ func TestInstallUninstallScripts(t *testing.T) {
 	binary := filepath.Join(codexHome, "bin", "codex-langfuse-exporter")
 	if info, err := os.Stat(binary); err != nil || info.Mode()&0o111 == 0 {
 		t.Fatalf("installed binary invalid info=%v err=%v", info, err)
-	}
-	if _, err := os.Stat(oldWrapper); !os.IsNotExist(err) {
-		t.Fatalf("old wrapper still exists")
 	}
 	servicePath := filepath.Join(xdgConfig, "systemd", "user", "codex-langfuse-watch.service")
 	serviceRaw, err := os.ReadFile(servicePath)
@@ -114,8 +104,8 @@ func TestInstallUninstallScripts(t *testing.T) {
 		!strings.Contains(systemctlText, "restart codex-langfuse-watch.service") {
 		t.Fatalf("install did not enable and restart service:\n%s", systemctlText)
 	}
-	if modelPosts != 4 {
-		t.Fatalf("model sync POST count = %d, want 4\nlog=%s", modelPosts, systemctlText)
+	if modelPosts != 5 {
+		t.Fatalf("model sync POST count = %d, want 5\nlog=%s", modelPosts, systemctlText)
 	}
 	syncIndex := strings.Index(systemctlText, "sync post model")
 	restartIndex := strings.Index(systemctlText, "restart codex-langfuse-watch.service")

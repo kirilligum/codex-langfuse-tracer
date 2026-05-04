@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "name": "codex.turn.transcript",
+  "provider": "codex",
   "trace_id": "1e087e4ea8aa8d8e29e604d2cd8704d9",
   "session_id": "sess-complete",
   "turn_id": "turn-1",
@@ -9,26 +10,26 @@
   "model": "gpt-5.5",
   "cwd": "/tmp/codex-langfuse-fixture",
   "metadata": {
-    "apply_patch_tool_count": 1,
     "build_command_count": 0,
     "changed_extensions": [
       ".md"
     ],
     "changed_file_count": 1,
     "command_count": 1,
-    "exec_command_tool_count": 1,
+    "command_tool_count": 1,
     "failed_command_count": 0,
+    "file_change_tool_count": 1,
     "format_command_count": 0,
+    "generic_tool_count": 0,
     "git_command_count": 0,
     "install_command_count": 0,
     "last_verification_command": "",
     "last_verification_status": "",
     "lint_command_count": 0,
     "mcp_tool_count": 1,
-    "navigation": "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run",
+    "navigation": "command:other files:changed tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run",
     "network_command_count": 0,
     "other_command_count": 1,
-    "patch_count": 1,
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
@@ -44,8 +45,8 @@
     "command:other",
     "files:changed",
     "mcp:github",
-    "tool:apply_patch",
-    "tool:exec_command",
+    "tool:command",
+    "tool:file_change",
     "tool:mcp",
     "tool:tool_search",
     "tool:web_search",
@@ -91,7 +92,7 @@
       }
     },
     {
-      "name": "codex.tool.exec_command",
+      "name": "codex.tool.command",
       "type": "tool",
       "input": "printf 'ok\\n'",
       "output": "## stdout\nok\n",
@@ -102,11 +103,12 @@
         "exit_code": 0,
         "failure_type": "none",
         "status": "completed",
+        "tool_name": "exec_command",
         "type": "exec_command_end"
       }
     },
     {
-      "name": "codex.tool.apply_patch",
+      "name": "codex.tool.file_change",
       "type": "tool",
       "input": "{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch\"\n}",
       "output": "## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```",
@@ -125,6 +127,7 @@
           "README.md"
         ],
         "moved_files": [],
+        "tool_name": "apply_patch",
         "type": "patch_apply_end"
       }
     },
@@ -137,6 +140,7 @@
         "call_id": "mcp-1",
         "mcp_server": "github",
         "mcp_tool": "issues/list",
+        "tool_name": "mcp",
         "type": "mcp_tool_call_end"
       }
     },
@@ -147,6 +151,7 @@
       "output": "{\n  \"results\": 1\n}",
       "metadata": {
         "call_id": "web-1",
+        "tool_name": "web_search",
         "type": "web_search_end"
       }
     },
@@ -158,14 +163,15 @@
       "metadata": {
         "call_id": "search-1",
         "response_item_type": "tool_search_output",
-        "status": "completed"
+        "status": "completed",
+        "tool_name": "tool_search"
       }
     },
     {
       "name": "codex.terminal",
       "type": "span",
       "input": "",
-      "output": "## 2026-05-01T10:00:02Z user\nSummarize the repo and run checks\n\n## 2026-05-01T10:00:03Z assistant.commentary\nI will inspect the files and run the checks.\n\n## 2026-05-01T10:00:04Z assistant.reasoning\nNeed inspect files before editing.\n\n## 2026-05-01T10:00:05Z tool.exec_command\nCommand:\nprintf 'ok\\n'\n\nOutput:\n## stdout\nok\n\n\nStatus: completed exit_code=0\n\n## 2026-05-01T10:00:07Z tool.apply_patch\nInput:\n{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch\"\n}\n\nOutput:\n## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```\n\n## 2026-05-01T10:00:08Z tool.mcp\nInput:\n{\n  \"server\": \"github\",\n  \"tool\": \"issues/list\"\n}\n\nOutput:\n{\n  \"count\": 0\n}\n\n## 2026-05-01T10:00:09Z tool.web_search\nInput:\n{\n  \"action\": {\n    \"results\": 1\n  },\n  \"query\": \"Langfuse Agent Graph\"\n}\n\nOutput:\n{\n  \"results\": 1\n}\n\n## 2026-05-01T10:00:11Z tool.tool_search\nInput:\n{\n  \"query\": \"langfuse\"\n}\n\nOutput:\n[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]\n\n## 2026-05-01T10:00:13Z assistant.final\nChecks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted.",
+      "output": "## 2026-05-01T10:00:02Z user\nSummarize the repo and run checks\n\n## 2026-05-01T10:00:03Z assistant.commentary\nI will inspect the files and run the checks.\n\n## 2026-05-01T10:00:04Z assistant.reasoning\nNeed inspect files before editing.\n\n## 2026-05-01T10:00:05Z tool.command\nCommand:\nprintf 'ok\\n'\n\nOutput:\n## stdout\nok\n\n\nStatus: completed exit_code=0\n\n## 2026-05-01T10:00:07Z tool.file_change\nInput:\n{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch\"\n}\n\nOutput:\n## stdout\nDone\n\n## README.md (update)\n\n```diff\n@@\n-old\n+new\n```\n\n## 2026-05-01T10:00:08Z tool.mcp\nInput:\n{\n  \"server\": \"github\",\n  \"tool\": \"issues/list\"\n}\n\nOutput:\n{\n  \"count\": 0\n}\n\n## 2026-05-01T10:00:09Z tool.web_search\nInput:\n{\n  \"action\": {\n    \"results\": 1\n  },\n  \"query\": \"Langfuse Agent Graph\"\n}\n\nOutput:\n{\n  \"results\": 1\n}\n\n## 2026-05-01T10:00:11Z tool.tool_search\nInput:\n{\n  \"query\": \"langfuse\"\n}\n\nOutput:\n[\n  {\n    \"name\": \"langfuse.trace\"\n  }\n]\n\n## 2026-05-01T10:00:13Z assistant.final\nChecks passed with sk-lf-\u003credacted\u003e and gh\u003credacted\u003e redacted.",
       "metadata": {
         "event_count": 9,
         "turn_id": "turn-1"

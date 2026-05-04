@@ -11,35 +11,52 @@ import (
 )
 
 // TEST-015
-func TestManualExportCLIIntegration(t *testing.T) {
+// TEST-506
+func TestManualProviderExportCLIIntegration(t *testing.T) {
 	t.Parallel()
 
-	home := t.TempDir()
-	rolloutPath := copyRolloutFixture(t, home, "complete-tools.jsonl")
+	for _, tc := range []struct {
+		name       string
+		provider   string
+		fixture    string
+		extraArgs  []string
+		wantOutput []byte
+	}{
+		{name: "codex", provider: "codex", fixture: "complete-tools.jsonl", extraArgs: []string{"--turn-id", "turn-1"}, wantOutput: []byte("exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=200")},
+		{name: "claude", provider: "claude", fixture: "no-tools.jsonl", wantOutput: []byte("exported trace=")},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	postCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/public/otel/v1/traces" {
-			postCount++
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		t.Fatalf("unexpected request %s", r.URL.Path)
-	}))
-	defer server.Close()
+			home := t.TempDir()
+			sourcePath := copyProviderSourceFixture(t, home, tc.provider, tc.fixture)
+			postCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/public/otel/v1/traces" {
+					postCount++
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				t.Fatalf("unexpected request %s", r.URL.Path)
+			}))
+			defer server.Close()
 
-	configPath := writeLangfuseConfig(t, home, server.URL)
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--turn-id", "turn-1", "--no-verify"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if postCount != 1 {
-		t.Fatalf("postCount = %d, want 1", postCount)
-	}
-	if !bytes.Contains(stdout.Bytes(), []byte("exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=200")) {
-		t.Fatalf("missing export line stdout=%s", stdout.String())
+			configPath := writeLangfuseConfig(t, home, server.URL)
+			args := []string{"--provider", tc.provider, "--path", sourcePath, "--config", configPath, "--no-verify"}
+			args = append(args, tc.extraArgs...)
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), args, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if postCount != 1 {
+				t.Fatalf("postCount = %d, want 1", postCount)
+			}
+			if !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), tc.wantOutput) {
+				t.Fatalf("missing provider export stdout=%s", stdout.String())
+			}
+		})
 	}
 }
 
@@ -47,7 +64,7 @@ func TestManualExportCLINoExportableTurns(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
-	rolloutPath := copyRolloutFixture(t, home, "incomplete-turn.jsonl")
+	rolloutPath := copyCodexSourceFixture(t, home, "incomplete-turn.jsonl")
 	configPath := writeLangfuseConfig(t, home, "http://127.0.0.1")
 
 	var stdout, stderr bytes.Buffer
@@ -64,7 +81,7 @@ func TestManualExportCLIVerificationFailure(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
-	rolloutPath := copyRolloutFixture(t, home, "complete-no-tools.jsonl")
+	rolloutPath := copyCodexSourceFixture(t, home, "complete-no-tools.jsonl")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/public/otel/v1/traces":
@@ -116,10 +133,10 @@ func TestRunWatchCanceled(t *testing.T) {
 	}
 }
 
-func copyRolloutFixture(t *testing.T, dir, name string) string {
+func copyCodexSourceFixture(t *testing.T, dir, name string) string {
 	t.Helper()
 	rolloutPath := filepath.Join(dir, name)
-	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "rollouts", name))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "sources", "codex", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +144,24 @@ func copyRolloutFixture(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	return rolloutPath
+}
+
+func copyClaudeSourceFixture(t *testing.T, dir, name string) string {
+	t.Helper()
+	return copyProviderSourceFixture(t, dir, "claude", name)
+}
+
+func copyProviderSourceFixture(t *testing.T, dir, provider, name string) string {
+	t.Helper()
+	sourcePath := filepath.Join(dir, name)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "sources", provider, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return sourcePath
 }
 
 func writeLangfuseConfig(t *testing.T, dir, host string) string {

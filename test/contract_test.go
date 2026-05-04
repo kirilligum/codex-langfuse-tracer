@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
 )
 
@@ -21,18 +22,18 @@ func TestGoldenTraceContract(t *testing.T) {
 		t.Run(fixture.ID, func(t *testing.T) {
 			t.Parallel()
 			golden := loadGolden(t, fixture.Golden)
-			rolloutPath := filepath.Join("..", fixture.Rollout)
-			turns, err := codextrace.ParseTurns(rolloutPath)
+			sourcePath := filepath.Join("..", fixture.Source)
+			turns, err := providers.ParseTurns(fixture.Provider, sourcePath)
 			if golden.ParseError {
 				if err == nil {
-					t.Fatalf("ParseTurns(%s) succeeded, want parse error", rolloutPath)
+					t.Fatalf("ParseTurns(%s, %s) succeeded, want parse error", fixture.Provider, sourcePath)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParseTurns(%s): %v", rolloutPath, err)
+				t.Fatalf("ParseTurns(%s, %s): %v", fixture.Provider, sourcePath, err)
 			}
-			exportable := codextrace.ExportableTurns(turns)
+			exportable := agenttrace.ExportableTurns(turns)
 			if !golden.Exportable {
 				if len(exportable) != 0 {
 					t.Fatalf("fixture should not be exportable, got %d turns", len(exportable))
@@ -43,6 +44,9 @@ func TestGoldenTraceContract(t *testing.T) {
 				t.Fatalf("exportable turns = %d", len(exportable))
 			}
 			actual := tracecontract.FromTurn(exportable[0])
+			if !strings.HasPrefix(actual.Name, fixture.Provider+".") {
+				t.Fatalf("fixture %s trace name = %q, want provider prefix %q", fixture.ID, actual.Name, fixture.Provider+".")
+			}
 			compareTraceContract(t, golden, actual)
 		})
 	}
@@ -76,7 +80,7 @@ func loadGolden(t *testing.T, path string) tracecontract.Trace {
 
 func compareTraceContract(t *testing.T, golden, actual tracecontract.Trace) {
 	t.Helper()
-	if golden.SchemaVersion != actual.SchemaVersion || golden.Name != actual.Name || golden.TraceID != actual.TraceID || golden.SessionID != actual.SessionID || golden.TurnID != actual.TurnID {
+	if golden.SchemaVersion != actual.SchemaVersion || golden.Name != actual.Name || golden.Provider != actual.Provider || golden.TraceID != actual.TraceID || golden.SessionID != actual.SessionID || golden.TurnID != actual.TurnID {
 		t.Fatalf("identity mismatch\ngolden=%+v\nactual=%+v", golden, actual)
 	}
 	if golden.Input != actual.Input || golden.Output != actual.Output || golden.Model != actual.Model || golden.CWD != actual.CWD {
@@ -121,6 +125,11 @@ func compareTraceContract(t *testing.T, golden, actual tracecontract.Trace) {
 			if canonicalJSON(observed.Metadata[key]) != canonicalJSON(expectedValue) {
 				t.Fatalf("%s metadata[%s] = %s want %s", expected.Name, key, canonicalJSON(observed.Metadata[key]), canonicalJSON(expectedValue))
 			}
+		}
+	}
+	for name, leftover := range actualByName {
+		if len(leftover) > 0 {
+			t.Fatalf("unexpected observation %s: %+v", name, leftover)
 		}
 	}
 }

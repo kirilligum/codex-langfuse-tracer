@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	pricingSourceURL     = "https://openai.com/api/pricing/"
-	gpt53CodexSourceURL  = "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
-	pricingSourceDate    = "2026-05-02"
-	gpt53CodexSourceDate = "2026-05-02"
+	openAIPriceSourceURL     = "https://openai.com/api/pricing/"
+	gpt53CodexSourceURL      = "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+	anthropicPriceSourceURL  = "https://platform.claude.com/docs/en/about-claude/pricing"
+	openAIPriceSourceDate    = "2026-05-02"
+	gpt53CodexSourceDate     = "2026-05-02"
+	anthropicPriceSourceDate = "2026-05-04"
 )
 
 type ModelSyncSummary struct {
@@ -25,7 +27,7 @@ type ModelSyncSummary struct {
 	Conflicting int
 }
 
-type codexModelPricing struct {
+type modelPricing struct {
 	ModelName    string
 	MatchPattern string
 	Unit         string
@@ -55,7 +57,7 @@ func SyncModelPricing(ctx context.Context, cfg config.LangfuseConfig) (ModelSync
 		return ModelSyncSummary{}, err
 	}
 	var summary ModelSyncSummary
-	for _, model := range codexModelPricingCatalog() {
+	for _, model := range modelPricingCatalog() {
 		want := modelPayloadFromPricing(model)
 		matches := modelsWithName(existing, model.ModelName)
 		if len(matches) > 0 {
@@ -81,14 +83,14 @@ func SyncModelPricing(ctx context.Context, cfg config.LangfuseConfig) (ModelSync
 	return summary, nil
 }
 
-func codexModelPricingCatalog() []codexModelPricing {
-	return []codexModelPricing{
+func modelPricingCatalog() []modelPricing {
+	return []modelPricing{
 		{
 			ModelName:    "gpt-5.5",
 			MatchPattern: `(?i)^(openai/)?gpt-5[.]5$`,
 			Unit:         "TOKENS",
-			SourceURL:    pricingSourceURL,
-			SourceDate:   pricingSourceDate,
+			SourceURL:    openAIPriceSourceURL,
+			SourceDate:   openAIPriceSourceDate,
 			Prices: map[string]float64{
 				"input":                   0.000005,
 				"input_cached_tokens":     0.0000005,
@@ -113,8 +115,8 @@ func codexModelPricingCatalog() []codexModelPricing {
 			ModelName:    "gpt-5.4",
 			MatchPattern: `(?i)^(openai/)?gpt-5[.]4$`,
 			Unit:         "TOKENS",
-			SourceURL:    pricingSourceURL,
-			SourceDate:   pricingSourceDate,
+			SourceURL:    openAIPriceSourceURL,
+			SourceDate:   openAIPriceSourceDate,
 			Prices: map[string]float64{
 				"input":                   0.0000025,
 				"input_cached_tokens":     0.00000025,
@@ -126,8 +128,8 @@ func codexModelPricingCatalog() []codexModelPricing {
 			ModelName:    "gpt-5.4-mini",
 			MatchPattern: `(?i)^(openai/)?gpt-5[.]4-mini$`,
 			Unit:         "TOKENS",
-			SourceURL:    pricingSourceURL,
-			SourceDate:   pricingSourceDate,
+			SourceURL:    openAIPriceSourceURL,
+			SourceDate:   openAIPriceSourceDate,
 			Prices: map[string]float64{
 				"input":                   0.00000075,
 				"input_cached_tokens":     0.000000075,
@@ -135,10 +137,23 @@ func codexModelPricingCatalog() []codexModelPricing {
 				"output_reasoning_tokens": 0.0000045,
 			},
 		},
+		{
+			ModelName:    "claude-haiku-4-5-20251001",
+			MatchPattern: `(?i)^claude-haiku-4-5-20251001$`,
+			Unit:         "TOKENS",
+			SourceURL:    anthropicPriceSourceURL,
+			SourceDate:   anthropicPriceSourceDate,
+			Prices: map[string]float64{
+				"input":                       0.000001,
+				"cache_creation_input_tokens": 0.00000125,
+				"cache_read_input_tokens":     0.00000010,
+				"output":                      0.000005,
+			},
+		},
 	}
 }
 
-func modelPayloadFromPricing(model codexModelPricing) modelPayload {
+func modelPayloadFromPricing(model modelPricing) modelPayload {
 	return modelPayload{
 		ModelName:    model.ModelName,
 		MatchPattern: model.MatchPattern,
@@ -215,7 +230,7 @@ func listModels(ctx context.Context, cfg config.LangfuseConfig) ([]modelPayload,
 	return body.Data, nil
 }
 
-func createModel(ctx context.Context, cfg config.LangfuseConfig, model codexModelPricing) error {
+func createModel(ctx context.Context, cfg config.LangfuseConfig, model modelPricing) error {
 	payload := modelPayloadFromPricing(model)
 	raw, err := json.Marshal(payload)
 	if err != nil {

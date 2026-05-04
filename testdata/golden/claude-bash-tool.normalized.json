@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "0101c2930c2a7133111c3e253bc25dbd",
+  "session_id": "claude-bash-tool",
+  "turn_id": "claude-bash-user",
+  "input": "Run printf hello.",
+  "output": "hello",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-bash-tool",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 1,
+    "command_tool_count": 1,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "command:other files:read_only tool:command verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 1,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 1,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "command:other",
+    "files:read_only",
+    "tool:command",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 20,
+    "output": 3,
+    "total": 23
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Run printf hello.",
+      "output": "hello"
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Run printf hello.",
+      "output": "hello"
+    },
+    {
+      "name": "claude.tool.command",
+      "type": "tool",
+      "input": "printf hello",
+      "output": "hello",
+      "metadata": {
+        "call_id": "toolu_bash_2",
+        "command_kind": "other",
+        "description": "Print hello",
+        "failure_type": "none",
+        "is_error": false,
+        "status": "success",
+        "tool_name": "Bash"
+      }
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:03:00Z user\nRun printf hello.\n\n## 2026-05-04T12:03:02Z tool.command\nInput:\nprintf hello\n\nOutput:\nhello\n\n## 2026-05-04T12:03:03Z assistant.final\nhello",
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "claude-bash-user"
+      }
+    }
+  ]
+}

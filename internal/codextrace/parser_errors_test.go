@@ -10,7 +10,7 @@ import (
 func TestManualParseErrorsIncludePathAndLine(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join("..", "..", "testdata", "rollouts", "corrupt-rollout.jsonl")
+	path := filepath.Join("..", "..", "testdata", "sources", "codex", "corrupt-rollout.jsonl")
 	_, err := ParseTurns(path)
 	if err == nil {
 		t.Fatal("ParseTurns(corrupt) succeeded, want error")

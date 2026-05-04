@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "63124d6b4b8747024a7b95c784f7b14e",
+  "session_id": "claude-real-bash",
+  "turn_id": "00000000-0000-4000-8000-000000000010",
+  "input": "Print the current directory with pwd.",
+  "output": "The current directory is /tmp/claude-bash.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-bash",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 1,
+    "command_tool_count": 1,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "command:other files:read_only tool:command verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 1,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 1,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "command:other",
+    "files:read_only",
+    "tool:command",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 30,
+    "output": 9,
+    "total": 39
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Print the current directory with pwd.",
+      "output": "The current directory is /tmp/claude-bash."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Print the current directory with pwd.",
+      "output": "The current directory is /tmp/claude-bash."
+    },
+    {
+      "name": "claude.tool.command",
+      "type": "tool",
+      "input": "pwd",
+      "output": "/tmp/claude-bash",
+      "metadata": {
+        "call_id": "toolu_bash_1",
+        "command_kind": "other",
+        "description": "Print working directory",
+        "failure_type": "none",
+        "is_error": false,
+        "status": "success",
+        "tool_name": "Bash"
+      }
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:01:00.000Z user\nPrint the current directory with pwd.\n\n## 2026-05-04T12:01:01.000Z assistant.commentary\nI will run pwd.\n\n## 2026-05-04T12:01:02.000Z tool.command\nInput:\npwd\n\nOutput:\n/tmp/claude-bash\n\n## 2026-05-04T12:01:03.000Z assistant.final\nThe current directory is /tmp/claude-bash.",
+      "metadata": {
+        "event_count": 4,
+        "turn_id": "00000000-0000-4000-8000-000000000010"
+      }
+    }
+  ]
+}

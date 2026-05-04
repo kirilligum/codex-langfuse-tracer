@@ -1,4 +1,4 @@
-package watch
+package exportstate
 
 import (
 	"os"
@@ -11,7 +11,7 @@ func TestStateLoadSaveAndDedupe(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "state.json")
-	state, err := LoadState(path)
+	state, err := Load(path)
 	if err != nil {
 		t.Fatalf("LoadState missing: %v", err)
 	}
@@ -20,10 +20,10 @@ func TestStateLoadSaveAndDedupe(t *testing.T) {
 	}
 
 	want := State{Version: 1, ScanWatermarkNS: 42, ProcessedTraceIDs: []string{"b", "a", "a"}}
-	if err := SaveState(path, want); err != nil {
+	if err := Save(path, want); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	got, err := LoadState(path)
+	got, err := Load(path)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestStateLoadSaveAndDedupe(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"version":2}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadState(path); err == nil {
+	if _, err := Load(path); err == nil {
 		t.Fatal("LoadState accepted unsupported version")
 	}
 }

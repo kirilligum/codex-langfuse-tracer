@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
 // TEST-005
@@ -11,17 +13,17 @@ func TestToolObservationParity(t *testing.T) {
 	t.Parallel()
 
 	turn := parseCompleteFixture(t)
-	byName := map[string]Observation{}
+	byName := map[string]agenttrace.Observation{}
 	for _, observation := range turn.Observations {
 		byName[observation.Name] = observation
 	}
 
 	for _, name := range []string{
-		"codex.tool.exec_command",
-		"codex.tool.apply_patch",
-		"codex.tool.mcp",
-		"codex.tool.web_search",
-		"codex.tool.tool_search",
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyWebSearch),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyToolSearch),
 	} {
 		obs, ok := byName[name]
 		if !ok {
@@ -35,16 +37,38 @@ func TestToolObservationParity(t *testing.T) {
 		}
 	}
 
-	patch := byName["codex.tool.apply_patch"]
-	if patch.Metadata["changed_file_count"] != 1 {
-		t.Fatalf("changed_file_count = %#v", patch.Metadata["changed_file_count"])
+	fileChange := byName[agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange)]
+	if fileChange.Metadata["changed_file_count"] != 1 {
+		t.Fatalf("changed_file_count = %#v", fileChange.Metadata["changed_file_count"])
 	}
-	files, ok := patch.Metadata["changed_files"].([]string)
+	files, ok := fileChange.Metadata["changed_files"].([]string)
 	if !ok || len(files) != 1 || files[0] != "README.md" {
-		t.Fatalf("changed_files = %#v", patch.Metadata["changed_files"])
+		t.Fatalf("changed_files = %#v", fileChange.Metadata["changed_files"])
 	}
-	if patch.Metadata["file_change_types"].(map[string]string)["README.md"] != "update" {
-		t.Fatalf("file_change_types = %#v", patch.Metadata["file_change_types"])
+	if fileChange.Metadata["file_change_types"].(map[string]string)["README.md"] != "update" {
+		t.Fatalf("file_change_types = %#v", fileChange.Metadata["file_change_types"])
+	}
+}
+
+// TEST-522
+func TestCodexParserCanonicalToolFamilies(t *testing.T) {
+	t.Parallel()
+
+	turn := parseCompleteFixture(t)
+	for _, want := range []string{
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyWebSearch),
+		agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyToolSearch),
+	} {
+		observation := requireObservation(t, turn, want)
+		if observation.Type != "tool" {
+			t.Fatalf("%s type = %q", want, observation.Type)
+		}
+		if observation.Metadata["tool_name"] == "" {
+			t.Fatalf("%s missing tool_name metadata: %#v", want, observation.Metadata)
+		}
 	}
 }
 
@@ -57,7 +81,7 @@ func TestMCPObservationMetadata(t *testing.T) {
 func validateMCPObservationMetadata(t *testing.T) {
 	t.Helper()
 	turn := parseCompleteFixture(t)
-	mcp := requireObservation(t, turn, "codex.tool.mcp")
+	mcp := requireObservation(t, turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP))
 	if mcp.Metadata["mcp_server"] != "github" {
 		t.Fatalf("mcp_server = %#v, want github; metadata=%#v", mcp.Metadata["mcp_server"], mcp.Metadata)
 	}
@@ -70,14 +94,14 @@ func validateMCPObservationMetadata(t *testing.T) {
 		}
 	}
 
-	missing := parseRolloutText(t, `{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-missing"}}
+	missing := parseCodexSourceText(t, `{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-missing"}}
 {"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-missing"}}
 {"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Use MCP"}}
 {"timestamp":"2026-05-01T10:00:03Z","type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"mcp-missing","invocation":{},"result":{"ok":true}}}
 {"timestamp":"2026-05-01T10:00:04Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Done"}}
 {"timestamp":"2026-05-01T10:00:05Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done"}}
 `)
-	missingMCP := requireObservation(t, missing, "codex.tool.mcp")
+	missingMCP := requireObservation(t, missing, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP))
 	if _, ok := missingMCP.Metadata["mcp_server"]; ok {
 		t.Fatalf("missing server must omit mcp_server: %#v", missingMCP.Metadata)
 	}
@@ -92,20 +116,20 @@ func TestEvalMCPMetadataParsing(t *testing.T) {
 	validateMCPObservationMetadata(t)
 }
 
-func parseCompleteFixture(t *testing.T) Turn {
+func parseCompleteFixture(t *testing.T) agenttrace.Turn {
 	t.Helper()
-	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "complete-tools.jsonl"))
+	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
 	if err != nil {
 		t.Fatalf("ParseTurns: %v", err)
 	}
-	exportable := ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("exportable turns = %d", len(exportable))
 	}
 	return exportable[0]
 }
 
-func parseRolloutText(t *testing.T, text string) Turn {
+func parseCodexSourceText(t *testing.T, text string) agenttrace.Turn {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -115,14 +139,14 @@ func parseRolloutText(t *testing.T, text string) Turn {
 	if err != nil {
 		t.Fatalf("ParseTurns: %v", err)
 	}
-	exportable := ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("exportable turns = %d, want 1", len(exportable))
 	}
 	return exportable[0]
 }
 
-func requireObservation(t *testing.T, turn Turn, name string) Observation {
+func requireObservation(t *testing.T, turn agenttrace.Turn, name string) agenttrace.Observation {
 	t.Helper()
 	for _, observation := range turn.Observations {
 		if observation.Name == name {
@@ -130,5 +154,5 @@ func requireObservation(t *testing.T, turn Turn, name string) Observation {
 		}
 	}
 	t.Fatalf("missing observation %s in %#v", name, turn.Observations)
-	return Observation{}
+	return agenttrace.Observation{}
 }

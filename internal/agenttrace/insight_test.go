@@ -1,8 +1,7 @@
-package codextrace
+package agenttrace
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -129,7 +128,7 @@ func TestEvalInsightClassifierCoverage(t *testing.T) {
 func TestInsightRollup(t *testing.T) {
 	t.Parallel()
 
-	turn := parseCompleteFixture(t)
+	turn := completeFixtureTurn()
 	rollup := BuildInsightRollup(turn)
 	if rollup.ToolCount != 5 {
 		t.Fatalf("ToolCount = %d, want 5", rollup.ToolCount)
@@ -137,8 +136,8 @@ func TestInsightRollup(t *testing.T) {
 	if rollup.CommandCount != 1 || rollup.FailedCommandCount != 0 {
 		t.Fatalf("command counts = %d/%d", rollup.CommandCount, rollup.FailedCommandCount)
 	}
-	if rollup.PatchCount != 1 || rollup.ChangedFileCount != 1 {
-		t.Fatalf("patch counts = %d/%d", rollup.PatchCount, rollup.ChangedFileCount)
+	if rollup.FileChangeToolCount != 1 || rollup.ChangedFileCount != 1 {
+		t.Fatalf("file change counts = %d/%d", rollup.FileChangeToolCount, rollup.ChangedFileCount)
 	}
 	if rollup.VerificationCommandCount != 0 || rollup.VerificationStatus != "not_run" {
 		t.Fatalf("verification = %d/%q", rollup.VerificationCommandCount, rollup.VerificationStatus)
@@ -154,15 +153,13 @@ func TestInsightRollup(t *testing.T) {
 func TestInsightRollupFailedVerification(t *testing.T) {
 	t.Parallel()
 
-	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "failed-command.jsonl"))
-	if err != nil {
-		t.Fatalf("ParseTurns: %v", err)
-	}
-	exportable := ExportableTurns(turns)
-	if len(exportable) != 1 {
-		t.Fatalf("exportable turns = %d, want 1", len(exportable))
-	}
-	rollup := BuildInsightRollup(exportable[0])
+	rollup := BuildInsightRollup(Turn{
+		Observations: []Observation{
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "go test ./...", Metadata: map[string]any{"command_kind": "test", "failure_type": "none", "status": "completed"}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "go test ./...", Metadata: map[string]any{"command_kind": "test", "failure_type": "nonzero_exit", "status": "completed"}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyFileChange), Type: "tool", Metadata: map[string]any{"changed_files": []string{"internal/example_test.go"}}},
+		},
+	})
 	if rollup.CommandCount != 2 || rollup.FailedCommandCount != 1 || rollup.VerificationCommandCount != 2 {
 		t.Fatalf("command rollup mismatch: %+v", rollup)
 	}
@@ -180,13 +177,13 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 
 	turn := Turn{
 		Observations: []Observation{
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "sed -n '1,80p' README.md", Metadata: map[string]any{}},
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "curl -fsS https://example.com", Metadata: map[string]any{}},
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "npm install", Metadata: map[string]any{}},
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "printf 'ok\n'", Metadata: map[string]any{}},
-			{Name: "codex.tool.web_search", Type: "tool", Metadata: map[string]any{}},
-			{Name: "codex.tool.mcp", Type: "tool", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "sed -n '1,80p' README.md", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "curl -fsS https://example.com", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "npm install", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "printf 'ok\n'", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyWebSearch), Type: "tool", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyMCP), Type: "tool", Metadata: map[string]any{}},
 		},
 	}
 	metadata := BuildInsightRollup(turn).Metadata()
@@ -202,14 +199,14 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 		"format_command_count":       0,
 		"git_command_count":          0,
 		"systemd_command_count":      0,
-		"exec_command_tool_count":    5,
-		"apply_patch_tool_count":     0,
+		"command_tool_count":         5,
+		"file_change_tool_count":     0,
 		"web_search_tool_count":      1,
 		"mcp_tool_count":             1,
 		"tool_search_tool_count":     0,
 		"changed_file_count":         0,
 		"verification_command_count": 0,
-		"navigation":                 "command:install command:network command:other command:read command:search files:read_only tool:exec_command tool:mcp tool:web_search verification:not_applicable",
+		"navigation":                 "command:install command:network command:other command:read command:search files:read_only tool:command tool:mcp tool:web_search verification:not_applicable",
 	}
 	for key, want := range want {
 		if got := metadata[key]; got != want {
@@ -221,7 +218,7 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 	changedTurn := Turn{
 		Observations: []Observation{
 			{
-				Name: "codex.tool.apply_patch",
+				Name: ToolObservationName(ProviderCodex, ToolFamilyFileChange),
 				Type: "tool",
 				Metadata: map[string]any{
 					"changed_files": []string{"internal/codextrace/insight.go"},
@@ -230,13 +227,13 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 		},
 	}
 	changedMetadata := BuildInsightRollup(changedTurn).Metadata()
-	if changedMetadata["apply_patch_tool_count"] != 1 || changedMetadata["changed_file_count"] != 1 {
+	if changedMetadata["file_change_tool_count"] != 1 || changedMetadata["changed_file_count"] != 1 {
 		t.Fatalf("changed file count metadata mismatch: %s", canonicalInsightJSON(changedMetadata))
 	}
 	if _, ok := changedMetadata["changed_files"]; ok {
 		t.Fatalf("root metadata must omit changed_files: %s", canonicalInsightJSON(changedMetadata))
 	}
-	if changedMetadata["navigation"] != "files:changed tool:apply_patch verification:not_run" {
+	if changedMetadata["navigation"] != "files:changed tool:file_change verification:not_run" {
 		t.Fatalf("changed navigation = %#v, metadata=%s", changedMetadata["navigation"], canonicalInsightJSON(changedMetadata))
 	}
 	requireNoDuplicateInsightFields(t, changedMetadata)
@@ -251,7 +248,7 @@ func TestInsightTagFacets(t *testing.T) {
 func validateInsightTagFacets(t *testing.T) {
 	t.Helper()
 
-	complete := parseCompleteFixture(t)
+	complete := completeFixtureTurn()
 	completeRollup := BuildInsightRollup(complete)
 	wantComplete := strings.Fields(completeRollup.Metadata()["navigation"].(string))
 	wantComplete = append(wantComplete, "mcp:github")
@@ -267,7 +264,7 @@ func validateInsightTagFacets(t *testing.T) {
 
 	noMCP := BuildInsightRollup(Turn{
 		Observations: []Observation{
-			{Name: "codex.tool.exec_command", Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyCommand), Type: "tool", Input: "rg -n TODO internal", Metadata: map[string]any{}},
 		},
 	})
 	if got := noMCP.Tags(); !reflect.DeepEqual(got, strings.Fields(noMCP.Metadata()["navigation"].(string))) {
@@ -281,7 +278,7 @@ func validateInsightTagFacets(t *testing.T) {
 
 	userDefined := BuildInsightRollup(Turn{
 		Observations: []Observation{
-			{Name: "codex.tool.mcp", Type: "tool", Metadata: map[string]any{"mcp_server": "private-test-server", "mcp_tool": "secret/tool"}},
+			{Name: ToolObservationName(ProviderCodex, ToolFamilyMCP), Type: "tool", Metadata: map[string]any{"mcp_server": "private-test-server", "mcp_tool": "secret/tool"}},
 		},
 	})
 	wantUserDefined := strings.Fields(userDefined.Metadata()["navigation"].(string))
@@ -299,7 +296,7 @@ func validateInsightTagFacets(t *testing.T) {
 	allCommands := Turn{}
 	for _, kind := range commandKinds {
 		allCommands.Observations = append(allCommands.Observations, Observation{
-			Name:     "codex.tool.exec_command",
+			Name:     ToolObservationName(ProviderCodex, ToolFamilyCommand),
 			Type:     "tool",
 			Metadata: map[string]any{"command_kind": kind, "failure_type": "none"},
 		})
@@ -312,12 +309,44 @@ func validateInsightTagFacets(t *testing.T) {
 	}
 }
 
+// TEST-520
+func TestInsightRollupProviderNeutralSemanticFamilies(t *testing.T) {
+	t.Parallel()
+
+	turn := Turn{
+		Provider: ProviderClaude,
+		Observations: []Observation{
+			{Name: ToolObservationName(ProviderClaude, ToolFamilyCommand), Type: "tool", Input: "go test ./...", Metadata: map[string]any{"command_kind": "test", "failure_type": "none", "status": "success"}},
+			{Name: ToolObservationName(ProviderClaude, ToolFamilyFileChange), Type: "tool", Metadata: map[string]any{"changed_files": []string{"internal/example_test.go"}}},
+			{Name: ToolObservationName(ProviderClaude, ToolFamilyMCP), Type: "tool", Metadata: map[string]any{"mcp_server": "github", "mcp_tool": "issues/list"}},
+			{Name: ToolObservationName(ProviderClaude, ToolFamilyGeneric), Type: "tool", Metadata: map[string]any{"tool_name": "Read"}},
+		},
+	}
+	metadata := BuildInsightRollup(turn).Metadata()
+	if metadata["command_tool_count"] != 1 || metadata["file_change_tool_count"] != 1 || metadata["mcp_tool_count"] != 1 || metadata["generic_tool_count"] != 1 || metadata["tool_count"] != 4 {
+		t.Fatalf("tool counts = %s", canonicalInsightJSON(metadata))
+	}
+	if metadata["command_count"] != 1 || metadata["verification_command_count"] != 1 || metadata["verification_status"] != "passed" {
+		t.Fatalf("command metadata = %s", canonicalInsightJSON(metadata))
+	}
+	if metadata["changed_file_count"] != 1 {
+		t.Fatalf("file metadata = %s", canonicalInsightJSON(metadata))
+	}
+	if metadata["navigation"] != "command:test files:changed tool:command tool:file_change tool:generic tool:mcp verification:passed" {
+		t.Fatalf("navigation = %#v", metadata["navigation"])
+	}
+	tags := BuildInsightRollup(turn).Tags()
+	if !slices.Contains(tags, "mcp:github") || slices.Contains(tags, "issues/list") {
+		t.Fatalf("tags = %#v", tags)
+	}
+}
+
 // EVAL-402
 func TestEvalInsightTagFacetDeterminism(t *testing.T) {
 	t.Parallel()
 	validateInsightTagFacets(t)
 
-	turn := parseCompleteFixture(t)
+	turn := completeFixtureTurn()
 	first := BuildInsightRollup(turn).Tags()
 	for i := 0; i < 20; i++ {
 		if got := BuildInsightRollup(turn).Tags(); !reflect.DeepEqual(got, first) {
@@ -343,7 +372,7 @@ func TestInsightRollupDeterminism(t *testing.T) {
 	turn := Turn{
 		Observations: []Observation{
 			{
-				Name: "codex.tool.apply_patch",
+				Name: ToolObservationName(ProviderCodex, ToolFamilyFileChange),
 				Type: "tool",
 				Metadata: map[string]any{
 					"changed_files": []string{"z_test.go", "README", "a.go", "z_test.go"},
@@ -369,7 +398,7 @@ func TestInsightRollupDeterminism(t *testing.T) {
 
 // EVAL-103
 func TestEvalInsightRollupLatency(t *testing.T) {
-	turn := parseCompleteFixture(t)
+	turn := completeFixtureTurn()
 	start := time.Now()
 	for i := 0; i < 100; i++ {
 		_ = BuildInsightRollup(turn).Metadata()

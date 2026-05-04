@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
 func FuzzParseTurnsDoesNotPanic(f *testing.F) {
@@ -13,7 +15,7 @@ func FuzzParseTurnsDoesNotPanic(f *testing.F) {
 		"incomplete-turn.jsonl",
 		"corrupt-rollout.jsonl",
 	} {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "rollouts", name))
+		raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "sources", "codex", name))
 		if err != nil {
 			f.Fatal(err)
 		}
@@ -37,7 +39,7 @@ func FuzzExportTextRedactsSentinels(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, prefix, suffix string) {
 		input := prefix + " Basic dGVzdGRhdGF0ZXN0ZGF0YXRlc3RkYXRh sk-lf-live-secret pk-lf-public ghp_live_secret api_key = abcdefghijklmnop " + suffix
-		output := ExportText(input)
+		output := agenttrace.ExportText(input)
 		for _, forbidden := range []string{
 			"dGVzdGRhdGF0ZXN0ZGF0YXRlc3RkYXRh",
 			"sk-lf-live-secret",

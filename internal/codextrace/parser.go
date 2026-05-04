@@ -6,9 +6,11 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
-func ParseTurns(path string) ([]Turn, error) {
+func ParseTurns(path string) ([]agenttrace.Turn, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -19,7 +21,7 @@ func ParseTurns(path string) ([]Turn, error) {
 	sessionCWD := ""
 	currentTurnID := ""
 	turnOrder := []string{}
-	turnsByID := map[string]*Turn{}
+	turnsByID := map[string]*agenttrace.Turn{}
 	pendingCalls := map[string]map[string]any{}
 	coveredCallIDs := map[string]bool{}
 
@@ -34,43 +36,44 @@ func ParseTurns(path string) ([]Turn, error) {
 			return nil, fmt.Errorf("%s:%d is not valid JSON: %w", path, lineNumber, err)
 		}
 
-		itemType := stringValue(item["type"])
-		timestamp := stringValue(item["timestamp"])
-		payload := mapValue(item["payload"])
+		itemType := agenttrace.StringValue(item["type"])
+		timestamp := agenttrace.StringValue(item["timestamp"])
+		payload := agenttrace.MapValue(item["payload"])
 
 		switch itemType {
 		case "session_meta":
-			if value := stringValue(payload["id"]); value != "" {
+			if value := agenttrace.StringValue(payload["id"]); value != "" {
 				sessionID = value
 			}
-			if value := stringValue(payload["model"]); value != "" {
+			if value := agenttrace.StringValue(payload["model"]); value != "" {
 				sessionModel = value
-			} else if value := stringValue(payload["default_model"]); value != "" {
+			} else if value := agenttrace.StringValue(payload["default_model"]); value != "" {
 				sessionModel = value
 			}
-			if value := stringValue(payload["cwd"]); value != "" {
+			if value := agenttrace.StringValue(payload["cwd"]); value != "" {
 				sessionCWD = value
 			}
 			continue
 		case "turn_context":
-			turnID := stringValue(payload["turn_id"])
+			turnID := agenttrace.StringValue(payload["turn_id"])
 			if turnID == "" {
 				currentTurnID = ""
 				continue
 			}
-			traceID := stringValue(payload["trace_id"])
+			traceID := agenttrace.StringValue(payload["trace_id"])
 			if traceID == "" {
-				traceID = StableTraceID(sessionID, turnID)
+				traceID = agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID)
 			}
 			currentTurnID = turnID
-			turn := &Turn{
+			turn := &agenttrace.Turn{
+				Provider:  agenttrace.ProviderCodex,
 				SessionID: sessionID,
 				TurnID:    turnID,
 				TraceID:   traceID,
 				StartTS:   timestampOrNow(timestamp),
 				EndTS:     timestampOrNow(timestamp),
-				CWD:       firstString(payload["cwd"], sessionCWD),
-				Model:     firstString(payload["model"], sessionModel),
+				CWD:       agenttrace.StringOr(payload["cwd"], sessionCWD),
+				Model:     agenttrace.StringOr(payload["model"], sessionModel),
 			}
 			if _, exists := turnsByID[turnID]; !exists {
 				turnOrder = append(turnOrder, turnID)
@@ -95,148 +98,155 @@ func ParseTurns(path string) ([]Turn, error) {
 		}
 	}
 
-	turns := make([]Turn, 0, len(turnOrder))
+	turns := make([]agenttrace.Turn, 0, len(turnOrder))
 	for _, turnID := range turnOrder {
 		turns = append(turns, *turnsByID[turnID])
 	}
 	return turns, nil
 }
 
-func parseEventMessage(turn *Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
-	switch stringValue(payload["type"]) {
+func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
+	switch agenttrace.StringValue(payload["type"]) {
 	case "user_message":
-		appendUnique(&turn.UserMessages, payload["message"])
-		addTerminalEntry(turn, timestamp, "user", stringValue(payload["message"]))
+		agenttrace.AppendUnique(&turn.UserMessages, payload["message"])
+		agenttrace.AddTerminalEntry(turn, timestamp, "user", agenttrace.StringValue(payload["message"]))
 	case "agent_message":
-		if stringValue(payload["phase"]) == "final_answer" {
-			message := stringValue(payload["message"])
-			appendUnique(&turn.AssistantTexts, message)
-			addTerminalEntry(turn, timestamp, "assistant.final", message)
+		if agenttrace.StringValue(payload["phase"]) == "final_answer" {
+			message := agenttrace.StringValue(payload["message"])
+			agenttrace.AppendUnique(&turn.AssistantTexts, message)
+			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.final", message)
 			if timestamp != "" {
 				turn.EndTS = timestamp
 			}
 		} else {
-			message := stringValue(payload["message"])
-			addTerminalEntry(turn, timestamp, "assistant.commentary", message)
-			addObservation(turn, "codex.message.commentary", timestamp, "", message, map[string]any{"phase": stringValue(payload["phase"])}, "span", nil)
+			message := agenttrace.StringValue(payload["message"])
+			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.commentary", message)
+			agenttrace.AddObservation(turn, "codex.message.commentary", timestamp, "", message, map[string]any{"phase": agenttrace.StringValue(payload["phase"])}, "span", nil)
 		}
 	case "task_complete":
-		message := stringValue(payload["last_agent_message"])
-		appendUnique(&turn.AssistantTexts, message)
-		addTerminalEntry(turn, timestamp, "assistant.final", message)
+		message := agenttrace.StringValue(payload["last_agent_message"])
+		agenttrace.AppendUnique(&turn.AssistantTexts, message)
+		agenttrace.AddTerminalEntry(turn, timestamp, "assistant.final", message)
 		if timestamp != "" {
 			turn.EndTS = timestamp
 		}
 		turn.Completed = true
 	case "exec_command_end":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
 			coveredCallIDs[callID] = true
 		}
-		output := commandOutput(payload)
-		metadata := metadataWithoutLargeFields(payload, map[string]bool{
+		output := agenttrace.CommandOutput(payload)
+		metadata := agenttrace.MetadataWithoutLargeFields(payload, map[string]bool{
 			"command": true, "stdout": true, "stderr": true, "aggregated_output": true, "formatted_output": true, "parsed_cmd": true, "duration": true,
 		})
-		for key, value := range CommandInsightMetadata(payload) {
+		for key, value := range agenttrace.CommandInsightMetadata(payload) {
 			metadata[key] = value
 		}
-		addTerminalEntry(turn, timestamp, "tool.exec_command", commandTerminalText(payload))
-		addObservation(turn, "codex.tool.exec_command", timestamp, FormatCommand(payload["command"]), output, metadata, "tool", payload["duration"])
+		metadata["tool_name"] = "exec_command"
+		agenttrace.AddTerminalEntry(turn, timestamp, "tool.command", agenttrace.CommandTerminalText(payload))
+		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand), timestamp, agenttrace.FormatCommand(payload["command"]), output, metadata, "tool", payload["duration"])
 	case "patch_apply_end":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
 			coveredCallIDs[callID] = true
 		}
 		patchInput := ""
 		if pending := pendingCalls[callID]; pending != nil {
 			if value := pending["input"]; value != nil {
-				patchInput = StableJSON(value)
+				patchInput = agenttrace.StableJSON(value)
 			} else {
-				patchInput = StableJSON(pending["arguments"])
+				patchInput = agenttrace.StableJSON(pending["arguments"])
 			}
 		}
-		metadata := metadataWithoutLargeFields(payload, map[string]bool{"stdout": true, "stderr": true, "changes": true})
-		for key, value := range FileChangeMetadata(mapValue(payload["changes"])) {
+		metadata := agenttrace.MetadataWithoutLargeFields(payload, map[string]bool{"stdout": true, "stderr": true, "changes": true})
+		for key, value := range agenttrace.FileChangeMetadata(agenttrace.MapValue(payload["changes"])) {
 			metadata[key] = value
 		}
-		output := patchOutput(payload)
-		addTerminalEntry(turn, timestamp, "tool.apply_patch", toolTerminalText(patchInput, output))
-		addObservation(turn, "codex.tool.apply_patch", timestamp, patchInput, output, metadata, "tool", nil)
+		metadata["tool_name"] = "apply_patch"
+		output := agenttrace.PatchOutput(payload)
+		agenttrace.AddTerminalEntry(turn, timestamp, "tool.file_change", agenttrace.ToolTerminalText(patchInput, output))
+		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange), timestamp, patchInput, output, metadata, "tool", nil)
 	case "mcp_tool_call_end":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
 			coveredCallIDs[callID] = true
 		}
-		input := StableJSON(payload["invocation"])
-		output := StableJSON(payload["result"])
-		metadata := metadataWithoutLargeFields(payload, map[string]bool{"invocation": true, "result": true, "duration": true})
-		for key, value := range MCPToolMetadata(payload) {
+		input := agenttrace.StableJSON(payload["invocation"])
+		output := agenttrace.StableJSON(payload["result"])
+		metadata := agenttrace.MetadataWithoutLargeFields(payload, map[string]bool{"invocation": true, "result": true, "duration": true})
+		for key, value := range agenttrace.MCPToolMetadata(payload) {
 			metadata[key] = value
 		}
-		addTerminalEntry(turn, timestamp, "tool.mcp", toolTerminalText(input, output))
-		addObservation(turn, "codex.tool.mcp", timestamp, input, output, metadata, "tool", payload["duration"])
+		metadata["tool_name"] = "mcp"
+		agenttrace.AddTerminalEntry(turn, timestamp, "tool.mcp", agenttrace.ToolTerminalText(input, output))
+		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP), timestamp, input, output, metadata, "tool", payload["duration"])
 	case "web_search_end":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
 			coveredCallIDs[callID] = true
 		}
-		input := StableJSON(map[string]any{"query": payload["query"], "action": payload["action"]})
-		output := StableJSON(payload["action"])
-		addTerminalEntry(turn, timestamp, "tool.web_search", toolTerminalText(input, output))
-		addObservation(turn, "codex.tool.web_search", timestamp, input, output, metadataWithoutLargeFields(payload, map[string]bool{"query": true, "action": true}), "tool", nil)
+		input := agenttrace.StableJSON(map[string]any{"query": payload["query"], "action": payload["action"]})
+		output := agenttrace.StableJSON(payload["action"])
+		metadata := agenttrace.MetadataWithoutLargeFields(payload, map[string]bool{"query": true, "action": true})
+		metadata["tool_name"] = "web_search"
+		agenttrace.AddTerminalEntry(turn, timestamp, "tool.web_search", agenttrace.ToolTerminalText(input, output))
+		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyWebSearch), timestamp, input, output, metadata, "tool", nil)
 	case "token_count":
-		info := mapValue(payload["info"])
-		usage := mapValue(info["last_token_usage"])
+		info := agenttrace.MapValue(payload["info"])
+		usage := agenttrace.MapValue(info["last_token_usage"])
 		if len(usage) == 0 {
-			usage = mapValue(info["total_token_usage"])
+			usage = agenttrace.MapValue(info["total_token_usage"])
 		}
 		if len(usage) > 0 {
 			turn.TokenUsage = parseTokenUsage(usage)
 		}
 	case "context_compacted":
-		addTerminalEntry(turn, timestamp, "system", "Context compacted")
+		agenttrace.AddTerminalEntry(turn, timestamp, "system", "Context compacted")
 	}
 }
 
-func parseResponseItem(turn *Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
-	switch stringValue(payload["type"]) {
+func parseResponseItem(turn *agenttrace.Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
+	switch agenttrace.StringValue(payload["type"]) {
 	case "message":
-		switch stringValue(payload["role"]) {
+		switch agenttrace.StringValue(payload["role"]) {
 		case "user":
-			appendUnique(&turn.UserMessages, textFromContent(payload["content"], "input_text"))
+			agenttrace.AppendUnique(&turn.UserMessages, textFromContent(payload["content"], "input_text"))
 		case "assistant":
-			if stringValue(payload["phase"]) == "final_answer" {
-				appendUnique(&turn.AssistantTexts, textFromContent(payload["content"], "output_text"))
+			if agenttrace.StringValue(payload["phase"]) == "final_answer" {
+				agenttrace.AppendUnique(&turn.AssistantTexts, textFromContent(payload["content"], "output_text"))
 				if timestamp != "" {
 					turn.EndTS = timestamp
 				}
 			}
 		}
 	case "reasoning":
-		summary := reasoningSummaryText(payload["summary"])
+		summary := agenttrace.ReasoningSummaryText(payload["summary"])
 		if summary != "" {
-			addTerminalEntry(turn, timestamp, "assistant.reasoning", summary)
-			addObservation(turn, "codex.reasoning.summary", timestamp, "", summary, map[string]any{"response_item_type": "reasoning"}, "span", nil)
+			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.reasoning", summary)
+			agenttrace.AddObservation(turn, "codex.reasoning.summary", timestamp, "", summary, map[string]any{"response_item_type": "reasoning"}, "span", nil)
 		}
 	case "function_call", "custom_tool_call", "tool_search_call":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
 			pendingCalls[callID] = payload
 		}
 	case "function_call_output", "custom_tool_call_output", "tool_search_output":
-		callID := stringValue(payload["call_id"])
+		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" && coveredCallIDs[callID] {
 			return
 		}
 		pending := pendingCalls[callID]
-		name := stringValue(pending["name"])
+		name := agenttrace.StringValue(pending["name"])
 		if name == "" {
-			name = strings.TrimSuffix(stringValue(payload["type"]), "_output")
+			name = strings.TrimSuffix(agenttrace.StringValue(payload["type"]), "_output")
 		}
-		observationName := "codex.tool." + name
-		if stringValue(payload["type"]) == "tool_search_output" {
-			observationName = "codex.tool.tool_search"
+		family := agenttrace.ToolFamilyGeneric
+		if agenttrace.StringValue(payload["type"]) == "tool_search_output" {
+			family = agenttrace.ToolFamilyToolSearch
+			name = "tool_search"
 		}
+		observationName := agenttrace.ToolObservationName(agenttrace.ProviderCodex, family)
 		inputSource := pending["arguments"]
 		if inputSource == nil {
 			inputSource = pending["input"]
@@ -248,15 +258,16 @@ func parseResponseItem(turn *Turn, payload map[string]any, timestamp string, pen
 		if outputSource == nil {
 			outputSource = payload["tools"]
 		}
-		input := StableJSON(inputSource)
-		output := StableJSON(outputSource)
-		addTerminalEntry(turn, timestamp, strings.TrimPrefix(observationName, "codex."), toolTerminalText(input, output))
-		addObservation(turn, observationName, timestamp, input, output, map[string]any{
+		input := agenttrace.StableJSON(inputSource)
+		output := agenttrace.StableJSON(outputSource)
+		agenttrace.AddTerminalEntry(turn, timestamp, strings.TrimPrefix(observationName, "codex."), agenttrace.ToolTerminalText(input, output))
+		agenttrace.AddObservation(turn, observationName, timestamp, input, output, map[string]any{
 			"call_id":            callID,
-			"response_item_type": stringValue(payload["type"]),
-			"status":             stringValue(payload["status"]),
+			"response_item_type": agenttrace.StringValue(payload["type"]),
+			"status":             agenttrace.StringValue(payload["status"]),
+			"tool_name":          name,
 		}, "tool", nil)
-		if timestamp != "" && stringValue(payload["phase"]) == "final_answer" {
+		if timestamp != "" && agenttrace.StringValue(payload["phase"]) == "final_answer" {
 			if timestamp != "" {
 				turn.EndTS = timestamp
 			}
@@ -264,22 +275,22 @@ func parseResponseItem(turn *Turn, payload map[string]any, timestamp string, pen
 	}
 }
 
-func parseTokenUsage(value map[string]any) *TokenUsage {
-	return &TokenUsage{
-		InputTokens:           intValue(value["input_tokens"]),
-		OutputTokens:          intValue(value["output_tokens"]),
-		TotalTokens:           intValue(value["total_tokens"]),
-		CachedInputTokens:     intValue(value["cached_input_tokens"]),
-		ReasoningOutputTokens: intValue(value["reasoning_output_tokens"]),
+func parseTokenUsage(value map[string]any) *agenttrace.TokenUsage {
+	return &agenttrace.TokenUsage{
+		InputTokens:           agenttrace.IntValue(value["input_tokens"]),
+		OutputTokens:          agenttrace.IntValue(value["output_tokens"]),
+		TotalTokens:           agenttrace.IntValue(value["total_tokens"]),
+		CachedInputTokens:     agenttrace.IntValue(value["cached_input_tokens"]),
+		ReasoningOutputTokens: agenttrace.IntValue(value["reasoning_output_tokens"]),
 	}
 }
 
 func textFromContent(content any, textType string) string {
 	var parts []string
-	for _, item := range sliceValue(content) {
-		entry := mapValue(item)
-		if stringValue(entry["type"]) == textType {
-			if text := stringValue(entry["text"]); text != "" {
+	for _, item := range agenttrace.SliceValue(content) {
+		entry := agenttrace.MapValue(item)
+		if agenttrace.StringValue(entry["type"]) == textType {
+			if text := agenttrace.StringValue(entry["text"]); text != "" {
 				parts = append(parts, text)
 			}
 		}

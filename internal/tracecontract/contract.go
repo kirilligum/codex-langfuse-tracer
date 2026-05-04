@@ -1,13 +1,11 @@
 package tracecontract
 
-import (
-	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
-)
+import "github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 
 type Trace struct {
 	SchemaVersion int            `json:"schema_version"`
 	Name          string         `json:"name"`
+	Provider      string         `json:"provider,omitempty"`
 	TraceID       string         `json:"trace_id,omitempty"`
 	SessionID     string         `json:"session_id,omitempty"`
 	TurnID        string         `json:"turn_id,omitempty"`
@@ -32,24 +30,26 @@ type Observation struct {
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
-func FromTurn(turn codextrace.Turn) Trace {
-	rollup := codextrace.BuildInsightRollup(turn)
+func FromTurn(turn agenttrace.Turn) Trace {
+	rollup := agenttrace.BuildInsightRollup(turn)
+	profile := turn.Profile()
 	trace := Trace{
 		SchemaVersion: 1,
-		Name:          buildinfo.TraceName,
+		Name:          profile.TraceName,
+		Provider:      profile.Provider,
 		TraceID:       turn.TraceID,
 		SessionID:     turn.SessionID,
 		TurnID:        turn.TurnID,
-		Input:         codextrace.ExportText(turn.InputText()),
-		Output:        codextrace.ExportText(turn.OutputText()),
+		Input:         agenttrace.ExportText(turn.InputText()),
+		Output:        agenttrace.ExportText(turn.OutputText()),
 		Model:         turn.Model,
 		CWD:           turn.CWD,
 		Metadata:      rollup.Metadata(),
 		Tags:          rollup.Tags(),
 		Exportable:    true,
 		Observations: []Observation{
-			{Name: "codex.agent", Type: "agent", Input: codextrace.ExportText(turn.InputText()), Output: codextrace.ExportText(turn.OutputText())},
-			{Name: "codex.transcript", Type: "generation", Input: codextrace.ExportText(turn.InputText()), Output: codextrace.ExportText(turn.OutputText())},
+			{Name: profile.AgentName, Type: "agent", Input: agenttrace.ExportText(turn.InputText()), Output: agenttrace.ExportText(turn.OutputText())},
+			{Name: profile.TranscriptName, Type: "generation", Input: agenttrace.ExportText(turn.InputText()), Output: agenttrace.ExportText(turn.OutputText())},
 		},
 	}
 	if turn.TokenUsage != nil {
@@ -60,13 +60,13 @@ func FromTurn(turn codextrace.Turn) Trace {
 	for _, observation := range turn.Observations {
 		trace.Observations = append(trace.Observations, normalizeObservation(observation))
 	}
-	if terminal := codextrace.TerminalObservation(turn); terminal != nil {
+	if terminal := agenttrace.TerminalObservation(turn); terminal != nil {
 		trace.Observations = append(trace.Observations, normalizeObservation(*terminal))
 	}
 	return trace
 }
 
-func normalizeObservation(observation codextrace.Observation) Observation {
+func normalizeObservation(observation agenttrace.Observation) Observation {
 	metadata := map[string]any(nil)
 	if len(observation.Metadata) > 0 {
 		metadata = observation.Metadata
@@ -74,8 +74,8 @@ func normalizeObservation(observation codextrace.Observation) Observation {
 	return Observation{
 		Name:     observation.Name,
 		Type:     observation.Type,
-		Input:    codextrace.ExportText(observation.Input),
-		Output:   codextrace.ExportText(observation.Output),
+		Input:    agenttrace.ExportText(observation.Input),
+		Output:   agenttrace.ExportText(observation.Output),
 		Metadata: metadata,
 	}
 }

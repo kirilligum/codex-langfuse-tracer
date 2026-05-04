@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"bytes"
@@ -19,31 +19,31 @@ func StableJSON(value any) string {
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
-		return stringValue(value)
+		return StringValue(value)
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func FormatCommand(command any) string {
-	parts := sliceValue(command)
+	parts := SliceValue(command)
 	if len(parts) > 0 {
-		if len(parts) >= 3 && stringValue(parts[len(parts)-2]) == "-lc" {
-			return stringValue(parts[len(parts)-1])
+		if len(parts) >= 3 && StringValue(parts[len(parts)-2]) == "-lc" {
+			return StringValue(parts[len(parts)-1])
 		}
 		rendered := make([]string, 0, len(parts))
 		for _, part := range parts {
-			rendered = append(rendered, stringValue(part))
+			rendered = append(rendered, StringValue(part))
 		}
 		return strings.Join(rendered, " ")
 	}
 	return StableJSON(command)
 }
 
-func commandOutput(payload map[string]any) string {
-	if value := payload["formatted_output"]; stringValue(value) != "" {
+func CommandOutput(payload map[string]any) string {
+	if value := payload["formatted_output"]; StringValue(value) != "" {
 		return "## output\n" + StableJSON(value)
 	}
-	if value := payload["aggregated_output"]; stringValue(value) != "" {
+	if value := payload["aggregated_output"]; StringValue(value) != "" {
 		return "## output\n" + StableJSON(value)
 	}
 	var parts []string
@@ -54,53 +54,53 @@ func commandOutput(payload map[string]any) string {
 		{"stdout", "stdout"},
 		{"stderr", "stderr"},
 	} {
-		if value := payload[item.key]; stringValue(value) != "" {
+		if value := payload[item.key]; StringValue(value) != "" {
 			parts = append(parts, "## "+item.label+"\n"+StableJSON(value))
 		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func commandTerminalText(payload map[string]any) string {
+func CommandTerminalText(payload map[string]any) string {
 	parts := []string{"Command:\n" + FormatCommand(payload["command"])}
-	if output := commandOutput(payload); output != "" {
+	if output := CommandOutput(payload); output != "" {
 		parts = append(parts, "Output:\n"+output)
 	}
-	status := stringValue(payload["status"])
+	status := StringValue(payload["status"])
 	exitCode := payload["exit_code"]
 	if status != "" || exitCode != nil {
 		if status == "" {
 			status = "unknown"
 		}
-		parts = append(parts, "Status: "+status+" exit_code="+stringValue(exitCode))
+		parts = append(parts, "Status: "+status+" exit_code="+StringValue(exitCode))
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func patchOutput(payload map[string]any) string {
+func PatchOutput(payload map[string]any) string {
 	var parts []string
-	if stdout := stringValue(payload["stdout"]); stdout != "" {
+	if stdout := StringValue(payload["stdout"]); stdout != "" {
 		parts = append(parts, "## stdout\n"+stdout)
 	}
-	if stderr := stringValue(payload["stderr"]); stderr != "" {
+	if stderr := StringValue(payload["stderr"]); stderr != "" {
 		parts = append(parts, "## stderr\n"+stderr)
 	}
-	for path, change := range mapValue(payload["changes"]) {
-		entry := mapValue(change)
-		parts = append(parts, "## "+path+" ("+firstString(entry["type"], "change")+")")
-		if movePath := stringValue(entry["move_path"]); movePath != "" {
+	for path, change := range MapValue(payload["changes"]) {
+		entry := MapValue(change)
+		parts = append(parts, "## "+path+" ("+StringOr(entry["type"], "change")+")")
+		if movePath := StringValue(entry["move_path"]); movePath != "" {
 			parts = append(parts, "moved to: "+movePath)
 		}
-		if diff := stringValue(entry["unified_diff"]); diff != "" {
+		if diff := StringValue(entry["unified_diff"]); diff != "" {
 			parts = append(parts, "```diff\n"+diff+"\n```")
-		} else if content := stringValue(entry["content"]); content != "" {
+		} else if content := StringValue(entry["content"]); content != "" {
 			parts = append(parts, "```text\n"+content+"\n```")
 		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func toolTerminalText(input, output string) string {
+func ToolTerminalText(input, output string) string {
 	var parts []string
 	if input != "" {
 		parts = append(parts, "Input:\n"+input)
@@ -111,20 +111,20 @@ func toolTerminalText(input, output string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func reasoningSummaryText(summary any) string {
-	if text := strings.TrimSpace(stringValue(summary)); text != "" && text != "[]" {
+func ReasoningSummaryText(summary any) string {
+	if text := strings.TrimSpace(StringValue(summary)); text != "" && text != "[]" {
 		if _, ok := summary.(string); ok {
 			return text
 		}
 	}
 	var parts []string
-	for _, item := range sliceValue(summary) {
+	for _, item := range SliceValue(summary) {
 		switch typed := item.(type) {
 		case string:
 			parts = append(parts, typed)
 		default:
-			entry := mapValue(typed)
-			if text := firstString(entry["text"], stringValue(entry["summary"])); text != "" {
+			entry := MapValue(typed)
+			if text := StringOr(entry["text"], StringValue(entry["summary"])); text != "" {
 				parts = append(parts, StableJSON(text))
 			}
 		}
@@ -141,8 +141,8 @@ func FileChangeMetadata(changes map[string]any) map[string]any {
 	fileChangeTypes := map[string]string{}
 
 	for path, raw := range changes {
-		change := mapValue(raw)
-		changeType := firstString(change["type"], "change")
+		change := MapValue(raw)
+		changeType := StringOr(change["type"], "change")
 		changedFiles = append(changedFiles, path)
 		fileChangeTypes[path] = changeType
 		switch changeType {
@@ -153,7 +153,7 @@ func FileChangeMetadata(changes map[string]any) map[string]any {
 		default:
 			modifiedFiles = append(modifiedFiles, path)
 		}
-		if movePath := stringValue(change["move_path"]); movePath != "" {
+		if movePath := StringValue(change["move_path"]); movePath != "" {
 			movedFiles = append(movedFiles, path+" -> "+movePath)
 		}
 	}
@@ -173,7 +173,7 @@ func FileChangeMetadata(changes map[string]any) map[string]any {
 	}
 }
 
-func metadataWithoutLargeFields(payload map[string]any, exclude map[string]bool) map[string]any {
+func MetadataWithoutLargeFields(payload map[string]any, exclude map[string]bool) map[string]any {
 	metadata := map[string]any{}
 	for key, value := range payload {
 		if exclude[key] {

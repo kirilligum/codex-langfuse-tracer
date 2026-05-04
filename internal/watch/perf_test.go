@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
 )
 
 // TEST-019
@@ -39,10 +40,10 @@ func TestEvalWatchExportLatency(t *testing.T) {
 		Root:      root,
 		StatePath: statePath,
 		Now:       now,
-		Export: func(context.Context, codextrace.Turn) (int, error) {
+		Export: func(context.Context, agenttrace.Turn) (int, error) {
 			return 200, nil
 		},
-	}, State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()})
+	}, exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()})
 	if err != nil {
 		t.Fatal(err)
 	}

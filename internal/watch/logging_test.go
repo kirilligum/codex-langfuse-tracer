@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
 )
 
 // TEST-017
@@ -20,7 +21,7 @@ func TestWatchLogs(t *testing.T) {
 	if err := os.Chtimes(rolloutPath, now.Add(-30*time.Second), now.Add(-30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	state := State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state := exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
 
 	var stdout, stderr bytes.Buffer
 	_, _, err := ScanOnce(context.Background(), ScanOptions{
@@ -29,7 +30,7 @@ func TestWatchLogs(t *testing.T) {
 		Now:       now,
 		Stdout:    &stdout,
 		Stderr:    &stderr,
-		Export: func(context.Context, codextrace.Turn) (int, error) {
+		Export: func(context.Context, agenttrace.Turn) (int, error) {
 			return 201, nil
 		},
 	}, state)
@@ -40,7 +41,7 @@ func TestWatchLogs(t *testing.T) {
 		t.Fatalf("success log missing: %s", stdout.String())
 	}
 
-	state = State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state = exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
 	stdout.Reset()
 	stderr.Reset()
 	_, _, err = ScanOnce(context.Background(), ScanOptions{
@@ -49,7 +50,7 @@ func TestWatchLogs(t *testing.T) {
 		Now:       now,
 		Stdout:    &stdout,
 		Stderr:    &stderr,
-		Export: func(context.Context, codextrace.Turn) (int, error) {
+		Export: func(context.Context, agenttrace.Turn) (int, error) {
 			return 0, errors.New("export failed")
 		},
 	}, state)
