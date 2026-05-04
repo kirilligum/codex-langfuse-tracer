@@ -9,11 +9,17 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/claudehook"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/watch"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -44,7 +50,7 @@ func TestFullAcceptance(t *testing.T) {
 	}
 	commandMetadata := map[string]any(nil)
 	for _, observation := range contract.Observations {
-		if observation.Name == "codex.tool.exec_command" {
+		if observation.Name == agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand) {
 			commandMetadata = observation.Metadata
 			break
 		}
@@ -89,17 +95,17 @@ func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 		t.Fatalf("token usage = %#v", complete.TokenUsage)
 	}
 	for key, want := range map[string]int{
-		"changed_file_count":      1,
-		"other_command_count":     1,
-		"exec_command_tool_count": 1,
-		"apply_patch_tool_count":  1,
-		"web_search_tool_count":   1,
-		"mcp_tool_count":          1,
-		"tool_search_tool_count":  1,
+		"changed_file_count":     1,
+		"other_command_count":    1,
+		"command_tool_count":     1,
+		"file_change_tool_count": 1,
+		"web_search_tool_count":  1,
+		"mcp_tool_count":         1,
+		"tool_search_tool_count": 1,
 	} {
 		requireMetadataInt(t, complete.Metadata, key, want)
 	}
-	if complete.Metadata["navigation"] != "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run" {
+	if complete.Metadata["navigation"] != "command:other files:changed tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run" {
 		t.Fatalf("navigation = %#v", complete.Metadata["navigation"])
 	}
 	requireNoForbiddenContractKeys(t, complete.Metadata)
@@ -150,7 +156,7 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 	}
 
 	spans := emitAcceptanceSpans(t, completeTurn)
-	rawTags, err := json.Marshal(codextrace.BuildInsightRollup(completeTurn).Tags())
+	rawTags, err := json.Marshal(agenttrace.BuildInsightRollup(completeTurn).Tags())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,18 +190,133 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 	}
 }
 
+// TEST-511
+func TestFullClaudeAcceptance(t *testing.T) {
+	t.Parallel()
+
+	turn := claudeTurnFromFixture(t, "bash-tool.jsonl")
+	contract := tracecontract.FromTurn(turn)
+	if contract.Provider != agenttrace.ProviderClaude || contract.Name != "claude.turn.transcript" {
+		t.Fatalf("bad Claude contract identity: %+v", contract)
+	}
+	if contract.Input != "Run printf hello." || contract.Output != "hello" {
+		t.Fatalf("bad Claude IO: %+v", contract)
+	}
+	foundCommand := false
+	for _, observation := range contract.Observations {
+		if observation.Name == agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand) {
+			foundCommand = true
+			if observation.Metadata["command_kind"] != "other" || observation.Metadata["failure_type"] != "none" {
+				t.Fatalf("bad command metadata: %#v", observation.Metadata)
+			}
+		}
+		if strings.HasPrefix(observation.Name, "codex.") {
+			t.Fatalf("Claude contract has Codex observation: %+v", observation)
+		}
+	}
+	if !foundCommand {
+		t.Fatalf("missing Claude command observation: %#v", contract.Observations)
+	}
+	spans := emitAcceptanceSpans(t, turn)
+	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), "claude.terminal"} {
+		if spans.byName(name).name == "" {
+			t.Fatalf("missing Claude span %s", name)
+		}
+	}
+	if spans.byName("codex.agent").name != "" {
+		t.Fatal("Claude export emitted codex.agent")
+	}
+
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state.json")
+	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
+	copyAcceptanceFile(t, filepath.Join("..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
+	hookJSON := `{"session_id":"claude-no-tools","transcript_path":"` + transcriptPath + `","cwd":"` + root + `","hook_event_name":"Stop"}`
+	if enqueued, err := claudehook.Handle(strings.NewReader(hookJSON), statePath, fixedAcceptanceTime()); err != nil || !enqueued {
+		t.Fatalf("Claude hook enqueued=%v err=%v", enqueued, err)
+	}
+	state, err := exportstate.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load hook state: %v", err)
+	}
+	exported := []agenttrace.Turn{}
+	stateValue := exportstate.State{}
+	if state != nil {
+		stateValue = *state
+	}
+	stateValue, count, err := watch.ScanOnce(context.Background(), watch.ScanOptions{
+		Root:      root,
+		StatePath: statePath,
+		Now:       fixedAcceptanceTime().Add(time.Minute),
+		Quiet:     true,
+		Export: func(_ context.Context, turn agenttrace.Turn) (int, error) {
+			exported = append(exported, turn)
+			return 201, nil
+		},
+	}, stateValue)
+	if err != nil {
+		t.Fatalf("ScanOnce Claude queue: %v", err)
+	}
+	if count != 1 || len(exported) != 1 || exported[0].Provider != agenttrace.ProviderClaude {
+		t.Fatalf("queued export count=%d turns=%+v", count, exported)
+	}
+	if len(stateValue.Queue) != 0 || !stateValue.HasProcessed(exported[0].TraceID) {
+		t.Fatalf("queue state after export = %+v", stateValue)
+	}
+}
+
+// EVAL-009
+func TestEvalClaudeSupportAcceptance(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []string{"no-tools.jsonl", "bash-tool.jsonl", "generic-tool.jsonl"} {
+		turn := claudeTurnFromFixture(t, fixture)
+		if turn.Provider != agenttrace.ProviderClaude || turn.TraceID == "" || turn.InputText() == "" || turn.OutputText() == "" {
+			t.Fatalf("%s incomplete acceptance turn: %+v", fixture, turn)
+		}
+	}
+}
+
 func contractFromFixture(t *testing.T, name string) tracecontract.Trace {
 	t.Helper()
 	return tracecontract.FromTurn(turnFromFixture(t, name))
 }
 
-func turnFromFixture(t *testing.T, name string) codextrace.Turn {
+func claudeTurnFromFixture(t *testing.T, name string) agenttrace.Turn {
 	t.Helper()
-	turns, err := codextrace.ParseTurns(filepath.Join("..", "testdata", "rollouts", name+".jsonl"))
+	turns, err := providers.ParseTurns(agenttrace.ProviderClaude, filepath.Join("..", "testdata", "sources", "claude", name))
 	if err != nil {
 		t.Fatalf("ParseTurns(%s): %v", name, err)
 	}
-	exportable := codextrace.ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
+	if len(exportable) != 1 {
+		t.Fatalf("%s exportable turns = %d", name, len(exportable))
+	}
+	return exportable[0]
+}
+
+func copyAcceptanceFile(t *testing.T, src, dst string) {
+	t.Helper()
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fixedAcceptanceTime() time.Time {
+	return time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+}
+
+func turnFromFixture(t *testing.T, name string) agenttrace.Turn {
+	t.Helper()
+	turns, err := codextrace.ParseTurns(filepath.Join("..", "testdata", "sources", "codex", name+".jsonl"))
+	if err != nil {
+		t.Fatalf("ParseTurns(%s): %v", name, err)
+	}
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("%s exportable turns = %d", name, len(exportable))
 	}
@@ -225,7 +346,7 @@ func (e *acceptanceExporter) Shutdown(context.Context) error {
 	return nil
 }
 
-func emitAcceptanceSpans(t *testing.T, turn codextrace.Turn) acceptanceSpans {
+func emitAcceptanceSpans(t *testing.T, turn agenttrace.Turn) acceptanceSpans {
 	t.Helper()
 	exporter := &acceptanceExporter{}
 	if err := langfuse.EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {

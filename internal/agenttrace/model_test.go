@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"reflect"
@@ -48,6 +48,23 @@ func TestTokenUsageLangfuseUsageDetails(t *testing.T) {
 			},
 		},
 		{
+			name: "claude cache read and creation are separate priced buckets",
+			usage: TokenUsage{
+				InputTokens:              22,
+				OutputTokens:             3,
+				TotalTokens:              25,
+				CacheReadInputTokens:     7,
+				CacheCreationInputTokens: 5,
+			},
+			want: map[string]int{
+				"input":                       10,
+				"cache_read_input_tokens":     7,
+				"cache_creation_input_tokens": 5,
+				"output":                      3,
+				"total":                       25,
+			},
+		},
+		{
 			name: "detail buckets clamp parent buckets at zero",
 			usage: TokenUsage{
 				InputTokens:           10,
@@ -74,5 +91,28 @@ func TestTokenUsageLangfuseUsageDetails(t *testing.T) {
 				t.Fatalf("LangfuseUsageDetails() = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+// TEST-529
+func TestTokenUsageLangfuseDetailsPreserveCacheCategories(t *testing.T) {
+	t.Parallel()
+
+	usage := TokenUsage{
+		InputTokens:              22,
+		OutputTokens:             3,
+		TotalTokens:              25,
+		CacheReadInputTokens:     7,
+		CacheCreationInputTokens: 5,
+	}
+	want := map[string]int{
+		"input":                       10,
+		"cache_read_input_tokens":     7,
+		"cache_creation_input_tokens": 5,
+		"output":                      3,
+		"total":                       25,
+	}
+	if got := usage.LangfuseUsageDetails(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("LangfuseUsageDetails() = %#v, want %#v", got, want)
 	}
 }

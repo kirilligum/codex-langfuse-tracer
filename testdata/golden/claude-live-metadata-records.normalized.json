@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "d72d958865e91ae4616f1d78c6267699",
+  "session_id": "claude-live-metadata",
+  "turn_id": "claude-live-user",
+  "input": "Reply exactly: clt-live-fixture",
+  "output": "clt-live-fixture",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-live-metadata",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 0,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "cache_creation_input_tokens": 5,
+    "cache_read_input_tokens": 7,
+    "input": 10,
+    "output": 3,
+    "total": 25
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Reply exactly: clt-live-fixture",
+      "output": "clt-live-fixture"
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Reply exactly: clt-live-fixture",
+      "output": "clt-live-fixture"
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T19:47:21.579Z user\nReply exactly: clt-live-fixture\n\n## 2026-05-04T19:47:22.662Z assistant.final\nclt-live-fixture",
+      "metadata": {
+        "event_count": 2,
+        "turn_id": "claude-live-user"
+      }
+    }
+  ]
+}

@@ -6,9 +6,7 @@ codex_home="${CODEX_HOME:-$HOME/.codex}"
 systemd_user_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 exporter_dst="$codex_home/bin/codex-langfuse-exporter"
-old_python_dst="$codex_home/bin/export_codex_session_to_langfuse.py"
 service_src="$repo_dir/systemd/codex-langfuse-watch.service"
-old_wrapper_dst="$codex_home/bin/codex"
 service_dst="$systemd_user_dir/codex-langfuse-watch.service"
 
 if [ ! -d "$repo_dir/cmd/codex-langfuse-exporter" ]; then
@@ -26,8 +24,6 @@ mkdir -p "$systemd_user_dir"
 (cd "$repo_dir" && go build -o "$exporter_dst" ./cmd/codex-langfuse-exporter)
 "$exporter_dst" --sync-model-pricing --quiet
 install -m 644 "$service_src" "$service_dst"
-rm -f "$old_wrapper_dst"
-rm -f "$old_python_dst"
 
 systemctl --user daemon-reload
 systemctl --user enable codex-langfuse-watch.service

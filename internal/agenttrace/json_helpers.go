@@ -1,8 +1,8 @@
-package codextrace
+package agenttrace
 
 import "fmt"
 
-func stringValue(value any) string {
+func StringValue(value any) string {
 	switch typed := value.(type) {
 	case string:
 		return typed
@@ -15,28 +15,28 @@ func stringValue(value any) string {
 	}
 }
 
-func firstString(value any, fallback string) string {
-	if text := stringValue(value); text != "" {
+func StringOr(value any, defaultValue string) string {
+	if text := StringValue(value); text != "" {
 		return text
 	}
-	return fallback
+	return defaultValue
 }
 
-func mapValue(value any) map[string]any {
+func MapValue(value any) map[string]any {
 	if typed, ok := value.(map[string]any); ok {
 		return typed
 	}
 	return map[string]any{}
 }
 
-func sliceValue(value any) []any {
+func SliceValue(value any) []any {
 	if typed, ok := value.([]any); ok {
 		return typed
 	}
 	return nil
 }
 
-func intValue(value any) int {
+func IntValue(value any) int {
 	switch typed := value.(type) {
 	case int:
 		return typed

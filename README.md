@@ -1,6 +1,6 @@
 # Codex Langfuse Tracer
 
-Export completed Codex CLI turns to Langfuse.
+Export completed Codex CLI and Claude Code turns to Langfuse.
 
 This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends clean Langfuse traces with prompts, final answers, visible terminal activity, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
 
@@ -9,13 +9,15 @@ It is intentionally not a wrapper around `codex`. Codex runs normally; a `system
 ## Status
 
 - Tested with Codex CLI `0.128.0`.
+- Claude Code support is implemented for explicit transcript export and Stop hook queueing.
 - Built with Go `1.26.0`.
 - Uses Codex rollout JSONL files under `~/.codex/sessions/`.
+- Uses explicit Claude Code transcript JSONL paths supplied by `--provider claude --path` or Claude Code hook input.
 - Uses Langfuse OTLP ingestion at `/api/public/otel/v1/traces`.
 - Supports Linux user services through `systemd --user`.
 - Licensed under Apache-2.0.
 
-Codex rollout JSONL is not a stable public API. This exporter is production-ready for workstation use, but it is still best-effort around Codex file-format drift.
+Codex rollout JSONL and Claude Code transcript JSONL are not stable public APIs. Codex and Claude export are production-ready for workstation use after the local live checks in `TESTING.md` pass. Rerun `CHECK-001` after Claude Code upgrades that change transcript shape.
 
 ## Why Use It
 
@@ -115,6 +117,32 @@ Expected trace shape:
 - visible terminal stream: `codex.terminal`
 - tool calls: `codex.tool.*`
 
+Claude Code support can be checked with an explicit sanitized transcript path:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>
+```
+
+Claude Code hooks can call the same binary in hook mode. The hook queues work only; the existing watch service drains the queued transcript and performs the Langfuse export.
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.codex/bin/codex-langfuse-exporter --claude-hook --quiet"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## Requirements
 
 - Linux with `systemd --user`
@@ -137,6 +165,14 @@ There is one automatic export path:
 
 The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
 
+Claude Code support uses one automatic trigger path:
+
+1. Claude Code sends a Stop hook payload containing `session_id`, `transcript_path`, `cwd`, and `hook_event_name`.
+2. `codex-langfuse-exporter --claude-hook` validates the hook JSON and appends one queue request to `~/.codex/langfuse-export-state.json`.
+3. `codex-langfuse-watch.service` drains the queue, parses the explicit transcript path, exports completed Claude turns, and records processed trace IDs in the same state file.
+
+There is no Claude directory discovery in this release. The exporter does not edit Claude settings; add the hook command yourself when you want automatic Claude exports.
+
 Native Codex OTEL is intentionally not part of this setup. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for reviewing prompts, answers, terminal output, tool calls, token usage, or file changes.
 
 If your `~/.codex/config.toml` has a native `[otel]` section and Langfuse shows noisy spans such as `handle_responses`, `receiving`, `socket reader`, or `serve_inner`, remove that section so this exporter is the single tracing path.
@@ -150,15 +186,28 @@ The exporter sends these observations when Codex records the data locally:
 - `codex.terminal`: ordered visible CLI event stream for the turn.
 - `codex.message.commentary`: assistant progress updates shown in the CLI.
 - `codex.reasoning.summary`: visible reasoning summaries when Codex records a non-empty summary.
-- `codex.tool.exec_command`: shell command input and terminal output.
-- `codex.tool.apply_patch`: patch input, changed files, and unified diffs.
+- `codex.tool.command`: shell command input and terminal output.
+- `codex.tool.file_change`: patch input, changed files, and unified diffs.
 - `codex.tool.mcp`: MCP invocation and result.
 - `codex.tool.web_search`: web search query/action metadata.
 - `codex.tool.tool_search`: deferred-tool discovery calls and results.
 
 Tool observations use Langfuse's `tool` observation type. The transcript uses `generation`.
 
-`codex.tool.apply_patch` metadata includes:
+Claude Code support emits:
+
+- trace name: `claude.turn.transcript`
+- `claude.agent`: root agent observation with trace-table input and output.
+- `claude.transcript`: generation observation with the prompt, final answer, model name, and token usage when Claude records it.
+- `claude.terminal`: ordered visible transcript stream for the turn.
+- `claude.tool.command`: Bash tool input, output, status, and command metadata.
+- `claude.tool.file_change`: file-writing tool metadata when Claude records structured path fields.
+- `claude.tool.mcp`: MCP invocation and result when Claude records structured MCP tool names.
+- `claude.tool.generic`: bounded metadata and redacted input/output for other Claude tools.
+
+Claude thinking blocks are omitted, including redacted or encrypted thinking-like blocks. Visible assistant text, final answers, tool input, tool output, terminal stream, and metadata strings use the shared redaction and truncation path.
+
+`<provider>.tool.file_change` metadata includes:
 
 - `changed_files`
 - `added_files`
@@ -168,12 +217,12 @@ Tool observations use Langfuse's `tool` observation type. The transcript uses `g
 - `file_change_types`
 - `changed_file_count`
 
-The root trace/`codex.agent` carries compact `codex_insight` metadata for table scanning:
+The root trace carries compact provider insight metadata for table scanning. Codex writes `codex_insight`; Claude writes `claude_insight`.
 
 - `tool_count`
 - `command_count`
 - `failed_command_count`
-- `patch_count`
+- `file_change_tool_count`
 - `changed_file_count`
 - `changed_extensions`
 - `touched_test_files`
@@ -185,11 +234,13 @@ The root trace/`codex.agent` carries compact `codex_insight` metadata for table 
 - `<kind>_command_count` for each command kind
 - `<tool_family>_tool_count` for each tool family
 
-`verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `codex.tool.apply_patch`; root metadata only carries compact file-impact summaries.
+`verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `<provider>.tool.file_change`; root metadata only carries compact file-impact summaries.
 
-Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `codex_insight.navigation` is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
+Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 
-Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on `codex.transcript`; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
+Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on provider transcript observations; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
+
+Langfuse calculates cost. The built-in pricing sync creates source-backed model definitions for supported Codex/OpenAI models and Claude Haiku 4.5. Claude Code subscription billing is separate from Anthropic API token pricing; these definitions are for Langfuse trace cost columns when Claude records compatible model and usage details.
 
 `install.sh` runs `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` before restarting `codex-langfuse-watch.service`. The same setup can be run directly:
 
@@ -197,9 +248,9 @@ Cost tracking uses Langfuse's model and usage handling. The exporter sends `lang
 ~/.codex/bin/codex-langfuse-exporter --sync-model-pricing
 ```
 
-The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. Usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; cached input and reasoning output are subtracted from the parent input/output buckets to avoid double counting.
+The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. It covers `claude-haiku-4-5-20251001` using Claude Haiku 4.5 pricing from https://platform.claude.com/docs/en/about-claude/pricing on 2026-05-04. OpenAI/Codex usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; Claude usage keys are `input`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output`, and `total`. Child token buckets are subtracted from parent input/output buckets to avoid double counting.
 
-When OpenAI pricing changes or Codex emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
+When provider pricing changes or a supported coding agent emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
 
 Langfuse calculates cost during ingestion. Existing rows are not backfilled automatically; use an explicit re-export for old sessions after model pricing is synced:
 
@@ -207,7 +258,7 @@ Langfuse calculates cost during ingestion. Existing rows are not backfilled auto
 ~/.codex/bin/codex-langfuse-exporter --session-id <session-id> --no-verify
 ```
 
-`codex.tool.exec_command` metadata includes:
+`<provider>.tool.command` metadata includes:
 
 - `command_kind`
 - `status`
@@ -217,14 +268,14 @@ Langfuse calculates cost during ingestion. Existing rows are not backfilled auto
 
 `command_kind` uses a fixed enum: `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
 
-`codex.tool.mcp` metadata includes:
+`<provider>.tool.mcp` metadata includes:
 
 - `mcp_server`
 - `mcp_tool`
 
-MCP metadata is derived only from observed `mcp_tool_call_end` events. Configured but unused MCP servers are not exported as usage. Exact MCP tools such as `issues/list` stay in observation metadata and are not trace tags.
+MCP metadata is derived only from observed structured MCP events. Configured but unused MCP servers are not exported as usage. Exact MCP tools such as `issues/list` stay in observation metadata and are not trace tags.
 
-Trace tags are emitted through `langfuse.trace.tags`. The tag contract is `codex_insight.navigation values plus observed mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
+Trace tags are emitted through `langfuse.trace.tags`. The tag contract is the active provider's insight navigation values plus observed `mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:command`, `tool:file_change`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
 
 ## Filtering
 
@@ -241,16 +292,16 @@ Trace tags are the primary reusable trace filters:
 
 Common tag filters include `command:search`, `command:read`, `command:network`, `command:install`, `tool:web_search`, and `verification:failed`.
 
-Use `mcp_server` and `mcp_tool` on `codex.tool.mcp` observations when you need exact MCP call details.
+Use `mcp_server` and `mcp_tool` on `<provider>.tool.mcp` observations when you need exact MCP call details.
 
 Observation filters use observation metadata:
 
-- `Observations: command search`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals search`
-- `Observations: command read`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals read`
-- `Observations: command network`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals network`
-- `Observations: command install`: `Name equals codex.tool.exec_command` and `Metadata command_kind equals install`
-- `Observations: failed commands`: `Name equals codex.tool.exec_command` and `Metadata failure_type equals nonzero_exit`
-- `Observations: apply patches`: `Name equals codex.tool.apply_patch`
+- `Observations: command search`: `Name equals codex.tool.command` and `Metadata command_kind equals search`
+- `Observations: command read`: `Name equals codex.tool.command` and `Metadata command_kind equals read`
+- `Observations: command network`: `Name equals codex.tool.command` and `Metadata command_kind equals network`
+- `Observations: command install`: `Name equals codex.tool.command` and `Metadata command_kind equals install`
+- `Observations: failed commands`: `Name equals codex.tool.command` and `Metadata failure_type equals nonzero_exit`
+- `Observations: file changes`: `Name equals codex.tool.file_change`
 - `Observations: web search`: `Name equals codex.tool.web_search`
 
 After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse rows are not automatically backfilled; use an explicit re-export command when old rows need the new fields.
@@ -355,11 +406,32 @@ The repo uses a manifest-driven contract corpus:
 
 ```text
 testdata/manifest.json
-testdata/rollouts/*.jsonl
+testdata/sources/<provider>/*.jsonl
 testdata/golden/*.normalized.json
 ```
 
 Keep that as the single behavioral contract. Do not add a second fixture registry.
+
+### Adding A Coding Agent
+
+This exporter is provider-neutral after parsing. Codex, Claude Code, and future coding agents such as Gemini CLI, OpenCode, Goose, or another local agent must converge on the same internal contract:
+
+```text
+source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitTurn
+```
+
+Add a new coding agent by extending the existing path:
+
+1. Add a parser package named `internal/<provider>trace` that reads that agent's local transcript or log format and returns `[]agenttrace.Turn`.
+2. Keep provider-specific logic in that parser only. Shared redaction, terminal assembly, token usage, trace IDs, insight rollups, trace tags, and Langfuse projection stay in `internal/agenttrace`, `internal/tracecontract`, and `internal/langfuse`.
+3. Add the provider constant in `internal/agenttrace/model.go` and profile names in `internal/agenttrace/profile.go`, including trace name, observation names, metadata prefix, and insight metadata key.
+4. Register the parser once in `internal/providers/providers.go`. `cmd/codex-langfuse-exporter`, `internal/watch`, and contract tests must call the provider registry instead of importing the provider parser directly.
+5. Add sanitized fixtures under `testdata/sources/<provider>/*.jsonl`, add entries to `testdata/manifest.json`, and add normalized expectations under `testdata/golden`.
+6. Run `go test ./test -run TestGoldenTraceContract -count=1` so the new provider is held to the same normalized Langfuse contract as Codex and Claude.
+7. If the provider has a stable completion hook, add a small hook package that validates the hook payload and enqueues `exportstate.QueueRequest`. The hook process must not load Langfuse config or export directly. `--watch` remains the only automatic exporter.
+8. If the provider does not have a stable hook or session discovery contract, support explicit path export first: `codex-langfuse-exporter --provider <provider> --path <transcript>`.
+
+Do not add provider wrapper execution, a second fixture manifest, a second Langfuse projection, direct hook export, transcript directory polling, compatibility shims, or placeholder providers without real fixtures. New agents should make the shared tests broader, not create parallel Codex-shaped and provider-shaped test suites.
 
 ## Remove
 

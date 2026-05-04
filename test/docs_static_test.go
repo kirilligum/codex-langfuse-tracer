@@ -44,7 +44,7 @@ func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 		"codex.agent",
 		"codex.transcript",
 		"codex.terminal",
-		"codex.tool.apply_patch",
+		"codex.tool.file_change",
 		"systemd --user",
 		"go test ./...",
 	} {
@@ -91,12 +91,15 @@ func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	for _, required := range []string{
 		"codex_insight.navigation",
+		"claude_insight.navigation",
 		"files:read_only",
 		"files:changed",
 		"command:search",
 		"command:read",
 		"command:network",
 		"command:install",
+		"tool:command",
+		"tool:file_change",
 		"tool:web_search",
 		"verification:failed",
 		"langfuse.observation.model.name",
@@ -132,7 +135,7 @@ func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"TestInsightCountMetadataSingleRepresentation",
+		"go test ./internal/agenttrace -run TestInsightCountMetadataSingleRepresentation -count=1",
 		"TestGoldenLangfuseSingleRepresentation",
 		"TestCountMetadataExportedOnAgent",
 		"TestDocsNavigationFacetsAndFilters",
@@ -152,10 +155,11 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 	installScript := readRepoDoc(t, "install.sh")
 	for _, required := range []string{
 		"langfuse.trace.tags",
-		"codex_insight.navigation values plus observed mcp:<server>",
+		"active provider's insight navigation values plus observed `mcp:<server>` values",
 		"mcp_server",
 		"mcp_tool",
 		"codex.tool.mcp",
+		"claude.tool.mcp",
 		"issues/list",
 		"future watcher exports",
 		"explicit re-export",
@@ -195,10 +199,15 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 		"gpt-5.4",
 		"gpt-5.4-mini",
 		"gpt-5.3-codex-spark",
+		"claude-haiku-4-5-20251001",
 		"https://developers.openai.com/api/docs/models/gpt-5.3-codex",
+		"https://platform.claude.com/docs/en/about-claude/pricing",
+		"2026-05-04",
 		"input_cached_tokens",
 		"output_reasoning_tokens",
-		"When OpenAI pricing changes",
+		"cache_creation_input_tokens",
+		"cache_read_input_tokens",
+		"When provider pricing changes",
 		"internal/langfuse/models.go",
 		"Do not add fallback local cost multiplication",
 		"install.sh",
@@ -207,6 +216,156 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
+		}
+	}
+}
+
+// TEST-514
+func TestDocsCodingAgentIntegrationGuide(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	for _, required := range []string{
+		"### Adding A Coding Agent",
+		"Gemini CLI",
+		"OpenCode",
+		"Goose",
+		"source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitTurn",
+		"internal/providers/providers.go",
+		"testdata/sources/<provider>/*.jsonl",
+		"testdata/manifest.json",
+		"go test ./test -run TestGoldenTraceContract -count=1",
+		"exportstate.QueueRequest",
+		"`--watch` remains the only automatic exporter",
+		"Do not add provider wrapper execution",
+		"placeholder providers without real fixtures",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing coding-agent integration text %q", required)
+		}
+	}
+	for _, required := range []string{
+		"go test ./internal/providers -count=1",
+		"go test ./test -run TestProviderParserDispatchHasOneOwner -count=1",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing provider integration command %q", required)
+		}
+	}
+}
+
+// TEST-508
+func TestDocsClaudeSupportContract(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	agents := readRepoDoc(t, "AGENTS.md")
+	for _, required := range []string{
+		"Claude Code support",
+		"--provider claude --path",
+		"--claude-hook",
+		"claude.turn.transcript",
+		"claude.agent",
+		"claude.transcript",
+		"claude.terminal",
+		"claude.tool.command",
+		"claude.tool.file_change",
+		"claude.tool.mcp",
+		"claude.tool.generic",
+		"Claude Code subscription billing is separate from Anthropic API token pricing",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"go test ./internal/claudetrace -count=1",
+		"go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'TestClaudeHookEnqueuesStopOnly|TestExportStateQueueDedupe|TestWatchDrainsClaudeQueue|TestWatchReloadsClaudeQueueFromHookState' -count=1",
+		"go test ./cmd/codex-langfuse-exporter -run 'TestCLIProviderSelection|TestManualProviderExportCLIIntegration' -count=1",
+		"CHECK-001",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"Do not add Claude polling",
+		"Keep Claude pricing definitions source-backed",
+		"do not add local cost math",
+		"Do not mutate Claude settings automatically",
+	} {
+		if !strings.Contains(agents, required) {
+			t.Fatalf("AGENTS missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"native Claude OTEL forwarding",
+		"Claude transcript polling",
+		"automatic Claude settings mutation",
+		"Claude cost calculation",
+	} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("README contains unsupported Claude claim %q", forbidden)
+		}
+	}
+}
+
+// TEST-530
+func TestDocsCanonicalSemanticToolFamilies(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	for _, required := range []string{
+		"codex.tool.command",
+		"codex.tool.file_change",
+		"codex.tool.mcp",
+		"codex.tool.web_search",
+		"codex.tool.tool_search",
+		"claude.tool.command",
+		"claude.tool.file_change",
+		"claude.tool.mcp",
+		"claude.tool.generic",
+		"tool:command",
+		"tool:file_change",
+		"<provider>.tool.command",
+		"<provider>.tool.file_change",
+		"<provider>.tool.mcp",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing canonical semantic family text %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		strings.Join([]string{"codex", "tool", "exec_command"}, "."),
+		strings.Join([]string{"codex", "tool", "apply_patch"}, "."),
+		strings.Join([]string{"claude", "tool", "bash"}, "."),
+		strings.Join([]string{"tool", "bash"}, ":"),
+		"patch" + "_count",
+		strings.Join([]string{"Claude pricing", "deferred"}, " is "),
+	} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("README contains legacy semantic family text %q", forbidden)
+		}
+	}
+}
+
+// EVAL-008
+func TestEvalDocsClaudeContractCompleteness(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	for _, required := range []string{
+		"Rerun `CHECK-001` after Claude Code upgrades that change transcript shape",
+		"Stop hook",
+		"hook queues work only",
+		"watch service drains the queued transcript",
+		"thinking blocks are omitted",
+		"Langfuse calculates cost",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing Claude completeness phrase %q", required)
 		}
 	}
 }

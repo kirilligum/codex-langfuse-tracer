@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "d8b5ef10182454c6e00972f5487fa324",
+  "session_id": "claude-generic-tool",
+  "turn_id": "claude-generic-user",
+  "input": "Read package metadata.",
+  "output": "The module path is github.com/kirilligum/codex-langfuse-tracer.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-generic-tool",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 1,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only tool:generic verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 1,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "tool:generic",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 26,
+    "output": 11,
+    "total": 37
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Read package metadata.",
+      "output": "The module path is github.com/kirilligum/codex-langfuse-tracer."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Read package metadata.",
+      "output": "The module path is github.com/kirilligum/codex-langfuse-tracer."
+    },
+    {
+      "name": "claude.tool.generic",
+      "type": "tool",
+      "input": "{\n  \"file_path\": \"go.mod\"\n}",
+      "output": "module github.com/kirilligum/codex-langfuse-tracer",
+      "metadata": {
+        "call_id": "toolu_read_1",
+        "is_error": false,
+        "status": "success",
+        "tool_name": "Read"
+      }
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:04:00Z user\nRead package metadata.\n\n## 2026-05-04T12:04:02Z tool.generic\nInput:\n{\n  \"file_path\": \"go.mod\"\n}\n\nOutput:\nmodule github.com/kirilligum/codex-langfuse-tracer\n\n## 2026-05-04T12:04:03Z assistant.final\nThe module path is github.com/kirilligum/codex-langfuse-tracer.",
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "claude-generic-user"
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"path/filepath"
@@ -35,18 +35,19 @@ var commandKinds = []string{
 }
 
 var toolFamilies = []string{
-	"exec_command",
-	"apply_patch",
-	"web_search",
-	"mcp",
-	"tool_search",
+	ToolFamilyCommand,
+	ToolFamilyFileChange,
+	ToolFamilyMCP,
+	ToolFamilyWebSearch,
+	ToolFamilyToolSearch,
+	ToolFamilyGeneric,
 }
 
 type InsightRollup struct {
 	ToolCount                int
 	CommandCount             int
 	FailedCommandCount       int
-	PatchCount               int
+	FileChangeToolCount      int
 	ChangedFileCount         int
 	VerificationCommandCount int
 	VerificationStatus       string
@@ -112,22 +113,23 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 	verificationFailed := false
 
 	for _, observation := range turn.Observations {
+		family := toolFamily(observation.Name)
 		if observation.Type == "tool" {
 			rollup.ToolCount++
-			if family := toolFamily(observation.Name); family != "" {
+			if family != "" {
 				rollup.ToolFamilyCounts[family]++
 			}
 		}
-		switch observation.Name {
-		case "codex.tool.exec_command":
+		switch family {
+		case ToolFamilyCommand:
 			rollup.CommandCount++
-			commandKind := stringValue(observation.Metadata["command_kind"])
+			commandKind := StringValue(observation.Metadata["command_kind"])
 			if commandKind == "" {
 				commandKind = ClassifyCommand(observation.Input)
 			}
 			commandKind = normalizeCommandKind(commandKind)
 			rollup.CommandKindCounts[commandKind]++
-			failureType := stringValue(observation.Metadata["failure_type"])
+			failureType := StringValue(observation.Metadata["failure_type"])
 			if failureType == "" {
 				failureType = commandFailureType(observation.Metadata)
 			}
@@ -137,20 +139,20 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 			if isVerificationCommand(commandKind) {
 				rollup.VerificationCommandCount++
 				rollup.LastVerificationCommand = ExportText(observation.Input)
-				rollup.LastVerificationStatus = stringValue(observation.Metadata["status"])
+				rollup.LastVerificationStatus = StringValue(observation.Metadata["status"])
 				if isFailedCommand(failureType) {
 					verificationFailed = true
 				}
 			}
-		case "codex.tool.apply_patch":
-			rollup.PatchCount++
+		case ToolFamilyFileChange:
+			rollup.FileChangeToolCount++
 			for _, path := range stringSliceValue(observation.Metadata["changed_files"]) {
 				if path != "" {
 					changedFiles[path] = true
 				}
 			}
-		case "codex.tool.mcp":
-			if server := normalizeMCPServer(stringValue(observation.Metadata["mcp_server"])); server != "" {
+		case ToolFamilyMCP:
+			if server := normalizeMCPServer(StringValue(observation.Metadata["mcp_server"])); server != "" {
 				rollup.MCPServerCounts[server]++
 			}
 		}
@@ -161,7 +163,7 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 	rollup.ChangedExtensions = changedExtensions(paths)
 	rollup.TouchedTestFiles = touchedTestFiles(paths)
 	switch {
-	case rollup.VerificationCommandCount == 0 && rollup.PatchCount > 0:
+	case rollup.VerificationCommandCount == 0 && rollup.FileChangeToolCount > 0:
 		rollup.VerificationStatus = "not_run"
 	case rollup.VerificationCommandCount == 0:
 		rollup.VerificationStatus = "not_applicable"
@@ -178,7 +180,6 @@ func (r InsightRollup) Metadata() map[string]any {
 		"tool_count":                 r.ToolCount,
 		"command_count":              r.CommandCount,
 		"failed_command_count":       r.FailedCommandCount,
-		"patch_count":                r.PatchCount,
 		"changed_file_count":         r.ChangedFileCount,
 		"verification_command_count": r.VerificationCommandCount,
 		"verification_status":        r.VerificationStatus,
@@ -199,7 +200,7 @@ func (r InsightRollup) Metadata() map[string]any {
 
 func (r InsightRollup) navigationValues() []string {
 	values := []string{"verification:" + r.VerificationStatus}
-	if r.PatchCount > 0 || r.ChangedFileCount > 0 {
+	if r.FileChangeToolCount > 0 || r.ChangedFileCount > 0 {
 		values = append(values, "files:changed")
 	} else {
 		values = append(values, "files:read_only")
@@ -231,11 +232,11 @@ func CommandInsightMetadata(payload map[string]any) map[string]any {
 		"command_kind": ClassifyCommand(FormatCommand(payload["command"])),
 		"failure_type": commandFailureType(payload),
 	}
-	if status := stringValue(payload["status"]); status != "" {
+	if status := StringValue(payload["status"]); status != "" {
 		metadata["status"] = status
 	}
 	if _, ok := payload["exit_code"]; ok {
-		metadata["exit_code"] = intValue(payload["exit_code"])
+		metadata["exit_code"] = IntValue(payload["exit_code"])
 	}
 	if _, ok := payload["duration"]; ok {
 		metadata["duration_ms"] = int(durationToNS(payload["duration"]) / 1_000_000)
@@ -244,12 +245,12 @@ func CommandInsightMetadata(payload map[string]any) map[string]any {
 }
 
 func MCPToolMetadata(payload map[string]any) map[string]any {
-	invocation := mapValue(payload["invocation"])
+	invocation := MapValue(payload["invocation"])
 	metadata := map[string]any{}
-	if server := normalizeMCPServer(stringValue(invocation["server"])); server != "" {
+	if server := normalizeMCPServer(StringValue(invocation["server"])); server != "" {
 		metadata["mcp_server"] = server
 	}
-	if tool := strings.TrimSpace(stringValue(invocation["tool"])); tool != "" {
+	if tool := strings.TrimSpace(StringValue(invocation["tool"])); tool != "" {
 		metadata["mcp_tool"] = tool
 	}
 	return metadata
@@ -298,20 +299,17 @@ func newToolFamilyCounts() map[string]int {
 }
 
 func toolFamily(name string) string {
-	switch name {
-	case "codex.tool.exec_command":
-		return "exec_command"
-	case "codex.tool.apply_patch":
-		return "apply_patch"
-	case "codex.tool.web_search":
-		return "web_search"
-	case "codex.tool.mcp":
-		return "mcp"
-	case "codex.tool.tool_search":
-		return "tool_search"
-	default:
+	parts := strings.Split(name, ".tool.")
+	if len(parts) != 2 {
 		return ""
 	}
+	family := NormalizeToolFamily(parts[1])
+	for _, known := range toolFamilies {
+		if family == known {
+			return family
+		}
+	}
+	return "generic"
 }
 
 func normalizeCommandKind(kind string) string {
@@ -329,7 +327,7 @@ func isFailedCommand(failureType string) bool {
 }
 
 func commandFailureType(payload map[string]any) string {
-	status := strings.ToLower(strings.TrimSpace(stringValue(payload["status"])))
+	status := strings.ToLower(strings.TrimSpace(StringValue(payload["status"])))
 	if strings.Contains(status, "timeout") || strings.Contains(status, "timed_out") {
 		return "timeout"
 	}
@@ -337,7 +335,7 @@ func commandFailureType(payload map[string]any) string {
 	if status == "" || !hasExitCode {
 		return "unknown"
 	}
-	if intValue(exitCode) != 0 {
+	if IntValue(exitCode) != 0 {
 		return "nonzero_exit"
 	}
 	if status == "completed" || status == "success" || status == "succeeded" {
@@ -353,7 +351,7 @@ func stringSliceValue(value any) []string {
 	case []any:
 		result := make([]string, 0, len(typed))
 		for _, item := range typed {
-			if text := stringValue(item); text != "" {
+			if text := StringValue(item); text != "" {
 				result = append(result, text)
 			}
 		}

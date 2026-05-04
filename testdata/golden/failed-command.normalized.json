@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "name": "codex.turn.transcript",
+  "provider": "codex",
   "trace_id": "dddddddddddddddddddddddddddddddd",
   "session_id": "sess-failed",
   "turn_id": "turn-failed",
@@ -9,26 +10,26 @@
   "model": "gpt-5.5",
   "cwd": "/tmp/failed",
   "metadata": {
-    "apply_patch_tool_count": 1,
     "build_command_count": 0,
     "changed_extensions": [
       ".go"
     ],
     "changed_file_count": 1,
     "command_count": 2,
-    "exec_command_tool_count": 2,
+    "command_tool_count": 2,
     "failed_command_count": 1,
+    "file_change_tool_count": 1,
     "format_command_count": 0,
+    "generic_tool_count": 0,
     "git_command_count": 0,
     "install_command_count": 0,
     "last_verification_command": "go test ./...",
     "last_verification_status": "completed",
     "lint_command_count": 0,
     "mcp_tool_count": 0,
-    "navigation": "command:test files:changed tool:apply_patch tool:exec_command verification:failed",
+    "navigation": "command:test files:changed tool:command tool:file_change verification:failed",
     "network_command_count": 0,
     "other_command_count": 0,
-    "patch_count": 1,
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
@@ -43,8 +44,8 @@
   "tags": [
     "command:test",
     "files:changed",
-    "tool:apply_patch",
-    "tool:exec_command",
+    "tool:command",
+    "tool:file_change",
     "verification:failed"
   ],
   "exportable": true,
@@ -62,7 +63,7 @@
       "output": "Tests are passing after the parser fix."
     },
     {
-      "name": "codex.tool.exec_command",
+      "name": "codex.tool.command",
       "type": "tool",
       "input": "go test ./...",
       "output": "## stderr\nFAIL ./internal/codextrace\n",
@@ -73,11 +74,12 @@
         "exit_code": 1,
         "failure_type": "nonzero_exit",
         "status": "completed",
+        "tool_name": "exec_command",
         "type": "exec_command_end"
       }
     },
     {
-      "name": "codex.tool.apply_patch",
+      "name": "codex.tool.file_change",
       "type": "tool",
       "input": "{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: internal/codextrace/parser.go\\n@@\\n-bug\\n+fix\\n*** End Patch\"\n}",
       "output": "## stdout\nDone\n\n## internal/codextrace/parser.go (update)\n\n```diff\n@@\n-bug\n+fix\n```",
@@ -96,11 +98,12 @@
           "internal/codextrace/parser.go"
         ],
         "moved_files": [],
+        "tool_name": "apply_patch",
         "type": "patch_apply_end"
       }
     },
     {
-      "name": "codex.tool.exec_command",
+      "name": "codex.tool.command",
       "type": "tool",
       "input": "go test ./...",
       "output": "## stdout\nok ./...\n",
@@ -111,6 +114,7 @@
         "exit_code": 0,
         "failure_type": "none",
         "status": "completed",
+        "tool_name": "exec_command",
         "type": "exec_command_end"
       }
     },
@@ -118,7 +122,7 @@
       "name": "codex.terminal",
       "type": "span",
       "input": "",
-      "output": "## 2026-05-01T11:20:02Z user\nFix failing tests\n\n## 2026-05-01T11:20:03Z tool.exec_command\nCommand:\ngo test ./...\n\nOutput:\n## stderr\nFAIL ./internal/codextrace\n\n\nStatus: completed exit_code=1\n\n## 2026-05-01T11:20:05Z tool.apply_patch\nInput:\n{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: internal/codextrace/parser.go\\n@@\\n-bug\\n+fix\\n*** End Patch\"\n}\n\nOutput:\n## stdout\nDone\n\n## internal/codextrace/parser.go (update)\n\n```diff\n@@\n-bug\n+fix\n```\n\n## 2026-05-01T11:20:06Z tool.exec_command\nCommand:\ngo test ./...\n\nOutput:\n## stdout\nok ./...\n\n\nStatus: completed exit_code=0\n\n## 2026-05-01T11:20:07Z assistant.final\nTests are passing after the parser fix.",
+      "output": "## 2026-05-01T11:20:02Z user\nFix failing tests\n\n## 2026-05-01T11:20:03Z tool.command\nCommand:\ngo test ./...\n\nOutput:\n## stderr\nFAIL ./internal/codextrace\n\n\nStatus: completed exit_code=1\n\n## 2026-05-01T11:20:05Z tool.file_change\nInput:\n{\n  \"cmd\": \"*** Begin Patch\\n*** Update File: internal/codextrace/parser.go\\n@@\\n-bug\\n+fix\\n*** End Patch\"\n}\n\nOutput:\n## stdout\nDone\n\n## internal/codextrace/parser.go (update)\n\n```diff\n@@\n-bug\n+fix\n```\n\n## 2026-05-01T11:20:06Z tool.command\nCommand:\ngo test ./...\n\nOutput:\n## stdout\nok ./...\n\n\nStatus: completed exit_code=0\n\n## 2026-05-01T11:20:07Z assistant.final\nTests are passing after the parser fix.",
       "metadata": {
         "event_count": 5,
         "turn_id": "turn-failed"

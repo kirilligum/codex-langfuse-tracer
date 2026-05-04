@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "5c17093722db9a16d8a358773f3de1ef",
+  "session_id": "claude-no-tools",
+  "turn_id": "claude-no-tools-user",
+  "input": "Summarize this project in one sentence.",
+  "output": "The project exports coding-agent sessions to Langfuse.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-no-tools",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 0,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 10,
+    "output": 9,
+    "total": 19
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Summarize this project in one sentence.",
+      "output": "The project exports coding-agent sessions to Langfuse."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Summarize this project in one sentence.",
+      "output": "The project exports coding-agent sessions to Langfuse."
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:02:00Z user\nSummarize this project in one sentence.\n\n## 2026-05-04T12:02:01Z assistant.final\nThe project exports coding-agent sessions to Langfuse.",
+      "metadata": {
+        "event_count": 2,
+        "turn_id": "claude-no-tools-user"
+      }
+    }
+  ]
+}

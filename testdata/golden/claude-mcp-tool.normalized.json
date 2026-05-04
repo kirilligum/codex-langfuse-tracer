@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "d59f07fc337cc38fa983a7cd572d6069",
+  "session_id": "claude-mcp-tool",
+  "turn_id": "claude-mcp-user",
+  "input": "List GitHub issues.",
+  "output": "No open issues were returned.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-mcp-tool",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 1,
+    "navigation": "files:read_only tool:mcp verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 1,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "mcp:github",
+    "tool:mcp",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 25,
+    "output": 6,
+    "total": 31
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "List GitHub issues.",
+      "output": "No open issues were returned."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "List GitHub issues.",
+      "output": "No open issues were returned."
+    },
+    {
+      "name": "claude.tool.mcp",
+      "type": "tool",
+      "input": "{\n  \"state\": \"open\"\n}",
+      "output": "[]",
+      "metadata": {
+        "call_id": "toolu_mcp_1",
+        "is_error": false,
+        "mcp_server": "github",
+        "mcp_tool": "issues_list",
+        "status": "success",
+        "tool_name": "mcp__github__issues_list"
+      }
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:08:00Z user\nList GitHub issues.\n\n## 2026-05-04T12:08:02Z tool.mcp\nInput:\n{\n  \"state\": \"open\"\n}\n\nOutput:\n[]\n\n## 2026-05-04T12:08:03Z assistant.final\nNo open issues were returned.",
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "claude-mcp-user"
+      }
+    }
+  ]
+}

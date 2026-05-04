@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "d2da393ebfa4b4301e7472d59b86f35d",
+  "session_id": "claude-real-basic",
+  "turn_id": "00000000-0000-4000-8000-000000000001",
+  "input": "Reply exactly: claude-langfuse-smoke-test",
+  "output": "claude-langfuse-smoke-test",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-basic",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 0,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 12,
+    "output": 7,
+    "total": 19
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Reply exactly: claude-langfuse-smoke-test",
+      "output": "claude-langfuse-smoke-test"
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Reply exactly: claude-langfuse-smoke-test",
+      "output": "claude-langfuse-smoke-test"
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:00:00.000Z user\nReply exactly: claude-langfuse-smoke-test\n\n## 2026-05-04T12:00:01.000Z assistant.final\nclaude-langfuse-smoke-test",
+      "metadata": {
+        "event_count": 2,
+        "turn_id": "00000000-0000-4000-8000-000000000001"
+      }
+    }
+  ]
+}

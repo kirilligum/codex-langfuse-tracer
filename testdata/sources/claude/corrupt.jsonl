@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-corrupt","cwd":"/tmp/claude-corrupt","message":{"role":"user","content":[{"type":"text","text":"This file has a corrupt next line."}]}}
+{"type":"assistant","message":

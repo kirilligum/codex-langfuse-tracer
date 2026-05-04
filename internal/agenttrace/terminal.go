@@ -1,11 +1,11 @@
-package codextrace
+package agenttrace
 
 import (
 	"fmt"
 	"strings"
 )
 
-func addTerminalEntry(turn *Turn, timestamp, label, text string) {
+func AddTerminalEntry(turn *Turn, timestamp, label, text string) {
 	clean := strings.TrimSpace(text)
 	if clean == "" {
 		return
@@ -17,20 +17,20 @@ func addTerminalEntry(turn *Turn, timestamp, label, text string) {
 		}
 	}
 	turn.TerminalEntries = append(turn.TerminalEntries, TerminalEntry{
-		Timestamp: firstString(timestamp, firstString(turn.EndTS, turn.StartTS)),
+		Timestamp: StringOr(timestamp, StringOr(turn.EndTS, turn.StartTS)),
 		Label:     label,
 		Text:      clean,
 	})
 }
 
-func addObservation(turn *Turn, name, timestamp, input, output string, metadata map[string]any, observationType string, duration any) {
+func AddObservation(turn *Turn, name, timestamp, input, output string, metadata map[string]any, observationType string, duration any) {
 	if input == "" && output == "" {
 		return
 	}
 	if observationType == "" {
 		observationType = "span"
 	}
-	startNS, endNS := ObservationBounds(firstString(timestamp, firstString(turn.EndTS, turn.StartTS)), duration)
+	startNS, endNS := ObservationBounds(StringOr(timestamp, StringOr(turn.EndTS, turn.StartTS)), duration)
 	turn.Observations = append(turn.Observations, Observation{
 		Name:            name,
 		StartTimeUnixNS: startNS,
@@ -53,7 +53,7 @@ func TerminalObservation(turn Turn) *Observation {
 	startNS, _ := ObservationBounds(turn.TerminalEntries[0].Timestamp, nil)
 	_, endNS := ObservationBounds(turn.TerminalEntries[len(turn.TerminalEntries)-1].Timestamp, nil)
 	return &Observation{
-		Name:            "codex.terminal",
+		Name:            turn.Profile().TerminalName,
 		StartTimeUnixNS: startNS,
 		EndTimeUnixNS:   endNS,
 		Type:            "span",

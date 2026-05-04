@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "67befd676d6d2ad15dc5c646320a5ad7",
+  "session_id": "claude-thinking",
+  "turn_id": "claude-thinking-user",
+  "input": "Answer without exposing reasoning.",
+  "output": "Final answer only.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-thinking",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 0,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 10,
+    "output": 4,
+    "total": 14
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Answer without exposing reasoning.",
+      "output": "Final answer only."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Answer without exposing reasoning.",
+      "output": "Final answer only."
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:06:00Z user\nAnswer without exposing reasoning.\n\n## 2026-05-04T12:06:01Z assistant.final\nFinal answer only.",
+      "metadata": {
+        "event_count": 2,
+        "turn_id": "claude-thinking-user"
+      }
+    }
+  ]
+}

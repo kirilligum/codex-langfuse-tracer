@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "parse_error": true,
+  "observations": []
+}

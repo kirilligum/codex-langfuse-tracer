@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"strings"
@@ -27,7 +27,7 @@ func TestRedactionTruncationAndTerminal(t *testing.T) {
 		t.Fatalf("missing truncation suffix")
 	}
 
-	turn := parseCompleteFixture(t)
+	turn := completeFixtureTurn()
 	terminal := TerminalObservation(turn)
 	if terminal == nil {
 		t.Fatal("terminal observation missing")

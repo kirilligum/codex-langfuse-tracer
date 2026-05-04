@@ -1,17 +1,23 @@
 package codextrace
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
 )
 
 func validateCompletedAndIncompleteTurns(t *testing.T) {
 	t.Helper()
-	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "complete-tools.jsonl"))
+	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
 	if err != nil {
 		t.Fatalf("ParseTurns complete: %v", err)
 	}
-	exportable := ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) != 1 {
 		t.Fatalf("exportable turns = %d, want 1", len(exportable))
 	}
@@ -32,11 +38,11 @@ func validateCompletedAndIncompleteTurns(t *testing.T) {
 		t.Fatalf("token usage not parsed: %+v", turn.TokenUsage)
 	}
 
-	incomplete, err := ParseTurns(filepath.Join("..", "..", "testdata", "rollouts", "incomplete-turn.jsonl"))
+	incomplete, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "incomplete-turn.jsonl"))
 	if err != nil {
 		t.Fatalf("ParseTurns incomplete: %v", err)
 	}
-	if got := ExportableTurns(incomplete); len(got) != 0 {
+	if got := agenttrace.ExportableTurns(incomplete); len(got) != 0 {
 		t.Fatalf("incomplete exportable turns = %d, want 0", len(got))
 	}
 }
@@ -74,13 +80,66 @@ func TestResponseMessageContentShapes(t *testing.T) {
 func TestStableIDs(t *testing.T) {
 	t.Parallel()
 
-	traceID := StableTraceID("session", "turn")
-	if len(traceID) != 32 || traceID != StableTraceID("session", "turn") {
+	traceID := agenttrace.StableTraceID(agenttrace.ProviderCodex, "session", "turn")
+	if len(traceID) != 32 || traceID != agenttrace.StableTraceID(agenttrace.ProviderCodex, "session", "turn") {
 		t.Fatalf("trace id is not stable 32-char hex: %q", traceID)
 	}
-	first := StableSpanID("prefix", traceID, "turn", "a")
-	second := StableSpanID("prefix", traceID, "turn", "b")
+	first := agenttrace.StableSpanID("prefix", traceID, "turn", "a")
+	second := agenttrace.StableSpanID("prefix", traceID, "turn", "b")
 	if len(first) != 16 || first == second {
 		t.Fatalf("span ids not distinct and stable: %q %q", first, second)
 	}
+}
+
+// TEST-503
+func TestCodexParserUsesAgentTrace(t *testing.T) {
+	t.Parallel()
+
+	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("ParseTurns returned no turns")
+	}
+	if got := reflect.TypeOf(turns[0]).PkgPath(); got != "github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace" {
+		t.Fatalf("turn package = %q", got)
+	}
+	if turns[0].Provider != agenttrace.ProviderCodex {
+		t.Fatalf("turn provider = %q", turns[0].Provider)
+	}
+	if turns[0].TraceID != agenttrace.StableTraceID(agenttrace.ProviderCodex, turns[0].SessionID, turns[0].TurnID) {
+		t.Fatalf("trace id = %q, want stable agenttrace codex id", turns[0].TraceID)
+	}
+}
+
+// EVAL-003
+func TestEvalCodexGoldenParityAfterAgentTrace(t *testing.T) {
+	t.Parallel()
+
+	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	exportable := agenttrace.ExportableTurns(turns)
+	if len(exportable) != 1 {
+		t.Fatalf("exportable turns = %d, want 1", len(exportable))
+	}
+	actual := tracecontract.FromTurn(exportable[0])
+	goldenRaw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "complete-tools.normalized.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden tracecontract.Trace
+	if err := json.Unmarshal(goldenRaw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalTraceJSON(actual) != canonicalTraceJSON(golden) {
+		t.Fatalf("complete-tools golden changed\ngolden=%s\nactual=%s", canonicalTraceJSON(golden), canonicalTraceJSON(actual))
+	}
+}
+
+func canonicalTraceJSON(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
 }

@@ -1,4 +1,4 @@
-package codextrace
+package agenttrace
 
 import (
 	"crypto/sha256"
@@ -7,6 +7,7 @@ import (
 )
 
 type Turn struct {
+	Provider        string
 	SessionID       string
 	TurnID          string
 	TraceID         string
@@ -22,22 +23,69 @@ type Turn struct {
 	Observations    []Observation
 }
 
+const (
+	ProviderCodex  = "codex"
+	ProviderClaude = "claude"
+)
+
+const (
+	ToolFamilyCommand    = "command"
+	ToolFamilyFileChange = "file_change"
+	ToolFamilyMCP        = "mcp"
+	ToolFamilyWebSearch  = "web_search"
+	ToolFamilyToolSearch = "tool_search"
+	ToolFamilyGeneric    = "generic"
+)
+
+func ToolObservationName(provider, family string) string {
+	if provider == "" {
+		provider = ProviderCodex
+	}
+	return provider + ".tool." + NormalizeToolFamily(family)
+}
+
+func NormalizeToolFamily(family string) string {
+	switch strings.ToLower(strings.TrimSpace(family)) {
+	case ToolFamilyCommand:
+		return ToolFamilyCommand
+	case ToolFamilyFileChange:
+		return ToolFamilyFileChange
+	case ToolFamilyMCP:
+		return ToolFamilyMCP
+	case ToolFamilyWebSearch:
+		return ToolFamilyWebSearch
+	case ToolFamilyToolSearch:
+		return ToolFamilyToolSearch
+	default:
+		return ToolFamilyGeneric
+	}
+}
+
 type TokenUsage struct {
-	InputTokens           int
-	OutputTokens          int
-	TotalTokens           int
-	CachedInputTokens     int
-	ReasoningOutputTokens int
+	InputTokens              int
+	OutputTokens             int
+	TotalTokens              int
+	CachedInputTokens        int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
+	ReasoningOutputTokens    int
 }
 
 func (u TokenUsage) LangfuseUsageDetails() map[string]int {
 	usage := map[string]int{}
-	input := u.InputTokens - u.CachedInputTokens
+	cacheRead := u.CachedInputTokens + u.CacheReadInputTokens
+	input := u.InputTokens - cacheRead - u.CacheCreationInputTokens
 	if input > 0 {
 		usage["input"] = input
 	}
 	if u.CachedInputTokens > 0 {
 		usage["input_cached_tokens"] = u.CachedInputTokens
+	}
+	if u.CacheReadInputTokens > 0 {
+		usage["cache_read_input_tokens"] = u.CacheReadInputTokens
+	}
+	if u.CacheCreationInputTokens > 0 {
+		usage["cache_creation_input_tokens"] = u.CacheCreationInputTokens
 	}
 	output := u.OutputTokens - u.ReasoningOutputTokens
 	if output > 0 {
@@ -89,8 +137,11 @@ func joinedText(values []string) string {
 	return strings.TrimSpace(strings.Join(clean, "\n\n"))
 }
 
-func StableTraceID(sessionID, turnID string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("codex-turn:%s:%s", sessionID, turnID)))
+func StableTraceID(provider, sessionID, turnID string) string {
+	if provider == "" {
+		provider = ProviderCodex
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s-turn:%s:%s", provider, sessionID, turnID)))
 	return fmt.Sprintf("%x", sum)[:32]
 }
 
@@ -113,8 +164,8 @@ func ExportableTurns(turns []Turn) []Turn {
 	return exportable
 }
 
-func appendUnique(values *[]string, value any) {
-	text := strings.TrimSpace(stringValue(value))
+func AppendUnique(values *[]string, value any) {
+	text := strings.TrimSpace(StringValue(value))
 	if text == "" {
 		return
 	}

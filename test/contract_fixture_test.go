@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
 type fixtureManifest struct {
@@ -14,10 +16,12 @@ type fixtureManifest struct {
 }
 
 type manifestFixture struct {
-	ID         string   `json:"id"`
-	Rollout    string   `json:"rollout"`
-	Golden     string   `json:"golden"`
-	Categories []string `json:"categories"`
+	ID           string   `json:"id"`
+	Provider     string   `json:"provider"`
+	Source       string   `json:"source"`
+	SourceFormat string   `json:"source_format"`
+	Golden       string   `json:"golden"`
+	Categories   []string `json:"categories"`
 }
 
 func validateGoldenFixtures(t *testing.T) {
@@ -49,13 +53,28 @@ func validateGoldenFixtures(t *testing.T) {
 			t.Fatalf("duplicate fixture id %q", fixture.ID)
 		}
 		seenIDs[fixture.ID] = true
+		if fixture.Provider != "codex" && fixture.Provider != "claude" {
+			t.Fatalf("fixture %s provider = %q, want codex or claude", fixture.ID, fixture.Provider)
+		}
+		if fixture.Source == "" {
+			t.Fatalf("fixture %s source is required", fixture.ID)
+		}
+		if fixture.SourceFormat == "" {
+			t.Fatalf("fixture %s source_format is required", fixture.ID)
+		}
+		if strings.Contains(fixture.Source, filepath.ToSlash(filepath.Join("testdata", "rollouts"))+"/") {
+			t.Fatalf("fixture %s source uses legacy rollout path %s", fixture.ID, fixture.Source)
+		}
+		if !strings.HasPrefix(fixture.Source, "testdata/sources/"+fixture.Provider+"/") {
+			t.Fatalf("fixture %s source %s must live under testdata/sources/%s", fixture.ID, fixture.Source, fixture.Provider)
+		}
 		for _, category := range fixture.Categories {
 			categories[category] = true
 		}
 
-		rolloutPath := filepath.Join("..", fixture.Rollout)
-		if _, err := os.Stat(rolloutPath); err != nil {
-			t.Fatalf("fixture %s rollout missing: %v", fixture.ID, err)
+		sourcePath := filepath.Join("..", fixture.Source)
+		if _, err := os.Stat(sourcePath); err != nil {
+			t.Fatalf("fixture %s source missing: %v", fixture.ID, err)
 		}
 
 		goldenPath := filepath.Join("..", fixture.Golden)
@@ -89,8 +108,8 @@ func validateGoldenFixtures(t *testing.T) {
 		"commentary",
 		"visible_reasoning_summary",
 		"hidden_reasoning_exclusion",
-		"exec_tool",
-		"apply_patch_metadata",
+		"command_tool",
+		"file_change_metadata",
 		"mcp_tool",
 		"web_search",
 		"tool_search",
@@ -113,6 +132,101 @@ func validateGoldenFixtures(t *testing.T) {
 			t.Fatalf("manifest missing category %q", category)
 		}
 	}
+
+	manifestFiles := 0
+	if err := filepath.WalkDir(filepath.Join("..", "testdata"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && filepath.Base(path) == "manifest.json" {
+			manifestFiles++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan manifests: %v", err)
+	}
+	if manifestFiles != 1 {
+		t.Fatalf("manifest file count = %d, want 1", manifestFiles)
+	}
+}
+
+// TEST-501
+func TestFixtureManifestProviderSources(t *testing.T) {
+	t.Parallel()
+	validateGoldenFixtures(t)
+}
+
+// EVAL-001
+func TestEvalClaudeFixtureCoverage(t *testing.T) {
+	t.Parallel()
+
+	manifest := loadManifestForFixtures(t)
+	claudeCount := 0
+	realDerivedCount := 0
+	requiredCategories := map[string]bool{
+		"no_tools":                      false,
+		"claude_command_tool":           false,
+		"claude_file_change_tool":       false,
+		"claude_mcp_tool":               false,
+		"claude_generic_tool":           false,
+		"incomplete_turn":               false,
+		"corrupt_transcript":            false,
+		"hidden_reasoning_exclusion":    false,
+		"claude_live_metadata":          false,
+		"claude_real_derived_structure": false,
+	}
+	providerCoverage := map[string]bool{}
+	sourceFormatCoverage := map[string]bool{}
+	for _, fixture := range manifest.Fixtures {
+		providerCoverage[fixture.Provider] = true
+		sourceFormatCoverage[fixture.SourceFormat] = true
+		if fixture.Provider != "claude" {
+			continue
+		}
+		claudeCount++
+		for _, category := range fixture.Categories {
+			if category == "claude_real_derived_structure" {
+				realDerivedCount++
+			}
+			if _, ok := requiredCategories[category]; ok {
+				requiredCategories[category] = true
+			}
+		}
+	}
+	if claudeCount < 5 {
+		t.Fatalf("claude fixture count = %d, want >= 5", claudeCount)
+	}
+	if realDerivedCount < 2 {
+		t.Fatalf("claude real-derived structure fixture count = %d, want >= 2", realDerivedCount)
+	}
+	for category, covered := range requiredCategories {
+		if !covered {
+			t.Fatalf("claude fixture coverage missing category %q", category)
+		}
+	}
+	for _, provider := range []string{"codex", "claude"} {
+		if !providerCoverage[provider] {
+			t.Fatalf("provider coverage missing %q", provider)
+		}
+	}
+	for _, sourceFormat := range []string{"codex_rollout", "claude_transcript"} {
+		if !sourceFormatCoverage[sourceFormat] {
+			t.Fatalf("source format coverage missing %q", sourceFormat)
+		}
+	}
+}
+
+func loadManifestForFixtures(t *testing.T) fixtureManifest {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest fixtureManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
 }
 
 func completeToolsGolden(t *testing.T) map[string]any {
@@ -178,8 +292,9 @@ func validateInsightFixtureCoverage(t *testing.T) {
 		"tool_count",
 		"command_count",
 		"failed_command_count",
-		"patch_count",
 		"changed_file_count",
+		"command_tool_count",
+		"file_change_tool_count",
 		"verification_command_count",
 		"verification_status",
 		"changed_extensions",
@@ -193,8 +308,8 @@ func validateInsightFixtureCoverage(t *testing.T) {
 		t.Fatalf("root metadata must not include full changed_files: %#v", metadata)
 	}
 
-	commandMetadata := requireObservationMetadata(t, golden, "codex.tool.exec_command")
-	for _, key := range []string{"command_kind", "status", "exit_code", "duration_ms", "failure_type"} {
+	commandMetadata := requireObservationMetadata(t, golden, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand))
+	for _, key := range []string{"tool_name", "command_kind", "status", "exit_code", "duration_ms", "failure_type"} {
 		if _, ok := commandMetadata[key]; !ok {
 			t.Fatalf("command metadata missing %q in %#v", key, commandMetadata)
 		}
@@ -207,17 +322,17 @@ func validateSingleRepresentationFixtureCoverage(t *testing.T) {
 	golden := completeToolsGolden(t)
 	metadata := requireMap(t, golden, "metadata")
 	want := map[string]any{
-		"other_command_count":     float64(1),
-		"search_command_count":    float64(0),
-		"read_command_count":      float64(0),
-		"network_command_count":   float64(0),
-		"install_command_count":   float64(0),
-		"apply_patch_tool_count":  float64(1),
-		"exec_command_tool_count": float64(1),
-		"web_search_tool_count":   float64(1),
-		"mcp_tool_count":          float64(1),
-		"tool_search_tool_count":  float64(1),
-		"navigation":              "command:other files:changed tool:apply_patch tool:exec_command tool:mcp tool:tool_search tool:web_search verification:not_run",
+		"other_command_count":    float64(1),
+		"search_command_count":   float64(0),
+		"read_command_count":     float64(0),
+		"network_command_count":  float64(0),
+		"install_command_count":  float64(0),
+		"file_change_tool_count": float64(1),
+		"command_tool_count":     float64(1),
+		"web_search_tool_count":  float64(1),
+		"mcp_tool_count":         float64(1),
+		"tool_search_tool_count": float64(1),
+		"navigation":             "command:other files:changed tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run",
 	}
 	for key, value := range want {
 		if canonicalJSON(metadata[key]) != canonicalJSON(value) {
@@ -232,16 +347,16 @@ func validateSingleRepresentationFixtureCoverage(t *testing.T) {
 	}
 	requireNoForbiddenContractKeys(t, golden)
 	requireNoRawTransportOrDuration(t, golden)
-	commandMetadata := requireObservationMetadata(t, golden, "codex.tool.exec_command")
+	commandMetadata := requireObservationMetadata(t, golden, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand))
 	if commandMetadata["command_kind"] != "other" {
 		t.Fatalf("command_kind = %#v, want other", commandMetadata["command_kind"])
 	}
 	if _, ok := commandMetadata["duration_ms"]; !ok {
 		t.Fatalf("command metadata missing duration_ms: %#v", commandMetadata)
 	}
-	patchMetadata := requireObservationMetadata(t, golden, "codex.tool.apply_patch")
-	if _, ok := patchMetadata["changed_files"]; !ok {
-		t.Fatalf("patch metadata missing changed_files: %#v", patchMetadata)
+	fileChangeMetadata := requireObservationMetadata(t, golden, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange))
+	if _, ok := fileChangeMetadata["changed_files"]; !ok {
+		t.Fatalf("file-change metadata missing changed_files: %#v", fileChangeMetadata)
 	}
 }
 
@@ -256,8 +371,8 @@ func validateGoldenLangfuseTagsContract(t *testing.T) {
 		"command:other",
 		"files:changed",
 		"mcp:github",
-		"tool:apply_patch",
-		"tool:exec_command",
+		"tool:command",
+		"tool:file_change",
 		"tool:mcp",
 		"tool:tool_search",
 		"tool:web_search",
@@ -315,7 +430,7 @@ func requireNoForbiddenContractKeys(t *testing.T, value any) {
 
 func isForbiddenContractKey(key string) bool {
 	switch key {
-	case "has_file_changes", "is_read_only", "command_kinds", "web_search_count", "trace_facets", "navigation_facets", "cost_details", "tool_name", "available_tool_names":
+	case "has_file_changes", "is_read_only", "command_kinds", "web_search_count", "trace_facets", "navigation_facets", "cost_details", "available_tool_names":
 		return true
 	default:
 		return strings.HasPrefix(key, "ran_") || strings.HasPrefix(key, "used_")

@@ -3,6 +3,8 @@ package codextrace
 import (
 	"strings"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
 // TEST-016
@@ -12,7 +14,7 @@ func TestVisibleReasoningOnly(t *testing.T) {
 	turn := parseCompleteFixture(t)
 	found := false
 	for _, observation := range turn.Observations {
-		all := observation.Input + observation.Output + StableJSON(observation.Metadata)
+		all := observation.Input + observation.Output + agenttrace.StableJSON(observation.Metadata)
 		if strings.Contains(all, "HIDDEN_REASONING_SENTINEL") || strings.Contains(all, "ENCRYPTED_REASONING_SENTINEL") {
 			t.Fatalf("hidden reasoning leaked in %s: %s", observation.Name, all)
 		}

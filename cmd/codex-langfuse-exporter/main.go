@@ -10,14 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/claudehook"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/watch"
 )
 
 type options struct {
+	Provider              string
+	ClaudeHook            bool
 	SessionID             string
 	Path                  string
 	Latest                bool
@@ -36,11 +41,15 @@ type options struct {
 }
 
 var syncModelPricing = langfuse.SyncModelPricing
+var errUnsupportedProvider = providers.ErrUnsupportedProvider
+var stdin io.Reader = os.Stdin
 
 func (o options) Mode() string {
 	switch {
 	case o.SyncModelPricing:
 		return "sync-model-pricing"
+	case o.ClaudeHook:
+		return "claude-hook"
 	case o.SessionID != "":
 		return "session-id"
 	case o.Path != "":
@@ -56,6 +65,7 @@ func (o options) Mode() string {
 
 func parseArgs(args []string) (options, error) {
 	opts := options{
+		Provider:              agenttrace.ProviderCodex,
 		ConfigPath:            config.DefaultConfigPath(),
 		StateFile:             config.DefaultStatePath(),
 		Environment:           buildinfo.DefaultEnvironment,
@@ -67,6 +77,8 @@ func parseArgs(args []string) (options, error) {
 
 	fs := flag.NewFlagSet(buildinfo.InstalledBinaryName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.Provider, "provider", opts.Provider, "Trace provider: codex or claude")
+	fs.BoolVar(&opts.ClaudeHook, "claude-hook", false, "Read a Claude Code hook payload from stdin and enqueue its transcript")
 	fs.StringVar(&opts.SessionID, "session-id", "", "Codex session id from `codex resume <id>`")
 	fs.StringVar(&opts.Path, "path", "", "Path to a Codex rollout JSONL file")
 	fs.BoolVar(&opts.Latest, "latest", false, "Export the latest Codex rollout JSONL file")
@@ -88,15 +100,23 @@ func parseArgs(args []string) (options, error) {
 	if fs.NArg() != 0 {
 		return options{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
+	spec, err := providers.Get(opts.Provider)
+	if err != nil {
+		return options{}, err
+	}
+	opts.Provider = spec.Name
 
 	selected := 0
-	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch, opts.SyncModelPricing} {
+	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch, opts.SyncModelPricing, opts.ClaudeHook} {
 		if ok {
 			selected++
 		}
 	}
 	if selected != 1 {
-		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, or --sync-model-pricing")
+		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, --claude-hook, or --sync-model-pricing")
+	}
+	if spec.ExplicitPathOnly && opts.Path == "" {
+		return options{}, fmt.Errorf("%s provider supports only --path in this release", spec.DisplayName)
 	}
 	return opts, nil
 }
@@ -106,6 +126,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 1
+	}
+	if opts.ClaudeHook {
+		enqueued, err := claudehook.Handle(stdin, opts.StateFile, time.Now())
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: %v\n", err)
+			return 1
+		}
+		if !opts.Quiet {
+			fmt.Fprintf(stdout, "claude_hook enqueued=%v\n", enqueued)
+		}
+		return 0
 	}
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
@@ -131,7 +162,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Stderr:              stderr,
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
-			Export: func(ctx context.Context, turn codextrace.Turn) (int, error) {
+			Export: func(ctx context.Context, turn agenttrace.Turn) (int, error) {
 				return langfuse.ExportTurn(ctx, cfg, turn, opts.Environment, opts.ServiceName)
 			},
 		})
@@ -147,7 +178,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 1
 	}
-	turns, err := codextrace.ParseTurns(sessionPath)
+	turns, err := parseProviderTurns(opts.Provider, sessionPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 1
@@ -161,10 +192,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		turns = filtered
 	}
-	exportable := codextrace.ExportableTurns(turns)
+	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) == 0 {
 		if !opts.Quiet {
-			fmt.Fprintf(stderr, "No completed Codex turns with visible input/output found in %s\n", sessionPath)
+			fmt.Fprintf(stderr, "No completed %s turns with visible input/output found in %s\n", providers.DisplayName(opts.Provider), sessionPath)
 		}
 		return 1
 	}
@@ -173,7 +204,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	for _, turn := range exportable {
 		if !opts.Quiet {
-			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(codextrace.ExportText(turn.InputText())), preview(codextrace.ExportText(turn.OutputText())), len(turn.Observations))
+			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
 		}
 		status, err := langfuse.ExportTurn(ctx, cfg, turn, opts.Environment, opts.ServiceName)
 		if err != nil {
@@ -212,6 +243,10 @@ func selectedSessionPath(opts options) (string, error) {
 	default:
 		return "", errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, or --sync-model-pricing")
 	}
+}
+
+func parseProviderTurns(provider, path string) ([]agenttrace.Turn, error) {
+	return providers.ParseTurns(provider, path)
 }
 
 func preview(value string) string {

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "claude.turn.transcript",
+  "provider": "claude",
+  "trace_id": "2b5c9a23ab5ac8b69d54bc63ec57b5ad",
+  "session_id": "claude-file-change-tool",
+  "turn_id": "claude-file-change-user",
+  "input": "Update README.",
+  "output": "README updated.",
+  "model": "claude-haiku-4-5-20251001",
+  "cwd": "/tmp/claude-file-change-tool",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [
+      ".md"
+    ],
+    "changed_file_count": 1,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 1,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:changed tool:file_change verification:not_run",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 1,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_run",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:changed",
+    "tool:file_change",
+    "verification:not_run"
+  ],
+  "token_usage": {
+    "input": 24,
+    "output": 5,
+    "total": 29
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "claude.agent",
+      "type": "agent",
+      "input": "Update README.",
+      "output": "README updated."
+    },
+    {
+      "name": "claude.transcript",
+      "type": "generation",
+      "input": "Update README.",
+      "output": "README updated."
+    },
+    {
+      "name": "claude.tool.file_change",
+      "type": "tool",
+      "input": "{\n  \"file_path\": \"README.md\",\n  \"new_string\": \"new\",\n  \"old_string\": \"old\"\n}",
+      "output": "File updated.",
+      "metadata": {
+        "added_files": [],
+        "call_id": "toolu_edit_1",
+        "changed_file_count": 1,
+        "changed_files": [
+          "README.md"
+        ],
+        "deleted_files": [],
+        "file_change_types": {
+          "README.md": "update"
+        },
+        "is_error": false,
+        "modified_files": [
+          "README.md"
+        ],
+        "moved_files": [],
+        "status": "success",
+        "tool_name": "Edit"
+      }
+    },
+    {
+      "name": "claude.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-04T12:07:00Z user\nUpdate README.\n\n## 2026-05-04T12:07:02Z tool.file_change\nInput:\n{\n  \"file_path\": \"README.md\",\n  \"new_string\": \"new\",\n  \"old_string\": \"old\"\n}\n\nOutput:\nFile updated.\n\n## 2026-05-04T12:07:03Z assistant.final\nREADME updated.",
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "claude-file-change-user"
+      }
+    }
+  ]
+}

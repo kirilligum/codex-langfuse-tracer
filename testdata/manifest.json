@@ -3,7 +3,9 @@
   "fixtures": [
     {
       "id": "complete-tools",
-      "rollout": "testdata/rollouts/complete-tools.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/complete-tools.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/complete-tools.normalized.json",
       "categories": [
         "completed_turn",
@@ -12,8 +14,8 @@
         "commentary",
         "visible_reasoning_summary",
         "hidden_reasoning_exclusion",
-        "exec_tool",
-        "apply_patch_metadata",
+        "command_tool",
+        "file_change_metadata",
         "mcp_tool",
         "web_search",
         "tool_search",
@@ -24,7 +26,9 @@
     },
     {
       "id": "complete-no-tools",
-      "rollout": "testdata/rollouts/complete-no-tools.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/complete-no-tools.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/complete-no-tools.normalized.json",
       "categories": [
         "completed_turn",
@@ -35,7 +39,9 @@
     },
     {
       "id": "multi-turn-one-exportable",
-      "rollout": "testdata/rollouts/multi-turn-one-exportable.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/multi-turn-one-exportable.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/multi-turn-one-exportable.normalized.json",
       "categories": [
         "completed_turn",
@@ -47,12 +53,14 @@
     },
     {
       "id": "failed-command",
-      "rollout": "testdata/rollouts/failed-command.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/failed-command.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/failed-command.normalized.json",
       "categories": [
         "completed_turn",
-        "exec_tool",
-        "apply_patch_metadata",
+        "command_tool",
+        "file_change_metadata",
         "failed_command",
         "verification_metadata",
         "terminal_stream"
@@ -60,7 +68,9 @@
     },
     {
       "id": "missing-optional-fields",
-      "rollout": "testdata/rollouts/missing-optional-fields.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/missing-optional-fields.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/missing-optional-fields.normalized.json",
       "categories": [
         "completed_turn",
@@ -70,7 +80,9 @@
     },
     {
       "id": "unknown-event",
-      "rollout": "testdata/rollouts/unknown-event.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/unknown-event.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/unknown-event.normalized.json",
       "categories": [
         "completed_turn",
@@ -80,7 +92,9 @@
     },
     {
       "id": "hidden-reasoning",
-      "rollout": "testdata/rollouts/hidden-reasoning.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/hidden-reasoning.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/hidden-reasoning.normalized.json",
       "categories": [
         "completed_turn",
@@ -91,7 +105,9 @@
     },
     {
       "id": "web-search-contract",
-      "rollout": "testdata/rollouts/web-search-contract.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/web-search-contract.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/web-search-contract.normalized.json",
       "categories": [
         "completed_turn",
@@ -102,7 +118,9 @@
     },
     {
       "id": "response-message-content",
-      "rollout": "testdata/rollouts/response-message-content.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/response-message-content.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/response-message-content.normalized.json",
       "categories": [
         "completed_turn",
@@ -112,12 +130,14 @@
     },
     {
       "id": "secret-tool-output",
-      "rollout": "testdata/rollouts/secret-tool-output.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/secret-tool-output.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/secret-tool-output.normalized.json",
       "categories": [
         "completed_turn",
-        "exec_tool",
-        "apply_patch_metadata",
+        "command_tool",
+        "file_change_metadata",
         "redaction",
         "tool_output_redaction",
         "terminal_stream"
@@ -125,7 +145,9 @@
     },
     {
       "id": "incomplete-turn",
-      "rollout": "testdata/rollouts/incomplete-turn.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/incomplete-turn.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/incomplete-turn.normalized.json",
       "categories": [
         "incomplete_turn"
@@ -133,10 +155,163 @@
     },
     {
       "id": "corrupt-rollout",
-      "rollout": "testdata/rollouts/corrupt-rollout.jsonl",
+      "provider": "codex",
+      "source": "testdata/sources/codex/corrupt-rollout.jsonl",
+      "source_format": "codex_rollout",
       "golden": "testdata/golden/corrupt-rollout.normalized.json",
       "categories": [
         "corrupt_rollout"
+      ]
+    },
+    {
+      "id": "claude-real-derived-structure-basic",
+      "provider": "claude",
+      "source": "testdata/sources/claude/real-derived-structure-basic.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-real-derived-structure-basic.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_real_derived_structure",
+        "no_tools",
+        "trace_preview",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "claude-real-derived-structure-bash",
+      "provider": "claude",
+      "source": "testdata/sources/claude/real-derived-structure-bash.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-real-derived-structure-bash.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_real_derived_structure",
+        "claude_command_tool",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "claude-no-tools",
+      "provider": "claude",
+      "source": "testdata/sources/claude/no-tools.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-no-tools.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "no_tools",
+        "trace_preview"
+      ]
+    },
+    {
+      "id": "claude-bash-tool",
+      "provider": "claude",
+      "source": "testdata/sources/claude/bash-tool.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-bash-tool.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "claude_command_tool",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "claude-file-change-tool",
+      "provider": "claude",
+      "source": "testdata/sources/claude/file-change-tool.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-file-change-tool.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "claude_file_change_tool",
+        "file_change_metadata",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "claude-mcp-tool",
+      "provider": "claude",
+      "source": "testdata/sources/claude/mcp-tool.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-mcp-tool.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "claude_mcp_tool",
+        "mcp_tool",
+        "terminal_stream"
+      ]
+    },
+    {
+      "id": "claude-generic-tool",
+      "provider": "claude",
+      "source": "testdata/sources/claude/generic-tool.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-generic-tool.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "claude_generic_tool"
+      ]
+    },
+    {
+      "id": "claude-incomplete",
+      "provider": "claude",
+      "source": "testdata/sources/claude/incomplete.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-incomplete.normalized.json",
+      "categories": [
+        "incomplete_turn",
+        "claude",
+        "claude_synthetic"
+      ]
+    },
+    {
+      "id": "claude-corrupt",
+      "provider": "claude",
+      "source": "testdata/sources/claude/corrupt.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-corrupt.normalized.json",
+      "categories": [
+        "corrupt_transcript",
+        "claude",
+        "claude_synthetic"
+      ]
+    },
+    {
+      "id": "claude-thinking",
+      "provider": "claude",
+      "source": "testdata/sources/claude/thinking.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-thinking.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_synthetic",
+        "hidden_reasoning_exclusion"
+      ]
+    },
+    {
+      "id": "claude-live-metadata-records",
+      "provider": "claude",
+      "source": "testdata/sources/claude/live-metadata-records.jsonl",
+      "source_format": "claude_transcript",
+      "golden": "testdata/golden/claude-live-metadata-records.normalized.json",
+      "categories": [
+        "completed_turn",
+        "claude",
+        "claude_live_metadata",
+        "hidden_reasoning_exclusion",
+        "terminal_stream"
       ]
     }
   ]
