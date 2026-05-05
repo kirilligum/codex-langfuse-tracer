@@ -51,6 +51,7 @@ func TestLiveClaudeParityTrace(t *testing.T) {
 	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
 		t.Fatalf("claude.transcript usageDetails incomplete: %s", canonicalLiveJSON(transcript))
 	}
+	assertClaudeUsageMath(t, transcript)
 	if cost := liveFloatValue(transcript["calculatedTotalCost"]); cost <= 0 {
 		t.Fatalf("claude.transcript calculatedTotalCost = %v, want > 0: %s", transcript["calculatedTotalCost"], canonicalLiveJSON(transcript))
 	}
@@ -69,6 +70,70 @@ func TestLiveClaudeParityTrace(t *testing.T) {
 	}
 	if !hasMCPServerTag {
 		t.Fatalf("trace tags missing mcp:<server> tag in %#v", tags)
+	}
+}
+
+// TEST-533
+func TestLiveClaudeCostTrace(t *testing.T) {
+	traceID := os.Getenv("LIVE_LANGFUSE_CLAUDE_COST_TRACE_ID")
+	if traceID == "" {
+		t.Skip("set LIVE_LANGFUSE_CLAUDE_COST_TRACE_ID to run live Claude Langfuse cost verification")
+	}
+
+	cfg, err := config.Load(config.DefaultConfigPath())
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	trace := liveGet(t, cfg, "/api/public/traces/"+url.PathEscape(traceID))
+	if name := liveStringValue(trace["name"]); name != "claude.turn.transcript" {
+		t.Fatalf("trace name = %q, want claude.turn.transcript: %s", name, canonicalLiveJSON(trace))
+	}
+	if cost := liveFloatValue(trace["totalCost"]); cost <= 0 {
+		t.Fatalf("trace totalCost = %v, want > 0: %s", trace["totalCost"], canonicalLiveJSON(trace))
+	}
+
+	transcript := liveClaudeObservations(t, cfg, traceID)["claude.transcript"]
+	if transcript == nil {
+		t.Fatalf("missing claude.transcript for trace %s", traceID)
+	}
+	if model := liveStringValue(transcript["model"]); !strings.HasPrefix(model, "claude-") {
+		t.Fatalf("claude.transcript model = %q: %s", model, canonicalLiveJSON(transcript))
+	}
+	if modelID := liveStringValue(transcript["modelId"]); modelID == "" {
+		t.Fatalf("claude.transcript modelId is empty; Langfuse pricing did not match: %s", canonicalLiveJSON(transcript))
+	}
+	if liveFloatValue(transcript["inputPrice"]) == 0 || liveFloatValue(transcript["outputPrice"]) == 0 {
+		t.Fatalf("claude.transcript prices are empty: %s", canonicalLiveJSON(transcript))
+	}
+	usage := liveMapValue(transcript["usageDetails"])
+	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
+		t.Fatalf("claude.transcript usageDetails incomplete: %s", canonicalLiveJSON(transcript))
+	}
+	assertClaudeUsageMath(t, transcript)
+	if cost := liveFloatValue(transcript["calculatedTotalCost"]); cost <= 0 {
+		t.Fatalf("claude.transcript calculatedTotalCost = %v, want > 0: %s", transcript["calculatedTotalCost"], canonicalLiveJSON(transcript))
+	}
+}
+
+func assertClaudeUsageMath(t *testing.T, transcript map[string]any) {
+	t.Helper()
+	usage := liveMapValue(transcript["usageDetails"])
+	input := liveIntValue(usage["input"])
+	cacheCreation := liveIntValue(usage["cache_creation_input_tokens"])
+	cacheRead := liveIntValue(usage["cache_read_input_tokens"])
+	output := liveIntValue(usage["output"])
+	total := liveIntValue(usage["total"])
+	knownTotal := input + cacheCreation + cacheRead + output
+	if total < knownTotal {
+		t.Fatalf("claude.transcript total tokens = %d, want at least input+cache+output %d: %s", total, knownTotal, canonicalLiveJSON(transcript))
+	}
+
+	cost := liveMapValue(transcript["costDetails"])
+	if cacheCreation > 0 && liveFloatValue(cost["cache_creation_input_tokens"]) <= 0 {
+		t.Fatalf("claude.transcript cache creation tokens have no cost: %s", canonicalLiveJSON(transcript))
+	}
+	if cacheRead > 0 && liveFloatValue(cost["cache_read_input_tokens"]) <= 0 {
+		t.Fatalf("claude.transcript cache read tokens have no cost: %s", canonicalLiveJSON(transcript))
 	}
 }
 

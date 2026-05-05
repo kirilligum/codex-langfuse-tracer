@@ -104,8 +104,8 @@ func TestInstallUninstallScripts(t *testing.T) {
 		!strings.Contains(systemctlText, "restart codex-langfuse-watch.service") {
 		t.Fatalf("install did not enable and restart service:\n%s", systemctlText)
 	}
-	if modelPosts != 5 {
-		t.Fatalf("model sync POST count = %d, want 5\nlog=%s", modelPosts, systemctlText)
+	if modelPosts != 7 {
+		t.Fatalf("model sync POST count = %d, want 7\nlog=%s", modelPosts, systemctlText)
 	}
 	syncIndex := strings.Index(systemctlText, "sync post model")
 	restartIndex := strings.Index(systemctlText, "restart codex-langfuse-watch.service")

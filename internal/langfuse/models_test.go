@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,11 +51,11 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncModelPricing: %v", err)
 	}
-	if summary.Created != 5 || summary.Existing != 0 || summary.Conflicting != 0 {
+	if summary.Created != len(expectedCatalogModelNames()) || summary.Existing != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if len(posts) != 5 {
-		t.Fatalf("POST count = %d, want 5", len(posts))
+	if len(posts) != len(expectedCatalogModelNames()) {
+		t.Fatalf("POST count = %d, want %d", len(posts), len(expectedCatalogModelNames()))
 	}
 
 	seen := map[string]bool{}
@@ -84,7 +85,7 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 			t.Fatalf("%s has total price in %#v", modelName, prices)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-haiku-4-5-20251001"} {
+	for _, model := range expectedCatalogModelNames() {
 		if !seen[model] {
 			t.Fatalf("missing created model %s in %#v", model, posts)
 		}
@@ -96,8 +97,8 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 	t.Parallel()
 
 	catalog := modelPricingCatalog()
-	if len(catalog) != 5 {
-		t.Fatalf("catalog length = %d, want 5", len(catalog))
+	if len(catalog) != len(expectedCatalogModelNames()) {
+		t.Fatalf("catalog length = %d, want %d", len(catalog), len(expectedCatalogModelNames()))
 	}
 	seen := map[string]bool{}
 	for _, model := range catalog {
@@ -118,7 +119,7 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 			t.Fatalf("%s price keys = %#v, want %#v", model.ModelName, keys, wantKeys)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-haiku-4-5-20251001"} {
+	for _, model := range expectedCatalogModelNames() {
 		if !seen[model] {
 			t.Fatalf("catalog models = %#v", seen)
 		}
@@ -150,8 +151,42 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 	if price := catalogByName(catalog, "gpt-5.5").Prices["output_reasoning_tokens"]; price != 0.00003 {
 		t.Fatalf("gpt-5.5 reasoning output price = %.12f", price)
 	}
+	opus := catalogByName(catalog, "claude-opus-4-7")
+	if opus.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || opus.SourceDate != "2026-05-05" {
+		t.Fatalf("Claude Opus source = %s %s", opus.SourceURL, opus.SourceDate)
+	}
+	if opus.MatchPattern != `(?i)^claude-opus-4-7$` {
+		t.Fatalf("Claude Opus match pattern = %q", opus.MatchPattern)
+	}
+	for key, want := range map[string]float64{
+		"input":                       0.000005,
+		"cache_creation_input_tokens": 0.00000625,
+		"cache_read_input_tokens":     0.00000050,
+		"output":                      0.000025,
+	} {
+		if got := opus.Prices[key]; !samePrice(got, want) {
+			t.Fatalf("Claude Opus %s price = %.12f, want %.12f", key, got, want)
+		}
+	}
+	sonnet := catalogByName(catalog, "claude-sonnet-4-6")
+	if sonnet.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || sonnet.SourceDate != "2026-05-05" {
+		t.Fatalf("Claude Sonnet source = %s %s", sonnet.SourceURL, sonnet.SourceDate)
+	}
+	if sonnet.MatchPattern != `(?i)^claude-sonnet-4-6$` {
+		t.Fatalf("Claude Sonnet match pattern = %q", sonnet.MatchPattern)
+	}
+	for key, want := range map[string]float64{
+		"input":                       0.000003,
+		"cache_creation_input_tokens": 0.00000375,
+		"cache_read_input_tokens":     0.00000030,
+		"output":                      0.000015,
+	} {
+		if got := sonnet.Prices[key]; !samePrice(got, want) {
+			t.Fatalf("Claude Sonnet %s price = %.12f, want %.12f", key, got, want)
+		}
+	}
 	haiku := catalogByName(catalog, "claude-haiku-4-5-20251001")
-	if haiku.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || haiku.SourceDate != "2026-05-04" {
+	if haiku.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || haiku.SourceDate != "2026-05-05" {
 		t.Fatalf("Claude Haiku source = %s %s", haiku.SourceURL, haiku.SourceDate)
 	}
 	if haiku.MatchPattern != `(?i)^claude-haiku-4-5-20251001$` {
@@ -163,7 +198,7 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 		"cache_read_input_tokens":     0.00000010,
 		"output":                      0.000005,
 	} {
-		if got := haiku.Prices[key]; got != want {
+		if got := haiku.Prices[key]; !samePrice(got, want) {
 			t.Fatalf("Claude Haiku %s price = %.12f, want %.12f", key, got, want)
 		}
 	}
@@ -247,7 +282,47 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 	if posts != 0 {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
-	if summary.Existing != 5 || summary.Created != 0 || summary.Conflicting != 0 {
+	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+// TEST-405
+func TestModelDefinitionSyncAcceptsEquivalentJSONFloatPrices(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.LangfuseConfig{PublicKey: "pk-test", SecretKey: "sk-test"}
+	posts := 0
+	models := make([]modelPayload, 0, len(modelPricingCatalog()))
+	for _, model := range modelPricingCatalog() {
+		payload := modelPayloadFromPricing(model)
+		if payload.ModelName == "claude-opus-4-7" {
+			payload.PricingTiers[0].Prices["cache_read_input_tokens"] = 0.0000005000000001
+		}
+		models = append(models, payload)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/public/models":
+			writeJSON(t, w, map[string]any{"data": models, "meta": map[string]any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/public/models":
+			posts++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	cfg.Host = server.URL
+
+	summary, err := SyncModelPricing(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SyncModelPricing: %v", err)
+	}
+	if posts != 0 {
+		t.Fatalf("POST count = %d, want 0", posts)
+	}
+	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -363,6 +438,18 @@ func expectedPriceKeys(modelName string) []string {
 	return []string{"input", "input_cached_tokens", "output", "output_reasoning_tokens"}
 }
 
+func expectedCatalogModelNames() []string {
+	return []string{
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5-20251001",
+	}
+}
+
 func catalogByName(catalog []modelPricing, name string) modelPricing {
 	for _, model := range catalog {
 		if model.ModelName == name {
@@ -370,4 +457,8 @@ func catalogByName(catalog []modelPricing, name string) modelPricing {
 		}
 	}
 	return modelPricing{}
+}
+
+func samePrice(got, want float64) bool {
+	return math.Abs(got-want) < 0.000000000000001
 }

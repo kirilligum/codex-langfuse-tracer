@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
@@ -18,7 +18,7 @@ const (
 	anthropicPriceSourceURL  = "https://platform.claude.com/docs/en/about-claude/pricing"
 	openAIPriceSourceDate    = "2026-05-02"
 	gpt53CodexSourceDate     = "2026-05-02"
-	anthropicPriceSourceDate = "2026-05-04"
+	anthropicPriceSourceDate = "2026-05-05"
 )
 
 type ModelSyncSummary struct {
@@ -138,6 +138,32 @@ func modelPricingCatalog() []modelPricing {
 			},
 		},
 		{
+			ModelName:    "claude-opus-4-7",
+			MatchPattern: `(?i)^claude-opus-4-7$`,
+			Unit:         "TOKENS",
+			SourceURL:    anthropicPriceSourceURL,
+			SourceDate:   anthropicPriceSourceDate,
+			Prices: map[string]float64{
+				"input":                       0.000005,
+				"cache_creation_input_tokens": 0.00000625,
+				"cache_read_input_tokens":     0.00000050,
+				"output":                      0.000025,
+			},
+		},
+		{
+			ModelName:    "claude-sonnet-4-6",
+			MatchPattern: `(?i)^claude-sonnet-4-6$`,
+			Unit:         "TOKENS",
+			SourceURL:    anthropicPriceSourceURL,
+			SourceDate:   anthropicPriceSourceDate,
+			Prices: map[string]float64{
+				"input":                       0.000003,
+				"cache_creation_input_tokens": 0.00000375,
+				"cache_read_input_tokens":     0.00000030,
+				"output":                      0.000015,
+			},
+		},
+		{
 			ModelName:    "claude-haiku-4-5-20251001",
 			MatchPattern: `(?i)^claude-haiku-4-5-20251001$`,
 			Unit:         "TOKENS",
@@ -188,10 +214,38 @@ func modelMismatchFields(want, got modelPayload) []string {
 	if got.Unit != want.Unit {
 		fields = append(fields, "unit")
 	}
-	if !reflect.DeepEqual(got.PricingTiers, want.PricingTiers) {
+	if !samePricingTiers(got.PricingTiers, want.PricingTiers) {
 		fields = append(fields, "pricingTiers")
 	}
 	return fields
+}
+
+func samePricingTiers(got, want []pricingTierPayload) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index].Name != want[index].Name || got[index].IsDefault != want[index].IsDefault || got[index].Priority != want[index].Priority || len(got[index].Conditions) != len(want[index].Conditions) {
+			return false
+		}
+		if !samePrices(got[index].Prices, want[index].Prices) {
+			return false
+		}
+	}
+	return true
+}
+
+func samePrices(got, want map[string]float64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for key, wantValue := range want {
+		gotValue, ok := got[key]
+		if !ok || math.Abs(gotValue-wantValue) > 0.000000000000001 {
+			return false
+		}
+	}
+	return true
 }
 
 func uniqueStrings(values []string) []string {

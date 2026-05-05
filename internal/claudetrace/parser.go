@@ -15,6 +15,8 @@ type transcriptRecord struct {
 	CWD       string        `json:"cwd"`
 	UUID      string        `json:"uuid"`
 	Timestamp string        `json:"timestamp"`
+	Subtype   string        `json:"subtype"`
+	IsMeta    bool          `json:"isMeta"`
 	Message   transcriptMsg `json:"message"`
 	raw       map[string]any
 }
@@ -58,8 +60,13 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 		}
 
 		switch record.Type {
-		case "summary", "queue-operation", "attachment", "last-prompt":
+		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title":
 			continue
+		case "system":
+			if isKnownSystemMetadata(record.Subtype) {
+				continue
+			}
+			return nil, fmt.Errorf("%s:%d unsupported Claude transcript record subtype %q for type %q", path, lineNumber, record.Subtype, record.Type)
 		case "user":
 			handleUserRecord(&turns, &current, pending, record)
 		case "assistant":
@@ -71,7 +78,19 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 	return turns, nil
 }
 
+func isKnownSystemMetadata(subtype string) bool {
+	switch subtype {
+	case "turn_duration", "stop_hook_summary":
+		return true
+	default:
+		return false
+	}
+}
+
 func handleUserRecord(turns *[]agenttrace.Turn, current **agenttrace.Turn, pending map[string]pendingTool, record transcriptRecord) {
+	if record.IsMeta {
+		return
+	}
 	parts := contentParts(record.Message.Content)
 	hasPromptText := false
 	for _, part := range parts {

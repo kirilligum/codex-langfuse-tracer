@@ -240,7 +240,7 @@ Navigation metadata is always-on. A read-only trace means `navigation contains f
 
 Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on provider transcript observations; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
 
-Langfuse calculates cost. The built-in pricing sync creates source-backed model definitions for supported Codex/OpenAI models and Claude Haiku 4.5. Claude Code subscription billing is separate from Anthropic API token pricing; these definitions are for Langfuse trace cost columns when Claude records compatible model and usage details.
+Langfuse calculates cost. The built-in pricing sync creates source-backed model definitions for supported Codex/OpenAI models and current Claude models: Opus 4.7, Sonnet 4.6, and Haiku 4.5. Claude Code subscription billing is separate from Anthropic API token pricing; these definitions are for Langfuse trace cost columns when Claude records compatible model and usage details.
 
 `install.sh` runs `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` before restarting `codex-langfuse-watch.service`. The same setup can be run directly:
 
@@ -248,7 +248,7 @@ Langfuse calculates cost. The built-in pricing sync creates source-backed model 
 ~/.codex/bin/codex-langfuse-exporter --sync-model-pricing
 ```
 
-The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. It covers `claude-haiku-4-5-20251001` using Claude Haiku 4.5 pricing from https://platform.claude.com/docs/en/about-claude/pricing on 2026-05-04. OpenAI/Codex usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; Claude usage keys are `input`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output`, and `total`. Child token buckets are subtracted from parent input/output buckets to avoid double counting.
+The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. It covers `claude-opus-4-7`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` using Claude Opus 4.7, Claude Sonnet 4.6, and Claude Haiku 4.5 pricing from https://platform.claude.com/docs/en/about-claude/pricing on 2026-05-05. OpenAI/Codex usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; Claude usage keys are `input`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output`, and `total`. Child token buckets are subtracted from parent input/output buckets to avoid double counting. For Claude Code traces, a small `input` count can be correct when most prompt context is reported in `cache_creation_input_tokens` and `cache_read_input_tokens`.
 
 When provider pricing changes or a supported coding agent emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
 
@@ -388,6 +388,7 @@ Common failure modes:
 - Missing Langfuse credentials in `~/.codex/config.toml`.
 - Wrong Langfuse host for the project keys.
 - Native Codex OTEL still enabled, causing noisy duplicate traces.
+- Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Use `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` for explicit backfill, or add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports.
 - Watch state already marked a historical turn as processed.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.

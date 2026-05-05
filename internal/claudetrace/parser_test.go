@@ -2,6 +2,7 @@ package claudetrace
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -166,7 +167,18 @@ func TestClaudeParserLiveMetadataRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"SECRET_REASONING_DO_NOT_EXPORT", "fixture skill listing", "lastPrompt", "queue-operation"} {
+	for _, forbidden := range []string{
+		"SECRET_REASONING_DO_NOT_EXPORT",
+		"fixture skill listing",
+		"lastPrompt",
+		"queue-operation",
+		"system-reminder",
+		"permission-mode",
+		"file-history-snapshot",
+		"ai-title",
+		"turn_duration",
+		"stop_hook_summary",
+	} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("live metadata leaked %q in %s", forbidden, string(raw))
 		}
@@ -214,6 +226,24 @@ func TestClaudeParserIncompleteAndCorrupt(t *testing.T) {
 	}
 	if text := err.Error(); !strings.Contains(text, "corrupt.jsonl:2") || !strings.Contains(text, "not valid JSON") {
 		t.Fatalf("corrupt error = %q", text)
+	}
+}
+
+// TEST-504
+func TestClaudeParserRejectsUnknownSystemSubtype(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "unknown-system.jsonl")
+	raw := `{"type":"system","subtype":"new-contract","sessionId":"claude-unknown-system","timestamp":"2026-05-05T02:00:00.000Z"}`
+	if err := os.WriteFile(path, []byte(raw+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ParseTurns(path)
+	if err == nil {
+		t.Fatal("unknown system subtype parsed successfully")
+	}
+	if text := err.Error(); !strings.Contains(text, "unsupported Claude transcript record subtype") || !strings.Contains(text, "new-contract") {
+		t.Fatalf("error = %q", text)
 	}
 }
 
