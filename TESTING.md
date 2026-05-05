@@ -66,6 +66,12 @@ Model pricing sync checks:
 go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropicModels|TestModelDefinitionSyncCreatesMissingModels' -count=1
 ```
 
+Live Claude pricing check for a trace produced by the same validation session:
+
+```sh
+LIVE_LANGFUSE_CLAUDE_COST_TRACE_ID="<trace-id>" go test ./internal/langfuse -run TestLiveClaudeCostTrace -count=1
+```
+
 ## Fuzz Smoke
 
 ```sh
