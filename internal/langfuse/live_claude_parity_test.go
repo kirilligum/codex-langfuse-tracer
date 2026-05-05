@@ -51,6 +51,7 @@ func TestLiveClaudeParityTrace(t *testing.T) {
 	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
 		t.Fatalf("claude.transcript usageDetails incomplete: %s", canonicalLiveJSON(transcript))
 	}
+	assertClaudeUsageMath(t, transcript)
 	if cost := liveFloatValue(transcript["calculatedTotalCost"]); cost <= 0 {
 		t.Fatalf("claude.transcript calculatedTotalCost = %v, want > 0: %s", transcript["calculatedTotalCost"], canonicalLiveJSON(transcript))
 	}
@@ -108,8 +109,31 @@ func TestLiveClaudeCostTrace(t *testing.T) {
 	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
 		t.Fatalf("claude.transcript usageDetails incomplete: %s", canonicalLiveJSON(transcript))
 	}
+	assertClaudeUsageMath(t, transcript)
 	if cost := liveFloatValue(transcript["calculatedTotalCost"]); cost <= 0 {
 		t.Fatalf("claude.transcript calculatedTotalCost = %v, want > 0: %s", transcript["calculatedTotalCost"], canonicalLiveJSON(transcript))
+	}
+}
+
+func assertClaudeUsageMath(t *testing.T, transcript map[string]any) {
+	t.Helper()
+	usage := liveMapValue(transcript["usageDetails"])
+	input := liveIntValue(usage["input"])
+	cacheCreation := liveIntValue(usage["cache_creation_input_tokens"])
+	cacheRead := liveIntValue(usage["cache_read_input_tokens"])
+	output := liveIntValue(usage["output"])
+	total := liveIntValue(usage["total"])
+	knownTotal := input + cacheCreation + cacheRead + output
+	if total < knownTotal {
+		t.Fatalf("claude.transcript total tokens = %d, want at least input+cache+output %d: %s", total, knownTotal, canonicalLiveJSON(transcript))
+	}
+
+	cost := liveMapValue(transcript["costDetails"])
+	if cacheCreation > 0 && liveFloatValue(cost["cache_creation_input_tokens"]) <= 0 {
+		t.Fatalf("claude.transcript cache creation tokens have no cost: %s", canonicalLiveJSON(transcript))
+	}
+	if cacheRead > 0 && liveFloatValue(cost["cache_read_input_tokens"]) <= 0 {
+		t.Fatalf("claude.transcript cache read tokens have no cost: %s", canonicalLiveJSON(transcript))
 	}
 }
 
