@@ -51,11 +51,11 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncModelPricing: %v", err)
 	}
-	if summary.Created != 6 || summary.Existing != 0 || summary.Conflicting != 0 {
+	if summary.Created != len(expectedCatalogModelNames()) || summary.Existing != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if len(posts) != 6 {
-		t.Fatalf("POST count = %d, want 6", len(posts))
+	if len(posts) != len(expectedCatalogModelNames()) {
+		t.Fatalf("POST count = %d, want %d", len(posts), len(expectedCatalogModelNames()))
 	}
 
 	seen := map[string]bool{}
@@ -85,7 +85,7 @@ func TestModelDefinitionSyncCreatesMissingModels(t *testing.T) {
 			t.Fatalf("%s has total price in %#v", modelName, prices)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-opus-4-7", "claude-haiku-4-5-20251001"} {
+	for _, model := range expectedCatalogModelNames() {
 		if !seen[model] {
 			t.Fatalf("missing created model %s in %#v", model, posts)
 		}
@@ -97,8 +97,8 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 	t.Parallel()
 
 	catalog := modelPricingCatalog()
-	if len(catalog) != 6 {
-		t.Fatalf("catalog length = %d, want 6", len(catalog))
+	if len(catalog) != len(expectedCatalogModelNames()) {
+		t.Fatalf("catalog length = %d, want %d", len(catalog), len(expectedCatalogModelNames()))
 	}
 	seen := map[string]bool{}
 	for _, model := range catalog {
@@ -119,7 +119,7 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 			t.Fatalf("%s price keys = %#v, want %#v", model.ModelName, keys, wantKeys)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "claude-opus-4-7", "claude-haiku-4-5-20251001"} {
+	for _, model := range expectedCatalogModelNames() {
 		if !seen[model] {
 			t.Fatalf("catalog models = %#v", seen)
 		}
@@ -166,6 +166,23 @@ func TestModelPricingCatalogCoversOpenAIAndAnthropicModels(t *testing.T) {
 	} {
 		if got := opus.Prices[key]; !samePrice(got, want) {
 			t.Fatalf("Claude Opus %s price = %.12f, want %.12f", key, got, want)
+		}
+	}
+	sonnet := catalogByName(catalog, "claude-sonnet-4-6")
+	if sonnet.SourceURL != "https://platform.claude.com/docs/en/about-claude/pricing" || sonnet.SourceDate != "2026-05-05" {
+		t.Fatalf("Claude Sonnet source = %s %s", sonnet.SourceURL, sonnet.SourceDate)
+	}
+	if sonnet.MatchPattern != `(?i)^claude-sonnet-4-6$` {
+		t.Fatalf("Claude Sonnet match pattern = %q", sonnet.MatchPattern)
+	}
+	for key, want := range map[string]float64{
+		"input":                       0.000003,
+		"cache_creation_input_tokens": 0.00000375,
+		"cache_read_input_tokens":     0.00000030,
+		"output":                      0.000015,
+	} {
+		if got := sonnet.Prices[key]; !samePrice(got, want) {
+			t.Fatalf("Claude Sonnet %s price = %.12f, want %.12f", key, got, want)
 		}
 	}
 	haiku := catalogByName(catalog, "claude-haiku-4-5-20251001")
@@ -265,7 +282,7 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 	if posts != 0 {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
-	if summary.Existing != 6 || summary.Created != 0 || summary.Conflicting != 0 {
+	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -305,7 +322,7 @@ func TestModelDefinitionSyncAcceptsEquivalentJSONFloatPrices(t *testing.T) {
 	if posts != 0 {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
-	if summary.Existing != 6 || summary.Created != 0 || summary.Conflicting != 0 {
+	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -419,6 +436,18 @@ func expectedPriceKeys(modelName string) []string {
 		return []string{"cache_creation_input_tokens", "cache_read_input_tokens", "input", "output"}
 	}
 	return []string{"input", "input_cached_tokens", "output", "output_reasoning_tokens"}
+}
+
+func expectedCatalogModelNames() []string {
+	return []string{
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5-20251001",
+	}
 }
 
 func catalogByName(catalog []modelPricing, name string) modelPricing {

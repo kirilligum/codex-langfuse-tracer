@@ -200,6 +200,7 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 		"gpt-5.4-mini",
 		"gpt-5.3-codex-spark",
 		"claude-opus-4-7",
+		"claude-sonnet-4-6",
 		"claude-haiku-4-5-20251001",
 		"https://developers.openai.com/api/docs/models/gpt-5.3-codex",
 		"https://platform.claude.com/docs/en/about-claude/pricing",

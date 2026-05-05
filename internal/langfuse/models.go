@@ -151,6 +151,19 @@ func modelPricingCatalog() []modelPricing {
 			},
 		},
 		{
+			ModelName:    "claude-sonnet-4-6",
+			MatchPattern: `(?i)^claude-sonnet-4-6$`,
+			Unit:         "TOKENS",
+			SourceURL:    anthropicPriceSourceURL,
+			SourceDate:   anthropicPriceSourceDate,
+			Prices: map[string]float64{
+				"input":                       0.000003,
+				"cache_creation_input_tokens": 0.00000375,
+				"cache_read_input_tokens":     0.00000030,
+				"output":                      0.000015,
+			},
+		},
+		{
 			ModelName:    "claude-haiku-4-5-20251001",
 			MatchPattern: `(?i)^claude-haiku-4-5-20251001$`,
 			Unit:         "TOKENS",
