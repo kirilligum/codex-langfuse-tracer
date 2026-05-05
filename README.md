@@ -275,7 +275,9 @@ Langfuse calculates cost during ingestion. Existing rows are not backfilled auto
 
 MCP metadata is derived only from observed structured MCP events. Configured but unused MCP servers are not exported as usage. Exact MCP tools such as `issues/list` stay in observation metadata and are not trace tags.
 
-Trace tags are emitted through `langfuse.trace.tags`. The tag contract is the active provider's insight navigation values plus observed `mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:command`, `tool:file_change`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
+Trace tags are emitted through `langfuse.trace.tags`. The built-in tag contract is the active provider's insight navigation values plus observed `mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:command`, `tool:file_change`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
+
+Source-level custom tags can be added as compiled Go rules in `internal/agenttrace/tagrules.go`; see `internal/agenttrace/TAG_RULES.md` for examples such as emitting a fixed tag when the user's request contains a known string. Custom tags are code changes, not runtime configuration.
 
 ## Filtering
 

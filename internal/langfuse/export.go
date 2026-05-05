@@ -94,7 +94,7 @@ func EmitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceNam
 		sdktrace.WithBatcher(exporter),
 	)
 	tracer := provider.Tracer(buildinfo.ScopeName, trace.WithInstrumentationVersion(buildinfo.Version))
-	traceTags := agenttrace.BuildInsightRollup(turn).Tags()
+	traceTags := agenttrace.BuildTraceTags(turn)
 	profile := turn.Profile()
 
 	agentCtx, agent := tracer.Start(ctx, profile.AgentName,

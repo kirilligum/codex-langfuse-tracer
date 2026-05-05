@@ -156,7 +156,7 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 	}
 
 	spans := emitAcceptanceSpans(t, completeTurn)
-	rawTags, err := json.Marshal(agenttrace.BuildInsightRollup(completeTurn).Tags())
+	rawTags, err := json.Marshal(agenttrace.BuildTraceTags(completeTurn))
 	if err != nil {
 		t.Fatal(err)
 	}

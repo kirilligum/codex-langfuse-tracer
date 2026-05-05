@@ -161,6 +161,7 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 		"codex.tool.mcp",
 		"claude.tool.mcp",
 		"issues/list",
+		"internal/agenttrace/TAG_RULES.md",
 		"future watcher exports",
 		"explicit re-export",
 		"codex-langfuse-watch.service",

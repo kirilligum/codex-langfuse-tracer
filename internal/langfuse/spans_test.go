@@ -179,7 +179,7 @@ func TestLangfuseProviderNeutralSemanticTagsExportedOnSpans(t *testing.T) {
 func validateLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 	t.Helper()
 	turn := completeTurn(t)
-	rawTags, err := json.Marshal(agenttrace.BuildInsightRollup(turn).Tags())
+	rawTags, err := json.Marshal(agenttrace.BuildTraceTags(turn))
 	if err != nil {
 		t.Fatal(err)
 	}

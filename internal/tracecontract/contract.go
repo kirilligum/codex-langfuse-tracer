@@ -45,7 +45,7 @@ func FromTurn(turn agenttrace.Turn) Trace {
 		Model:         turn.Model,
 		CWD:           turn.CWD,
 		Metadata:      rollup.Metadata(),
-		Tags:          rollup.Tags(),
+		Tags:          agenttrace.BuildTraceTags(turn),
 		Exportable:    true,
 		Observations: []Observation{
 			{Name: profile.AgentName, Type: "agent", Input: agenttrace.ExportText(turn.InputText()), Output: agenttrace.ExportText(turn.OutputText())},
