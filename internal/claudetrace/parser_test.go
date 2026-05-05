@@ -177,6 +177,7 @@ func TestClaudeParserLiveMetadataRecords(t *testing.T) {
 		"file-history-snapshot",
 		"ai-title",
 		"turn_duration",
+		"stop_hook_summary",
 	} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("live metadata leaked %q in %s", forbidden, string(raw))

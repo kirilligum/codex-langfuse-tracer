@@ -63,7 +63,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title":
 			continue
 		case "system":
-			if record.Subtype == "turn_duration" {
+			if isKnownSystemMetadata(record.Subtype) {
 				continue
 			}
 			return nil, fmt.Errorf("%s:%d unsupported Claude transcript record subtype %q for type %q", path, lineNumber, record.Subtype, record.Type)
@@ -76,6 +76,15 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 		}
 	}
 	return turns, nil
+}
+
+func isKnownSystemMetadata(subtype string) bool {
+	switch subtype {
+	case "turn_duration", "stop_hook_summary":
+		return true
+	default:
+		return false
+	}
 }
 
 func handleUserRecord(turns *[]agenttrace.Turn, current **agenttrace.Turn, pending map[string]pendingTool, record transcriptRecord) {
