@@ -388,6 +388,7 @@ Common failure modes:
 - Missing Langfuse credentials in `~/.codex/config.toml`.
 - Wrong Langfuse host for the project keys.
 - Native Codex OTEL still enabled, causing noisy duplicate traces.
+- Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Use `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` for explicit backfill, or add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports.
 - Watch state already marked a historical turn as processed.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.
