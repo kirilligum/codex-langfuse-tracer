@@ -1,5 +1,7 @@
 # Codex Langfuse Tracer
 
+[![Codex Langfuse Tracer showcase](https://img.youtube.com/vi/Y6XycKR0Z0I/hqdefault.jpg)](https://youtu.be/Y6XycKR0Z0I)
+
 Export completed Codex CLI and Claude Code turns to Langfuse.
 
 This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends clean Langfuse traces with prompts, final answers, visible terminal activity, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
