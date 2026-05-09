@@ -49,13 +49,50 @@ cd codex-langfuse-tracer
 
 ### 2. Configure Langfuse
 
-Create a Langfuse API key pair in your target project, then add the credentials to `~/.codex/config.toml`:
+The exporter reads one Langfuse project key pair from `~/.codex/config.toml`. Use one of these two setups.
+
+#### Option A: Local-only Langfuse
+
+Use this when Langfuse only listens on your workstation, for example `http://localhost:3000`. Langfuse still expects a project public key and secret key for ingestion, but they do not need to protect a hosted service. For a fresh local self-hosted instance, add fixed local-only keys to the Langfuse service environment before first startup:
+
+```dotenv
+LANGFUSE_INIT_ORG_ID=local
+LANGFUSE_INIT_ORG_NAME=Local
+LANGFUSE_INIT_PROJECT_ID=codex-local
+LANGFUSE_INIT_PROJECT_NAME=Codex-Local
+LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-local-codex-tracer
+LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-local-codex-tracer
+```
+
+Set the same local-only values in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.langfuse.env]
+LANGFUSE_HOST = "http://localhost:3000"
+LANGFUSE_PUBLIC_KEY = "pk-lf-local-codex-tracer"
+LANGFUSE_SECRET_KEY = "sk-lf-local-codex-tracer"
+```
+
+Do not use these fixed values for a shared, public, or remotely reachable Langfuse instance. If your local Langfuse project already exists, create or copy a project API key in the local Langfuse UI instead of relying on first-start initialization.
+
+#### Option B: Hosted or shared Langfuse
+
+Use this for Langfuse Cloud or any self-hosted Langfuse instance reachable by other machines. Create a real project API key pair in the target Langfuse project: open the project, go to **Project Settings -> API Keys**, create a new API key, and copy both the public key and secret key. Langfuse documents project API keys in [project settings](https://langfuse.com/faq/all/where-are-langfuse-api-keys) and self-hosted first-start key seeding through [`LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY`](https://langfuse.com/self-hosting/administration/headless-initialization).
+
+For hosted self-hosted deployments that need deterministic first-start provisioning, generate unique keys instead of using the local-only defaults:
+
+```sh
+printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-%s\n' "$(openssl rand -hex 16)"
+printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-%s\n' "$(openssl rand -hex 32)"
+```
+
+Then add the hosted credentials to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.langfuse.env]
 LANGFUSE_HOST = "https://cloud.langfuse.com"
-LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
-LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
+LANGFUSE_PUBLIC_KEY = "pk-lf-..."
+LANGFUSE_SECRET_KEY = "sk-lf-..."
 ```
 
 Host examples:
@@ -66,7 +103,7 @@ Host examples:
 
 If your config already has a `[mcp_servers.langfuse]` block for Langfuse MCP, keep it. The exporter only reads the `env` values.
 
-Protect the config file if it contains API keys:
+Protect the config file if it contains hosted or shared-instance API keys:
 
 ```sh
 chmod 600 ~/.codex/config.toml
