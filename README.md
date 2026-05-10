@@ -75,6 +75,20 @@ LANGFUSE_SECRET_KEY = "sk-lf-local-codex-tracer"
 
 Do not use these fixed values for a shared, public, or remotely reachable Langfuse instance. If your local Langfuse project already exists, create or copy a project API key in the local Langfuse UI instead of relying on first-start initialization.
 
+If the local Langfuse UI should be reachable from another device on a private network such as Tailscale, generate unique project keys instead of using the fixed local-only defaults above. Set Langfuse's `NEXTAUTH_URL` to the URL users open in the browser, for example `http://100.x.y.z:3000`. Leaving `NEXTAUTH_URL` at `http://localhost:3000` can make sign-in redirect to the wrong machine.
+
+For a private single-user local instance, create the initial UI user through Langfuse's init environment and disable future signups:
+
+```dotenv
+NEXTAUTH_URL=http://100.x.y.z:3000
+LANGFUSE_INIT_USER_EMAIL=admin@local.langfuse
+LANGFUSE_INIT_USER_NAME=Local Admin
+LANGFUSE_INIT_USER_PASSWORD=<strong-local-password>
+AUTH_DISABLE_SIGNUP=true
+```
+
+If your Langfuse Docker Compose file does not pass `AUTH_DISABLE_SIGNUP` through to the `langfuse-web` container, add it to that service's environment or to a local Compose override. `AUTH_DISABLE_SIGNUP=true` prevents new accounts; it does not remove users that already exist.
+
 #### Option B: Hosted or shared Langfuse
 
 Use this for Langfuse Cloud or any self-hosted Langfuse instance reachable by other machines. Create a real project API key pair in the target Langfuse project: open the project, go to **Project Settings -> API Keys**, create a new API key, and copy both the public key and secret key. Langfuse documents project API keys in [project settings](https://langfuse.com/faq/all/where-are-langfuse-api-keys) and self-hosted first-start key seeding through [`LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY`](https://langfuse.com/self-hosting/administration/headless-initialization).
@@ -115,7 +129,14 @@ chmod 600 ~/.codex/config.toml
 ./install.sh
 ```
 
-The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it.
+The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance. If model pricing sync fails, the installer stops before installing the `codex-langfuse-watch.service` unit.
+
+Useful preflight checks after setting equivalent shell variables:
+
+```sh
+curl -fsS "$LANGFUSE_HOST/api/public/health"
+curl -fsS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" "$LANGFUSE_HOST/api/public/models?page=1&limit=1" >/dev/null
+```
 
 Installed files:
 
@@ -428,6 +449,11 @@ Common failure modes:
 
 - Missing Langfuse credentials in `~/.codex/config.toml`.
 - Wrong Langfuse host for the project keys.
+- `./install.sh` fails with `connect: connection refused`: Langfuse is not running at `LANGFUSE_HOST`, or the host URL points at the wrong machine or port.
+- `./install.sh` fails with `Langfuse model list /api/public/models failed with HTTP 401`: the configured public/secret key pair is not valid for the Langfuse instance at `LANGFUSE_HOST`. Seed the same `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, or create/copy a project key pair from the Langfuse UI and update `~/.codex/config.toml`.
+- `systemctl --user status codex-langfuse-watch.service` says the unit is not found after `./install.sh`: the installer likely failed before the service install step. Fix the Langfuse reachability or authentication error and rerun `./install.sh`.
+- Browser sign-in redirects to `localhost`: the Langfuse server's `NEXTAUTH_URL` is still set to `http://localhost:3000`. Set it to the actual browser URL, such as a Tailscale URL, and recreate the `langfuse-web` container.
+- A browser on Windows cannot reach a Tailscale IP that works from WSL: Tailscale may be running only inside WSL. Run Tailscale on the Windows host too, or open the browser inside the same WSL network environment.
 - Native Codex OTEL still enabled, causing noisy duplicate traces.
 - Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Use `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` for explicit backfill, or add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports.
 - Watch state already marked a historical turn as processed.
