@@ -77,6 +77,7 @@ func (s *statusRecorder) StatusCode() int {
 }
 
 func EmitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter) error {
+	turn = enrichWorkspaceMetadata(ctx, turn)
 	ids, err := spanIDs(turn)
 	if err != nil {
 		return err
@@ -226,6 +227,12 @@ func metadataAttributes(turn agenttrace.Turn) []attribute.KeyValue {
 	}
 	if turn.CWD != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata.cwd", turn.CWD))
+	}
+	if turn.GitBranch != "" {
+		attrs = append(attrs,
+			attribute.String("langfuse.trace.metadata.git_branch", turn.GitBranch),
+			attribute.String("langfuse.observation.metadata.git_branch", turn.GitBranch),
+		)
 	}
 	return attrs
 }

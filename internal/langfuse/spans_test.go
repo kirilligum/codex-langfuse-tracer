@@ -3,6 +3,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -160,6 +161,30 @@ func TestCountMetadataExportedOnAgent(t *testing.T) {
 			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
 				t.Fatalf("%s repeats root insight attribute %s", span.Name, key)
 			}
+		}
+	}
+}
+
+func TestWorkspaceGitBranchMetadataExported(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "checkout", "-b", "feature/langfuse-branch")
+
+	turn := completeTurn(t)
+	turn.CWD = root
+	spans := emitTurnSpans(t, turn)
+	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
+		span := spans.ByName(name)
+		if span.Name == "" {
+			t.Fatalf("missing span %s", name)
+		}
+		if span.Attributes["langfuse.trace.metadata.git_branch"] != "feature/langfuse-branch" {
+			t.Fatalf("%s git branch trace metadata = %q", name, span.Attributes["langfuse.trace.metadata.git_branch"])
+		}
+		if span.Attributes["langfuse.observation.metadata.git_branch"] != "feature/langfuse-branch" {
+			t.Fatalf("%s git branch observation metadata = %q", name, span.Attributes["langfuse.observation.metadata.git_branch"])
 		}
 	}
 }
@@ -418,4 +443,13 @@ func failedCommandTurn(t *testing.T) agenttrace.Turn {
 		t.Fatalf("exportable failed turns = %d", len(exportable))
 	}
 	return exportable[0]
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
 }

@@ -14,6 +14,7 @@ type Turn struct {
 	StartTS         string
 	EndTS           string
 	CWD             string
+	GitBranch       string
 	Model           string
 	UserMessages    []string
 	AssistantTexts  []string

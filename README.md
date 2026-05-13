@@ -296,6 +296,8 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `<provider>.tool.file_change`; root metadata only carries compact file-impact summaries.
 
+Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts.
+
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 
 Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on provider transcript observations; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
