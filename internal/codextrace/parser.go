@@ -65,6 +65,18 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 				traceID = agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID)
 			}
 			currentTurnID = turnID
+			if existing := turnsByID[turnID]; existing != nil {
+				if existing.TraceID == "" {
+					existing.TraceID = traceID
+				}
+				if existing.CWD == "" {
+					existing.CWD = agenttrace.StringOr(payload["cwd"], sessionCWD)
+				}
+				if existing.Model == "" {
+					existing.Model = agenttrace.StringOr(payload["model"], sessionModel)
+				}
+				continue
+			}
 			turn := &agenttrace.Turn{
 				Provider:  agenttrace.ProviderCodex,
 				SessionID: sessionID,
@@ -75,9 +87,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 				CWD:       agenttrace.StringOr(payload["cwd"], sessionCWD),
 				Model:     agenttrace.StringOr(payload["model"], sessionModel),
 			}
-			if _, exists := turnsByID[turnID]; !exists {
-				turnOrder = append(turnOrder, turnID)
-			}
+			turnOrder = append(turnOrder, turnID)
 			turnsByID[turnID] = turn
 			continue
 		}

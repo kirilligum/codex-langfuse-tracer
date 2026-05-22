@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
@@ -74,6 +75,48 @@ func TestResponseMessageContentShapes(t *testing.T) {
 		if got := textFromContent(unsupported, "input_text"); got != "" {
 			t.Fatalf("textFromContent(%#v) = %q, want empty", unsupported, got)
 		}
+	}
+}
+
+func TestRepeatedTurnContextPreservesAccumulatedTurn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	raw := []byte(strings.Join([]string{
+		`{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-repeat","model":"gpt-5.5","cwd":"/tmp/repeat"}}`,
+		`{"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-repeat","cwd":"/tmp/repeat","model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Implement the plan"}}`,
+		`{"timestamp":"2026-05-01T10:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Reading files."}}`,
+		`{"timestamp":"2026-05-01T10:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}}`,
+		`{"timestamp":"2026-05-01T10:00:05Z","type":"turn_context","payload":{"turn_id":"turn-repeat","cwd":"/tmp/repeat","model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-05-01T10:00:06Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Done"}}`,
+		`{"timestamp":"2026-05-01T10:00:07Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done"}}`,
+		"",
+	}, "\n"))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := ParseTurns(path)
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	exportable := agenttrace.ExportableTurns(turns)
+	if len(exportable) != 1 {
+		t.Fatalf("exportable turns = %d, want 1", len(exportable))
+	}
+	turn := exportable[0]
+	if turn.InputText() != "Implement the plan" {
+		t.Fatalf("input = %q", turn.InputText())
+	}
+	if turn.OutputText() != "Done" {
+		t.Fatalf("output = %q", turn.OutputText())
+	}
+	if turn.TokenUsage == nil || turn.TokenUsage.InputTokens != 10 {
+		t.Fatalf("token usage was not preserved: %+v", turn.TokenUsage)
+	}
+	if len(turn.Observations) != 1 || turn.Observations[0].Name != "codex.message.commentary" {
+		t.Fatalf("observations were not preserved: %+v", turn.Observations)
 	}
 }
 

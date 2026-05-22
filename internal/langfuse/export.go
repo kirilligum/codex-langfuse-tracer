@@ -27,6 +27,10 @@ func AuthHeader(cfg config.LangfuseConfig) string {
 	return "Basic " + token
 }
 
+type exportOptions struct {
+	UserIDMode string
+}
+
 func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, environment, serviceName string) (int, error) {
 	recorder := &statusRecorder{base: http.DefaultTransport}
 	exporter, err := otlptracehttp.New(ctx,
@@ -40,7 +44,7 @@ func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.
 	if err != nil {
 		return 0, err
 	}
-	if err := EmitTurn(ctx, turn, environment, serviceName, exporter); err != nil {
+	if err := emitTurn(ctx, turn, environment, serviceName, exporter, exportOptions{UserIDMode: cfg.UserIDMode}); err != nil {
 		_ = exporter.Shutdown(ctx)
 		return 0, err
 	}
@@ -77,6 +81,10 @@ func (s *statusRecorder) StatusCode() int {
 }
 
 func EmitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter) error {
+	return emitTurn(ctx, turn, environment, serviceName, exporter, exportOptions{})
+}
+
+func emitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceName string, exporter sdktrace.SpanExporter, opts exportOptions) error {
 	turn = enrichWorkspaceMetadata(ctx, turn)
 	ids, err := spanIDs(turn)
 	if err != nil {
@@ -100,29 +108,29 @@ func EmitTurn(ctx context.Context, turn agenttrace.Turn, environment, serviceNam
 
 	agentCtx, agent := tracer.Start(ctx, profile.AgentName,
 		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(turnAttributes(turn, environment, "agent", true, traceTags)...),
+		trace.WithAttributes(turnAttributes(turn, environment, "agent", true, traceTags, opts)...),
 	)
 	transcriptCtx, transcript := tracer.Start(agentCtx, profile.TranscriptName,
 		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(transcriptAttributes(turn, environment, traceTags)...),
+		trace.WithAttributes(transcriptAttributes(turn, environment, traceTags, opts)...),
 	)
 	transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	_ = transcriptCtx
 
 	for index, observation := range turn.Observations {
-		emitObservation(agentCtx, tracer, turn, observation, environment, strconv.Itoa(index), traceTags)
+		emitObservation(agentCtx, tracer, turn, observation, environment, strconv.Itoa(index), traceTags, opts)
 	}
 	if terminal := agenttrace.TerminalObservation(turn); terminal != nil {
-		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal", traceTags)
+		emitObservation(agentCtx, tracer, turn, *terminal, environment, "terminal", traceTags, opts)
 	}
 	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	return provider.Shutdown(ctx)
 }
 
-func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, key string, traceTags []string) {
+func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, key string, traceTags []string, opts exportOptions) {
 	_, span := tracer.Start(ctx, observation.Name,
 		trace.WithTimestamp(nsTime(observation.StartTimeUnixNS)),
-		trace.WithAttributes(observationAttributes(turn, observation, environment, traceTags)...),
+		trace.WithAttributes(observationAttributes(turn, observation, environment, traceTags, opts)...),
 	)
 	span.End(trace.WithTimestamp(nsTime(observation.EndTimeUnixNS)))
 	_ = key
@@ -143,9 +151,9 @@ func spanIDs(turn agenttrace.Turn) ([]string, error) {
 	return ids, nil
 }
 
-func baseObservationAttributes(turn agenttrace.Turn, environment, observationType, input, output string) []attribute.KeyValue {
+func baseObservationAttributes(turn agenttrace.Turn, environment, observationType, input, output string, opts exportOptions) []attribute.KeyValue {
 	profile := turn.Profile()
-	return []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		attribute.String("langfuse.trace.name", profile.TraceName),
 		attribute.String("langfuse.trace.metadata.provider", profile.Provider),
 		attribute.String("langfuse.session.id", turn.SessionID),
@@ -156,10 +164,14 @@ func baseObservationAttributes(turn agenttrace.Turn, environment, observationTyp
 		attribute.String("langfuse.observation.input", strconv.Quote(agenttrace.ExportText(input))),
 		attribute.String("langfuse.observation.output", strconv.Quote(agenttrace.ExportText(output))),
 	}
+	if userID := userIDAttribute(turn, opts); userID != "" {
+		attrs = append(attrs, attribute.String("langfuse.user.id", userID))
+	}
+	return attrs
 }
 
-func turnAttributes(turn agenttrace.Turn, environment, observationType string, includeTraceIO bool, traceTags []string) []attribute.KeyValue {
-	attrs := baseObservationAttributes(turn, environment, observationType, turn.InputText(), turn.OutputText())
+func turnAttributes(turn agenttrace.Turn, environment, observationType string, includeTraceIO bool, traceTags []string, opts exportOptions) []attribute.KeyValue {
+	attrs := baseObservationAttributes(turn, environment, observationType, turn.InputText(), turn.OutputText(), opts)
 	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	if includeTraceIO {
 		attrs = append(attrs,
@@ -174,8 +186,8 @@ func turnAttributes(turn agenttrace.Turn, environment, observationType string, i
 	return attrs
 }
 
-func transcriptAttributes(turn agenttrace.Turn, environment string, traceTags []string) []attribute.KeyValue {
-	attrs := turnAttributes(turn, environment, "generation", false, traceTags)
+func transcriptAttributes(turn agenttrace.Turn, environment string, traceTags []string, opts exportOptions) []attribute.KeyValue {
+	attrs := turnAttributes(turn, environment, "generation", false, traceTags, opts)
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
 	}
@@ -189,8 +201,8 @@ func transcriptAttributes(turn agenttrace.Turn, environment string, traceTags []
 	return attrs
 }
 
-func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observation, environment string, traceTags []string) []attribute.KeyValue {
-	attrs := baseObservationAttributes(turn, environment, observation.Type, observation.Input, observation.Output)
+func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observation, environment string, traceTags []string, opts exportOptions) []attribute.KeyValue {
+	attrs := baseObservationAttributes(turn, environment, observation.Type, observation.Input, observation.Output, opts)
 	attrs = append(attrs, traceTagAttributes(traceTags)...)
 	attrs = append(attrs, metadataAttributes(turn)...)
 	if len(observation.Metadata) > 0 {

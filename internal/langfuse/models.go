@@ -45,10 +45,11 @@ type pricingTierPayload struct {
 }
 
 type modelPayload struct {
-	ModelName    string               `json:"modelName"`
-	MatchPattern string               `json:"matchPattern"`
-	Unit         string               `json:"unit"`
-	PricingTiers []pricingTierPayload `json:"pricingTiers"`
+	ModelName         string               `json:"modelName"`
+	MatchPattern      string               `json:"matchPattern"`
+	Unit              string               `json:"unit"`
+	IsLangfuseManaged bool                 `json:"isLangfuseManaged,omitempty"`
+	PricingTiers      []pricingTierPayload `json:"pricingTiers"`
 }
 
 func SyncModelPricing(ctx context.Context, cfg config.LangfuseConfig) (ModelSyncSummary, error) {
@@ -62,18 +63,22 @@ func SyncModelPricing(ctx context.Context, cfg config.LangfuseConfig) (ModelSync
 		matches := modelsWithName(existing, model.ModelName)
 		if len(matches) > 0 {
 			conflicts := make([]string, 0)
+			hasExactMatch := false
 			for _, got := range matches {
 				if mismatch := modelMismatchFields(want, got); len(mismatch) == 0 {
-					summary.Existing++
-				} else {
+					hasExactMatch = true
+				} else if !got.IsLangfuseManaged {
 					conflicts = append(conflicts, mismatch...)
 				}
+			}
+			if hasExactMatch {
+				summary.Existing++
+				continue
 			}
 			if len(conflicts) > 0 {
 				summary.Conflicting++
 				return summary, fmt.Errorf("Langfuse model definition conflict for %s: %s", model.ModelName, strings.Join(uniqueStrings(conflicts), ", "))
 			}
-			continue
 		}
 		if err := createModel(ctx, cfg, model); err != nil {
 			return summary, err
@@ -262,26 +267,38 @@ func uniqueStrings(values []string) []string {
 }
 
 func listModels(ctx context.Context, cfg config.LangfuseConfig) ([]modelPayload, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.Host, "/")+"/api/public/models?page=1&limit=100", nil)
-	if err != nil {
-		return nil, err
+	const limit = 100
+	var models []modelPayload
+	for page := 1; ; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/public/models?page=%d&limit=%d", strings.TrimRight(cfg.Host, "/"), page, limit), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", AuthHeader(cfg))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var body struct {
+			Data []modelPayload `json:"data"`
+			Meta struct {
+				TotalItems int `json:"totalItems"`
+			} `json:"meta"`
+		}
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("Langfuse model list /api/public/models failed with HTTP %d", resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		_ = resp.Body.Close()
+		models = append(models, body.Data...)
+		if len(body.Data) < limit || (body.Meta.TotalItems > 0 && len(models) >= body.Meta.TotalItems) {
+			return models, nil
+		}
 	}
-	req.Header.Set("Authorization", AuthHeader(cfg))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("Langfuse model list /api/public/models failed with HTTP %d", resp.StatusCode)
-	}
-	var body struct {
-		Data []modelPayload `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
-	}
-	return body.Data, nil
 }
 
 func createModel(ctx context.Context, cfg config.LangfuseConfig, model modelPricing) error {

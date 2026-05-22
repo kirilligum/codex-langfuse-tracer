@@ -117,6 +117,14 @@ Host examples:
 
 If your config already has a `[mcp_servers.langfuse]` block for Langfuse MCP, keep it. The exporter only reads the `env` values.
 
+Optional: if you want Langfuse's built-in User column to show the Codex working directory instead of a real user id, add this setting to `[mcp_servers.langfuse.env]`:
+
+```toml
+LANGFUSE_USER_ID_MODE = "workspace"
+```
+
+In workspace mode, `/home/<linux-user>/...` under the current user's home directory is shown as `~/...`, and the current Git branch is appended when available. For example, `/home/alice/app` on branch `main` becomes `~/app (main)`. Leave `LANGFUSE_USER_ID_MODE` unset for normal Langfuse user behavior.
+
 Protect the config file if it contains hosted or shared-instance API keys:
 
 ```sh
@@ -296,7 +304,7 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `<provider>.tool.file_change`; root metadata only carries compact file-impact summaries.
 
-Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts.
+Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts. If `LANGFUSE_USER_ID_MODE = "workspace"` is set, the exporter also sets `langfuse.user.id` to the normalized cwd plus branch, such as `~/app (main)`, so the Langfuse User column can be used as a workspace column.
 
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 

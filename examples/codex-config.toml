@@ -7,3 +7,5 @@ args = ["--python", "3.11", "langfuse-mcp"]
 LANGFUSE_HOST = "http://localhost:3000"
 LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
 LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
+# Optional: show normalized cwd in Langfuse's User column.
+# LANGFUSE_USER_ID_MODE = "workspace"

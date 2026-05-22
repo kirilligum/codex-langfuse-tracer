@@ -66,6 +66,12 @@ Model pricing sync checks:
 go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropicModels|TestModelDefinitionSyncCreatesMissingModels' -count=1
 ```
 
+Live workspace user id check for a trace exported with `LANGFUSE_USER_ID_MODE = "workspace"`:
+
+```sh
+LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="~/path/to/repo (branch)" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
+```
+
 Live Claude pricing check for a trace produced by the same validation session:
 
 ```sh

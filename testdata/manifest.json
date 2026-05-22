@@ -129,6 +129,20 @@
       ]
     },
     {
+      "id": "repeated-turn-context",
+      "provider": "codex",
+      "source": "testdata/sources/codex/repeated-turn-context.jsonl",
+      "source_format": "codex_rollout",
+      "golden": "testdata/golden/repeated-turn-context.normalized.json",
+      "categories": [
+        "completed_turn",
+        "repeated_turn_context",
+        "trace_preview",
+        "terminal_stream",
+        "commentary"
+      ]
+    },
+    {
       "id": "secret-tool-output",
       "provider": "codex",
       "source": "testdata/sources/codex/secret-tool-output.jsonl",

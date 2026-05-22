@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -283,6 +284,104 @@ func TestModelDefinitionSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("POST count = %d, want 0", posts)
 	}
 	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestModelDefinitionSyncFindsExistingModelsAcrossPages(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.LangfuseConfig{PublicKey: "pk-test", SecretKey: "sk-test"}
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/public/models":
+			if r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
+			}
+			switch r.URL.Query().Get("page") {
+			case "1":
+				models := make([]modelPayload, 100)
+				for i := range models {
+					models[i] = modelPayload{ModelName: fmt.Sprintf("managed-model-%03d", i)}
+				}
+				writeJSON(t, w, map[string]any{"data": models, "meta": map[string]any{"totalItems": 100 + len(modelPricingCatalog())}})
+			case "2":
+				models := make([]modelPayload, 0, len(modelPricingCatalog()))
+				for _, model := range modelPricingCatalog() {
+					models = append(models, modelPayloadFromPricing(model))
+				}
+				models = append(models, modelPayload{ModelName: "gpt-5.4", MatchPattern: `(?i)^(openai/)?(gpt-5.4)$`, IsLangfuseManaged: true})
+				writeJSON(t, w, map[string]any{"data": models, "meta": map[string]any{"totalItems": 100 + len(models)}})
+			default:
+				t.Fatalf("unexpected page query = %s", r.URL.RawQuery)
+			}
+		case r.Method == http.MethodPost && r.URL.Path == "/api/public/models":
+			posts++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	cfg.Host = server.URL
+
+	summary, err := SyncModelPricing(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SyncModelPricing: %v", err)
+	}
+	if posts != 0 {
+		t.Fatalf("POST count = %d, want 0", posts)
+	}
+	if summary.Existing != len(expectedCatalogModelNames()) || summary.Created != 0 || summary.Conflicting != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestModelDefinitionSyncCreatesCustomModelWhenOnlyManagedDuplicateExists(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.LangfuseConfig{PublicKey: "pk-test", SecretKey: "sk-test"}
+	var posts []map[string]any
+	models := make([]modelPayload, 0, len(modelPricingCatalog()))
+	for _, model := range modelPricingCatalog() {
+		if model.ModelName == "gpt-5.5" {
+			managed := modelPayloadFromPricing(model)
+			managed.MatchPattern = `(?i)^(openai/)?(gpt-5.5)$`
+			managed.Unit = ""
+			managed.PricingTiers = nil
+			managed.IsLangfuseManaged = true
+			models = append(models, managed)
+			continue
+		}
+		models = append(models, modelPayloadFromPricing(model))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/public/models":
+			writeJSON(t, w, map[string]any{"data": models, "meta": map[string]any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/public/models":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode create body: %v", err)
+			}
+			posts = append(posts, body)
+			writeJSON(t, w, body)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	cfg.Host = server.URL
+
+	summary, err := SyncModelPricing(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SyncModelPricing: %v", err)
+	}
+	if len(posts) != 1 || stringValue(posts[0]["modelName"]) != "gpt-5.5" {
+		t.Fatalf("posts = %#v, want one custom gpt-5.5 create", posts)
+	}
+	if summary.Existing != len(expectedCatalogModelNames())-1 || summary.Created != 1 || summary.Conflicting != 0 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }

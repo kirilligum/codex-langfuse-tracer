@@ -1,0 +1,7 @@
+{"timestamp":"2026-05-01T12:00:00Z","type":"session_meta","payload":{"id":"sess-repeated-context","model":"gpt-5.5","cwd":"/tmp/repeated-context"}}
+{"timestamp":"2026-05-01T12:00:01Z","type":"turn_context","payload":{"turn_id":"turn-repeat","trace_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","cwd":"/tmp/repeated-context","model":"gpt-5.5"}}
+{"timestamp":"2026-05-01T12:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Implement the plan"}}
+{"timestamp":"2026-05-01T12:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Reading files."}}
+{"timestamp":"2026-05-01T12:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}}}
+{"timestamp":"2026-05-01T12:00:05Z","type":"turn_context","payload":{"turn_id":"turn-repeat","trace_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","cwd":"/tmp/repeated-context","model":"gpt-5.5"}}
+{"timestamp":"2026-05-01T12:00:06Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done after repeated context."}}

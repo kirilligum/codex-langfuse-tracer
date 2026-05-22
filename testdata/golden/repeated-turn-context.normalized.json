@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "name": "codex.turn.transcript",
+  "provider": "codex",
+  "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "session_id": "sess-repeated-context",
+  "turn_id": "turn-repeat",
+  "input": "Implement the plan",
+  "output": "Done after repeated context.",
+  "model": "gpt-5.5",
+  "cwd": "/tmp/repeated-context",
+  "metadata": {
+    "build_command_count": 0,
+    "changed_extensions": [],
+    "changed_file_count": 0,
+    "command_count": 0,
+    "command_tool_count": 0,
+    "failed_command_count": 0,
+    "file_change_tool_count": 0,
+    "format_command_count": 0,
+    "generic_tool_count": 0,
+    "git_command_count": 0,
+    "install_command_count": 0,
+    "last_verification_command": "",
+    "last_verification_status": "",
+    "lint_command_count": 0,
+    "mcp_tool_count": 0,
+    "navigation": "files:read_only verification:not_applicable",
+    "network_command_count": 0,
+    "other_command_count": 0,
+    "read_command_count": 0,
+    "search_command_count": 0,
+    "systemd_command_count": 0,
+    "test_command_count": 0,
+    "tool_count": 0,
+    "tool_search_tool_count": 0,
+    "touched_test_files": [],
+    "verification_command_count": 0,
+    "verification_status": "not_applicable",
+    "web_search_tool_count": 0
+  },
+  "tags": [
+    "files:read_only",
+    "verification:not_applicable"
+  ],
+  "token_usage": {
+    "input": 10,
+    "output": 4,
+    "total": 14
+  },
+  "exportable": true,
+  "observations": [
+    {
+      "name": "codex.agent",
+      "type": "agent",
+      "input": "Implement the plan",
+      "output": "Done after repeated context."
+    },
+    {
+      "name": "codex.transcript",
+      "type": "generation",
+      "input": "Implement the plan",
+      "output": "Done after repeated context."
+    },
+    {
+      "name": "codex.message.commentary",
+      "type": "span",
+      "input": "",
+      "output": "Reading files.",
+      "metadata": {
+        "phase": "commentary"
+      }
+    },
+    {
+      "name": "codex.terminal",
+      "type": "span",
+      "input": "",
+      "output": "## 2026-05-01T12:00:02Z user\nImplement the plan\n\n## 2026-05-01T12:00:03Z assistant.commentary\nReading files.\n\n## 2026-05-01T12:00:06Z assistant.final\nDone after repeated context.",
+      "metadata": {
+        "event_count": 3,
+        "turn_id": "turn-repeat"
+      }
+    }
+  ]
+}

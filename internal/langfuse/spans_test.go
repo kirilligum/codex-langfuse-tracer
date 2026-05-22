@@ -3,6 +3,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -189,6 +190,56 @@ func TestWorkspaceGitBranchMetadataExported(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := completeTurn(t)
+	turn.CWD = filepath.Join(home, "tmp", "litellm-chatgpt")
+	turn.GitBranch = "feature/workspace-user"
+	spans := emitTurnSpansWithOptions(t, turn, exportOptions{UserIDMode: "workspace"})
+	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
+		span := spans.ByName(name)
+		if span.Name == "" {
+			t.Fatalf("missing span %s", name)
+		}
+		if span.Attributes["langfuse.user.id"] != "~/tmp/litellm-chatgpt (feature/workspace-user)" {
+			t.Fatalf("%s user id = %q", name, span.Attributes["langfuse.user.id"])
+		}
+	}
+
+	if got := normalizeHomePath("/home/kirill/tmp/litellm-chatgpt", "/home/kirill"); got != "~/tmp/litellm-chatgpt" {
+		t.Fatalf("normalized home cwd = %q", got)
+	}
+	if got := normalizeHomePath("/home/kirill", "/home/kirill"); got != "~" {
+		t.Fatalf("normalized home root = %q", got)
+	}
+	if got := normalizeHomePath("/home/kirill-other/app", "/home/kirill"); got != "/home/kirill-other/app" {
+		t.Fatalf("normalized sibling home = %q", got)
+	}
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", ""); got != "~/tmp/litellm-chatgpt" {
+		t.Fatalf("workspace user without branch = %q", got)
+	}
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main"); got != "~/tmp/litellm-chatgpt (main)" {
+		t.Fatalf("workspace user with branch = %q", got)
+	}
+}
+
+func TestDefaultUserIDModeDoesNotSetUserID(t *testing.T) {
+	t.Parallel()
+
+	turn := completeTurn(t)
+	turn.CWD = filepath.Join("/home", "kirill", "tmp", "litellm-chatgpt")
+	for _, span := range emitTurnSpans(t, turn) {
+		if _, ok := span.Attributes["langfuse.user.id"]; ok {
+			t.Fatalf("%s has user id in default mode: %#v", span.Name, span.Attributes)
+		}
+	}
+}
+
 // TEST-404
 func TestLangfuseTraceTagsExportedOnSpans(t *testing.T) {
 	t.Parallel()
@@ -359,8 +410,13 @@ func emitCompleteTurnSpans(t *testing.T) spanSnapshots {
 
 func emitTurnSpans(t *testing.T, turn agenttrace.Turn) spanSnapshots {
 	t.Helper()
+	return emitTurnSpansWithOptions(t, turn, exportOptions{})
+}
+
+func emitTurnSpansWithOptions(t *testing.T, turn agenttrace.Turn, opts exportOptions) spanSnapshots {
+	t.Helper()
 	exporter := &memoryExporter{}
-	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := emitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, opts); err != nil {
 		t.Fatalf("EmitTurn: %v", err)
 	}
 	return exporter.Snapshots()

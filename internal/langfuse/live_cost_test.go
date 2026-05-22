@@ -51,6 +51,32 @@ func TestLiveLangfuseTranscriptModelUsageAndCost(t *testing.T) {
 	}
 }
 
+func TestLiveWorkspaceUserIDTrace(t *testing.T) {
+	traceID := os.Getenv("LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID")
+	if traceID == "" {
+		t.Skip("set LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID to run live workspace user_id verification")
+	}
+	wantUserID := os.Getenv("LIVE_LANGFUSE_WORKSPACE_USER_ID")
+	if wantUserID == "" {
+		t.Skip("set LIVE_LANGFUSE_WORKSPACE_USER_ID to run live workspace user_id verification")
+	}
+
+	cfg, err := config.Load(config.DefaultConfigPath())
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	trace := liveGet(t, cfg, "/api/public/traces/"+url.PathEscape(traceID))
+	if got := liveStringValue(trace["userId"]); got != wantUserID {
+		t.Fatalf("trace userId = %q, want %q: %s", got, wantUserID, canonicalLiveJSON(map[string]any{
+			"id":        trace["id"],
+			"name":      trace["name"],
+			"sessionId": trace["sessionId"],
+			"userId":    trace["userId"],
+			"metadata":  trace["metadata"],
+		}))
+	}
+}
+
 func liveTraceForSession(t *testing.T, cfg config.LangfuseConfig, sessionID string) map[string]any {
 	t.Helper()
 	body := liveGet(t, cfg, "/api/public/traces?sessionId="+url.QueryEscape(sessionID)+"&limit=10")
