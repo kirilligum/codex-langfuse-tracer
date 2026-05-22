@@ -80,7 +80,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 
 func isKnownSystemMetadata(subtype string) bool {
 	switch subtype {
-	case "turn_duration", "stop_hook_summary":
+	case "turn_duration", "stop_hook_summary", "away_summary":
 		return true
 	default:
 		return false
