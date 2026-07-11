@@ -2,6 +2,7 @@ package claudetrace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -18,7 +19,6 @@ type transcriptRecord struct {
 	Subtype   string        `json:"subtype"`
 	IsMeta    bool          `json:"isMeta"`
 	Message   transcriptMsg `json:"message"`
-	raw       map[string]any
 }
 
 type transcriptMsg struct {
@@ -52,15 +52,16 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 			continue
 		}
 		var record transcriptRecord
-		if err := json.Unmarshal([]byte(line), &record.raw); err != nil {
-			return nil, fmt.Errorf("%s:%d is not valid JSON: %w", path, lineNumber, err)
-		}
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			var syntaxError *json.SyntaxError
+			if errors.As(err, &syntaxError) {
+				return nil, fmt.Errorf("%s:%d is not valid JSON: %w", path, lineNumber, err)
+			}
 			return nil, fmt.Errorf("%s:%d is not valid Claude transcript record: %w", path, lineNumber, err)
 		}
 
 		switch record.Type {
-		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title":
+		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title", "mode", "pr-link":
 			continue
 		case "system":
 			if isKnownSystemMetadata(record.Subtype) {
@@ -80,7 +81,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 
 func isKnownSystemMetadata(subtype string) bool {
 	switch subtype {
-	case "turn_duration", "stop_hook_summary", "away_summary":
+	case "turn_duration", "stop_hook_summary", "away_summary", "api_error", "local_command":
 		return true
 	default:
 		return false

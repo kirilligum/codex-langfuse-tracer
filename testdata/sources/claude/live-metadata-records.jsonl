@@ -1,4 +1,6 @@
 {"type":"permission-mode","sessionId":"claude-live-metadata","timestamp":"2026-05-04T19:47:21.520Z"}
+{"type":"mode","mode":"default","content":"SECRET_MODE_DO_NOT_EXPORT","sessionId":"claude-live-metadata","timestamp":"2026-05-04T19:47:21.520Z"}
+{"type":"pr-link","url":"SECRET_PR_LINK_DO_NOT_EXPORT","sessionId":"claude-live-metadata","timestamp":"2026-05-04T19:47:21.520Z"}
 {"type":"file-history-snapshot","timestamp":"2026-05-04T19:47:21.521Z","sessionId":"claude-live-metadata"}
 {"type":"queue-operation","operation":"enqueue","timestamp":"2026-05-04T19:47:21.526Z","sessionId":"claude-live-metadata","content":"Reply exactly: clt-live-fixture"}
 {"type":"queue-operation","operation":"dequeue","timestamp":"2026-05-04T19:47:21.528Z","sessionId":"claude-live-metadata"}
@@ -10,5 +12,7 @@
 {"parentUuid":"claude-live-thinking","isSidechain":false,"message":{"model":"claude-haiku-4-5-20251001","id":"msg_live_metadata","type":"message","role":"assistant","content":[{"type":"text","text":"clt-live-fixture"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":7,"output_tokens":3}},"type":"assistant","uuid":"claude-live-final","timestamp":"2026-05-04T19:47:22.662Z","userType":"external","entrypoint":"sdk-cli","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata","version":"2.1.126"}
 {"type":"system","subtype":"stop_hook_summary","uuid":"claude-live-stop-hook-summary","timestamp":"2026-05-04T19:47:22.663Z","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata"}
 {"type":"system","subtype":"away_summary","content":"SECRET_AWAY_SUMMARY_DO_NOT_EXPORT","uuid":"claude-live-away-summary","timestamp":"2026-05-04T19:47:22.663Z","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata"}
+{"type":"system","subtype":"api_error","content":"SECRET_API_ERROR_DO_NOT_EXPORT","uuid":"claude-live-api-error","timestamp":"2026-05-04T19:47:22.663Z","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata"}
+{"type":"system","subtype":"local_command","content":"SECRET_LOCAL_COMMAND_DO_NOT_EXPORT","uuid":"claude-live-local-command","timestamp":"2026-05-04T19:47:22.663Z","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata"}
 {"type":"system","subtype":"turn_duration","uuid":"claude-live-system","timestamp":"2026-05-04T19:47:22.663Z","cwd":"/tmp/claude-live-metadata","sessionId":"claude-live-metadata"}
 {"type":"last-prompt","lastPrompt":"Reply exactly: clt-live-fixture","leafUuid":"claude-live-final","sessionId":"claude-live-metadata"}
