@@ -105,7 +105,7 @@ func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 	} {
 		requireMetadataInt(t, complete.Metadata, key, want)
 	}
-	if complete.Metadata["navigation"] != "command:other files:changed tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run" {
+	if complete.Metadata["navigation"] != "command:other files:changed outcome:changed_files outcome:docs_only outcome:verification_not_run tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run" {
 		t.Fatalf("navigation = %#v", complete.Metadata["navigation"])
 	}
 	requireNoForbiddenContractKeys(t, complete.Metadata)
@@ -127,7 +127,7 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 
 	completeTurn := turnFromFixture(t, "complete-tools")
 	complete := tracecontract.FromTurn(completeTurn)
-	for _, tag := range []string{"command:other", "files:changed", "mcp:github", "tool:mcp", "tool:web_search", "verification:not_run"} {
+	for _, tag := range []string{"command:other", "files:changed", "mcp:github", "outcome:docs_only", "tool:mcp", "tool:web_search", "verification:not_run"} {
 		if !slices.Contains(complete.Tags, tag) {
 			t.Fatalf("complete tags missing %q in %#v", tag, complete.Tags)
 		}

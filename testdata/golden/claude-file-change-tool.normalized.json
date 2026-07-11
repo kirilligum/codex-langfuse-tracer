@@ -27,9 +27,15 @@
     "last_verification_status": "",
     "lint_command_count": 0,
     "mcp_tool_count": 0,
-    "navigation": "files:changed tool:file_change verification:not_run",
+    "navigation": "files:changed outcome:changed_files outcome:docs_only outcome:verification_not_run tool:file_change verification:not_run",
     "network_command_count": 0,
     "other_command_count": 0,
+    "outcome": "docs_only",
+    "outcomes": [
+      "changed_files",
+      "docs_only",
+      "verification_not_run"
+    ],
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
@@ -43,6 +49,9 @@
   },
   "tags": [
     "files:changed",
+    "outcome:changed_files",
+    "outcome:docs_only",
+    "outcome:verification_not_run",
     "tool:file_change",
     "verification:not_run"
   ],

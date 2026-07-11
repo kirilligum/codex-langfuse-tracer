@@ -25,9 +25,13 @@
     "last_verification_status": "",
     "lint_command_count": 0,
     "mcp_tool_count": 0,
-    "navigation": "files:read_only tool:generic verification:not_applicable",
+    "navigation": "files:read_only outcome:no_changes tool:generic verification:not_applicable",
     "network_command_count": 0,
     "other_command_count": 0,
+    "outcome": "no_changes",
+    "outcomes": [
+      "no_changes"
+    ],
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
@@ -41,6 +45,7 @@
   },
   "tags": [
     "files:read_only",
+    "outcome:no_changes",
     "tool:generic",
     "verification:not_applicable"
   ],

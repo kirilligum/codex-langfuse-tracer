@@ -107,7 +107,7 @@ func TestProviderProjectionNames(t *testing.T) {
 	if agent.Attributes["langfuse.trace.metadata.claude_insight.command_tool_count"] != "1" {
 		t.Fatalf("Claude insight metadata missing command count: %#v", agent.Attributes)
 	}
-	if agent.Attributes["langfuse.trace.metadata.claude_insight.navigation"] != "command:other files:read_only tool:command verification:not_applicable" {
+	if agent.Attributes["langfuse.trace.metadata.claude_insight.navigation"] != "command:other files:read_only outcome:no_changes tool:command verification:not_applicable" {
 		t.Fatalf("Claude navigation metadata = %q", agent.Attributes["langfuse.trace.metadata.claude_insight.navigation"])
 	}
 	if _, ok := agent.Attributes["langfuse.trace.metadata.codex_insight.navigation"]; ok {

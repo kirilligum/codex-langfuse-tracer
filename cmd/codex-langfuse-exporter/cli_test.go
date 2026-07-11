@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -62,10 +63,18 @@ func TestCLIFlags(t *testing.T) {
 	if opts.VerifyWaitSeconds != 1.5 || opts.VerifyIntervalSeconds != 0.25 {
 		t.Fatalf("verify values not preserved: %+v", opts)
 	}
+	opts, err = parseArgs([]string{"--doctor", "--json"})
+	if err != nil {
+		t.Fatalf("parse doctor json: %v", err)
+	}
+	if !opts.Doctor || !opts.JSON || opts.Mode() != "doctor" {
+		t.Fatalf("doctor options not preserved: %+v", opts)
+	}
 
 	for _, args := range [][]string{
 		{},
 		{"--latest", "--watch"},
+		{"--doctor", "--latest"},
 		{"--latest", "--session-id", "abc"},
 		{"--path", "a", "--session-id", "abc"},
 	} {
@@ -174,6 +183,10 @@ func TestSyncModelPricingMode(t *testing.T) {
 		case "/api/public/otel/v1/traces":
 			otelPosts++
 			w.WriteHeader(http.StatusOK)
+		case "/api/public/scores":
+			w.WriteHeader(http.StatusOK)
+		case "/api/public/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
 		case "/api/public/models":
 			t.Fatalf("export mode called model sync endpoint")
 		default:
@@ -191,6 +204,66 @@ func TestSyncModelPricingMode(t *testing.T) {
 	}
 	if otelPosts != 1 {
 		t.Fatalf("otel posts = %d, want 1", otelPosts)
+	}
+}
+
+func TestDoctorMode(t *testing.T) {
+	home := t.TempDir()
+	statePath := filepath.Join(home, "state.json")
+	if err := exportstate.Save(statePath, exportstate.State{Version: 1, ProcessedTraceIDs: []string{"trace-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/public/health":
+			_, _ = w.Write([]byte(`{"status":"OK"}`))
+		case "/api/public/models":
+			_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
+		case "/api/public/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configPath := writeLangfuseConfig(t, home, server.URL)
+
+	oldRunCommand := runCommand
+	runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "systemctl":
+			return []byte("active\n"), nil
+		case "journalctl":
+			return []byte("all quiet\n"), nil
+		default:
+			t.Fatalf("unexpected command %s %v", name, args)
+			return nil, nil
+		}
+	}
+	t.Cleanup(func() { runCommand = oldRunCommand })
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--doctor", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doctor exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"doctor health ok", "doctor auth ok", "doctor watcher ok", "doctor state ok", "doctor result ok"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("doctor output missing %q in %s", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	code = run(context.Background(), []string{"--doctor", "--json", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doctor json exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var result doctorResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("parse doctor json: %v\n%s", err, stdout.String())
+	}
+	if !result.OK || len(result.Checks) == 0 {
+		t.Fatalf("doctor json result = %+v", result)
 	}
 }
 

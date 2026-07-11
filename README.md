@@ -170,6 +170,12 @@ Check the service:
 systemctl --user status codex-langfuse-watch.service
 ```
 
+Run the built-in diagnostics:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --doctor
+```
+
 Run a tiny Codex turn:
 
 ```sh
@@ -298,11 +304,15 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 - `verification_status`
 - `last_verification_command`
 - `last_verification_status`
+- `outcome`
+- `outcomes`
 - `navigation`
 - `<kind>_command_count` for each command kind
 - `<tool_family>_tool_count` for each tool family
 
 `verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `<provider>.tool.file_change`; root metadata only carries compact file-impact summaries.
+
+`outcome` and `outcomes` are deterministic, code-derived labels such as `no_changes`, `changed_files`, `docs_only`, `tests_touched`, `verification_not_run`, `verification_passed`, `verification_failed`, `failed_command`, and `install_or_network_used`. They do not use LLM judgment and do not claim the task was semantically solved.
 
 Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts. If `LANGFUSE_USER_ID_MODE = "workspace"` is set, the exporter also sets `langfuse.user.id` to the normalized cwd plus branch, such as `~/app (main)`, so the Langfuse User column can be used as a workspace column.
 
@@ -349,6 +359,19 @@ Trace tags are emitted through `langfuse.trace.tags`. The built-in tag contract 
 
 Source-level custom tags can be added as compiled Go rules in `internal/agenttrace/tagrules.go`; see `internal/agenttrace/TAG_RULES.md` for examples such as emitting a fixed tag when the user's request contains a known string. Custom tags are code changes, not runtime configuration.
 
+The exporter also creates deterministic trace-level Langfuse scores after each successful trace export:
+
+- `verification_run`
+- `verification_passed`
+- `had_failed_command`
+- `had_file_changes`
+- `changed_tests`
+- `docs_only`
+- `changed_file_count`
+- `outcome`
+
+These scores are idempotent on re-export and use only parsed trace metadata. They do not make extra LLM calls.
+
 ## Filtering
 
 Use trace tags for turn-level navigation and observation filters for individual tool calls.
@@ -363,6 +386,8 @@ Trace tags are the primary reusable trace filters:
 - `mcp:<server>` for each observed MCP server
 
 Common tag filters include `command:search`, `command:read`, `command:network`, `command:install`, `tool:web_search`, and `verification:failed`.
+
+Outcome filters include `outcome:no_changes`, `outcome:changed_files`, `outcome:docs_only`, `outcome:verification_not_run`, `outcome:verification_passed`, `outcome:verification_failed`, `outcome:failed_command`, and `outcome:install_or_network_used`.
 
 Use `mcp_server` and `mcp_tool` on `<provider>.tool.mcp` observations when you need exact MCP call details.
 
@@ -410,6 +435,53 @@ Skip post-export verification:
 
 ```sh
 ~/.codex/bin/codex-langfuse-exporter --latest --no-verify
+```
+
+Manual exports print a trace URL when the Langfuse project can be resolved:
+
+```text
+exported trace=<trace-id> status=200
+verified trace=<trace-id> input=true output=true
+trace_url=http://localhost:3000/project/<project-id>/traces/<trace-id>
+```
+
+Use JSON output when another Codex turn, script, or CI job needs to consume the result:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --latest --json
+```
+
+The command emits one JSON object per exported turn:
+
+```json
+{"provider":"codex","session_file":"...","turn_id":"...","trace_id":"...","trace_url":"...","status":200,"verified_input":true,"verified_output":true}
+```
+
+Codex can use `trace_url` in final summaries, issue comments, or handoff notes without scraping human-readable logs.
+
+## Doctor
+
+Run the doctor command when exports do not appear in Langfuse or before sharing a demo:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --doctor
+```
+
+It checks:
+
+- config loading and configured host
+- Langfuse health endpoint
+- Langfuse API authentication
+- project id lookup for trace URLs
+- watch state queue length
+- `codex-langfuse-watch.service` activity
+- recent watcher export errors
+- loopback host binding problems such as `localhost:3000` refusing connections
+
+Machine-readable output is available for scripts:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --doctor --json
 ```
 
 ## Safety And Privacy

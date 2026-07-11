@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,10 +33,19 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 			home := t.TempDir()
 			sourcePath := copyProviderSourceFixture(t, home, tc.provider, tc.fixture)
 			postCount := 0
+			scoreCount := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/public/otel/v1/traces" {
+				switch r.URL.Path {
+				case "/api/public/otel/v1/traces":
 					postCount++
 					w.WriteHeader(http.StatusOK)
+					return
+				case "/api/public/scores":
+					scoreCount++
+					w.WriteHeader(http.StatusOK)
+					return
+				case "/api/public/projects":
+					_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
 					return
 				}
 				t.Fatalf("unexpected request %s", r.URL.Path)
@@ -53,10 +63,48 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 			if postCount != 1 {
 				t.Fatalf("postCount = %d, want 1", postCount)
 			}
-			if !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), tc.wantOutput) {
+			if scoreCount == 0 {
+				t.Fatalf("scoreCount = %d, want > 0", scoreCount)
+			}
+			if !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), tc.wantOutput) || !bytes.Contains(stdout.Bytes(), []byte("trace_url="+server.URL+"/project/project-test/traces/")) {
 				t.Fatalf("missing provider export stdout=%s", stdout.String())
 			}
 		})
+	}
+}
+
+func TestManualExportCLIJSONOutput(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/public/otel/v1/traces", "/api/public/scores":
+			w.WriteHeader(http.StatusOK)
+		case "/api/public/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configPath := writeLangfuseConfig(t, home, server.URL)
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--no-verify", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("session_file=")) {
+		t.Fatalf("json output included plain text: %s", stdout.String())
+	}
+	var result exportResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("parse json output: %v\n%s", err, stdout.String())
+	}
+	if result.TraceID == "" || result.Status != http.StatusOK || result.TraceURL != server.URL+"/project/project-test/traces/"+result.TraceID {
+		t.Fatalf("json result = %+v", result)
 	}
 }
 
@@ -85,6 +133,8 @@ func TestManualExportCLIVerificationFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/public/otel/v1/traces":
+			w.WriteHeader(http.StatusOK)
+		case "/api/public/scores":
 			w.WriteHeader(http.StatusOK)
 		case "/api/public/traces/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
 			_, _ = w.Write([]byte(`{"input":"","output":"","observations":[]}`))

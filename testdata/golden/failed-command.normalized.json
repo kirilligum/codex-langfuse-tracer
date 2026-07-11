@@ -27,9 +27,15 @@
     "last_verification_status": "completed",
     "lint_command_count": 0,
     "mcp_tool_count": 0,
-    "navigation": "command:test files:changed tool:command tool:file_change verification:failed",
+    "navigation": "command:test files:changed outcome:changed_files outcome:failed_command outcome:verification_failed tool:command tool:file_change verification:failed",
     "network_command_count": 0,
     "other_command_count": 0,
+    "outcome": "verification_failed",
+    "outcomes": [
+      "changed_files",
+      "failed_command",
+      "verification_failed"
+    ],
     "read_command_count": 0,
     "search_command_count": 0,
     "systemd_command_count": 0,
@@ -44,6 +50,9 @@
   "tags": [
     "command:test",
     "files:changed",
+    "outcome:changed_files",
+    "outcome:failed_command",
+    "outcome:verification_failed",
     "tool:command",
     "tool:file_change",
     "verification:failed"
