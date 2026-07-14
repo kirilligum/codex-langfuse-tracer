@@ -83,6 +83,47 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 	}
 }
 
+func TestDocsDiagnosticsScoresAndWorkspaceUserID(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	exampleConfig := readRepoDoc(t, filepath.Join("examples", "codex-config.toml"))
+	for _, required := range []string{
+		"--doctor",
+		"--json",
+		"trace_url",
+		"deterministic trace-level Langfuse scores",
+		"They do not make extra LLM calls",
+		"app(main)@devbox",
+		"LANGFUSE_USER_ID_MODE = \"workspace\"",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"TestDoctorMode",
+		"TestManualExportCLIJSONOutput",
+		"TestDeterministicScores",
+		"TestCreateDeterministicScores",
+		"TestDocsDiagnosticsScoresAndWorkspaceUserID",
+		"path/to/repo(branch)@hostname",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"folder(branch)@hostname",
+		"LANGFUSE_USER_ID_MODE = \"workspace\"",
+	} {
+		if !strings.Contains(exampleConfig, required) {
+			t.Fatalf("example config missing %q", required)
+		}
+	}
+}
+
 // TEST-204
 func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 	t.Parallel()

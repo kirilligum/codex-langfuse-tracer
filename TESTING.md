@@ -42,6 +42,7 @@ Doctor, trace URL, JSON output, and deterministic score checks:
 go test ./cmd/codex-langfuse-exporter -run 'TestDoctorMode|TestManualExportCLIJSONOutput' -count=1
 go test ./internal/agenttrace -run 'TestDeterministicScores|TestInsightRollup' -count=1
 go test ./internal/langfuse -run 'TestCreateDeterministicScores|TestOTLPHTTPExport' -count=1
+go test ./test -run TestDocsDiagnosticsScoresAndWorkspaceUserID -count=1
 ```
 
 Langfuse OTLP projection and trace verification:

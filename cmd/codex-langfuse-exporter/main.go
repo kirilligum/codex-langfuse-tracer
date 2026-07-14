@@ -126,8 +126,8 @@ func parseArgs(args []string) (options, error) {
 	if selected != 1 {
 		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, --doctor, --claude-hook, or --sync-model-pricing")
 	}
-	if opts.JSON && opts.Watch {
-		return options{}, errors.New("--json is supported for manual exports and --doctor, not --watch")
+	if opts.JSON && (opts.Watch || opts.SyncModelPricing || opts.ClaudeHook) {
+		return options{}, errors.New("--json is supported only for manual exports and --doctor")
 	}
 	if spec.ExplicitPathOnly && opts.Path == "" {
 		return options{}, fmt.Errorf("%s provider supports only --path in this release", spec.DisplayName)

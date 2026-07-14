@@ -86,6 +86,16 @@ func TestCLIFlags(t *testing.T) {
 			t.Fatalf("parseArgs(%v) error = %q", args, err)
 		}
 	}
+	for _, args := range [][]string{
+		{"--watch", "--json"},
+		{"--sync-model-pricing", "--json"},
+		{"--claude-hook", "--json"},
+	} {
+		_, err := parseArgs(args)
+		if err == nil || !strings.Contains(err.Error(), "--json is supported only") {
+			t.Fatalf("parseArgs(%v) error = %v, want unsupported JSON mode error", args, err)
+		}
+	}
 }
 
 // TEST-506
