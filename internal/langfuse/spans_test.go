@@ -204,9 +204,9 @@ func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantUserID := "~/tmp/litellm-chatgpt (feature/workspace-user)"
+	wantUserID := "tmp/litellm-chatgpt(feature/workspace-user)"
 	if hostname != "" {
-		wantUserID += " @ " + hostname
+		wantUserID += "@" + hostname
 	}
 	spans := emitTurnSpansWithOptions(t, turn, exportOptions{UserIDMode: "workspace"})
 	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
@@ -228,17 +228,20 @@ func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
 	if got := normalizeHomePath("/home/kirill-other/app", "/home/kirill"); got != "/home/kirill-other/app" {
 		t.Fatalf("normalized sibling home = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", ""); got != "~/tmp/litellm-chatgpt" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", ""); got != "tmp/litellm-chatgpt" {
 		t.Fatalf("workspace user without branch = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", ""); got != "~/tmp/litellm-chatgpt (main)" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", ""); got != "tmp/litellm-chatgpt(main)" {
 		t.Fatalf("workspace user with branch = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", "workstation"); got != "~/tmp/litellm-chatgpt (main) @ workstation" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", "workstation"); got != "tmp/litellm-chatgpt(main)@workstation" {
 		t.Fatalf("workspace user with branch and hostname = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", "workstation"); got != "~/tmp/litellm-chatgpt @ workstation" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", "workstation"); got != "tmp/litellm-chatgpt@workstation" {
 		t.Fatalf("workspace user with hostname = %q", got)
+	}
+	if got := formatWorkspaceUserID("/srv/app", "main", "workstation"); got != "/srv/app(main)@workstation" {
+		t.Fatalf("workspace user outside home = %q", got)
 	}
 }
 

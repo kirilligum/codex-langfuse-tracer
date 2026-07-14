@@ -123,7 +123,7 @@ Optional: if you want Langfuse's built-in User column to show the Codex working 
 LANGFUSE_USER_ID_MODE = "workspace"
 ```
 
-In workspace mode, `/home/<linux-user>/...` under the current user's home directory is shown as `~/...`, the current Git branch is appended when available, and the machine hostname is appended. For example, `/home/alice/app` on branch `main` from host `devbox` becomes `~/app (main) @ devbox`. Leave `LANGFUSE_USER_ID_MODE` unset for normal Langfuse user behavior.
+In workspace mode, `/home/<linux-user>/...` under the current user's home directory is shown without the `~/` prefix, the current Git branch is appended when available, and the machine hostname is appended without spaces. For example, `/home/alice/app` on branch `main` from host `devbox` becomes `app(main)@devbox`. Leave `LANGFUSE_USER_ID_MODE` unset for normal Langfuse user behavior.
 
 Protect the config file if it contains hosted or shared-instance API keys:
 
@@ -314,7 +314,7 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 
 `outcome` and `outcomes` are deterministic, code-derived labels such as `no_changes`, `changed_files`, `docs_only`, `tests_touched`, `verification_not_run`, `verification_passed`, `verification_failed`, `failed_command`, and `install_or_network_used`. They do not use LLM judgment and do not claim the task was semantically solved.
 
-Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts. If `LANGFUSE_USER_ID_MODE = "workspace"` is set, the exporter also sets `langfuse.user.id` to the normalized cwd plus branch and hostname, such as `~/app (main) @ devbox`, so the Langfuse User column can be used as a workspace column.
+Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts. If `LANGFUSE_USER_ID_MODE = "workspace"` is set, the exporter also sets `langfuse.user.id` to a compact normalized cwd plus branch and hostname, such as `app(main)@devbox`, so the Langfuse User column can be used as a workspace column.
 
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 

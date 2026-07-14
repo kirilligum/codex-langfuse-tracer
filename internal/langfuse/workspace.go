@@ -59,7 +59,7 @@ func workspaceUserID(cwd, gitBranch string) string {
 }
 
 func formatWorkspaceUserID(path, gitBranch, hostname string) string {
-	path = strings.TrimSpace(path)
+	path = compactWorkspacePath(path)
 	if path == "" {
 		return ""
 	}
@@ -67,10 +67,10 @@ func formatWorkspaceUserID(path, gitBranch, hostname string) string {
 	hostname = trimMetadataValue(hostname, 80)
 	suffix := ""
 	if gitBranch != "" {
-		suffix += " (" + gitBranch + ")"
+		suffix += "(" + gitBranch + ")"
 	}
 	if hostname != "" {
-		suffix += " @ " + hostname
+		suffix += "@" + hostname
 	}
 	if suffix == "" {
 		return trimMetadataValue(path, 200)
@@ -83,6 +83,14 @@ func formatWorkspaceUserID(path, gitBranch, hostname string) string {
 		return trimMetadataValue(path, 200)
 	}
 	return strings.TrimSpace(path[:maxPath]) + suffix
+}
+
+func compactWorkspacePath(path string) string {
+	path = strings.TrimSpace(path)
+	if strings.HasPrefix(path, "~/") {
+		return strings.TrimPrefix(path, "~/")
+	}
+	return path
 }
 
 func normalizeHomePath(cwd, home string) string {
