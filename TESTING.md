@@ -77,7 +77,7 @@ go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropi
 Live workspace user id check for a trace exported with `LANGFUSE_USER_ID_MODE = "workspace"`:
 
 ```sh
-LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="~/path/to/repo (branch)" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
+LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="~/path/to/repo (branch) @ hostname" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
 ```
 
 Live Claude pricing check for a trace produced by the same validation session:

@@ -200,13 +200,21 @@ func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
 	turn := completeTurn(t)
 	turn.CWD = filepath.Join(home, "tmp", "litellm-chatgpt")
 	turn.GitBranch = "feature/workspace-user"
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUserID := "~/tmp/litellm-chatgpt (feature/workspace-user)"
+	if hostname != "" {
+		wantUserID += " @ " + hostname
+	}
 	spans := emitTurnSpansWithOptions(t, turn, exportOptions{UserIDMode: "workspace"})
 	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
 		span := spans.ByName(name)
 		if span.Name == "" {
 			t.Fatalf("missing span %s", name)
 		}
-		if span.Attributes["langfuse.user.id"] != "~/tmp/litellm-chatgpt (feature/workspace-user)" {
+		if span.Attributes["langfuse.user.id"] != wantUserID {
 			t.Fatalf("%s user id = %q", name, span.Attributes["langfuse.user.id"])
 		}
 	}
@@ -220,11 +228,17 @@ func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
 	if got := normalizeHomePath("/home/kirill-other/app", "/home/kirill"); got != "/home/kirill-other/app" {
 		t.Fatalf("normalized sibling home = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", ""); got != "~/tmp/litellm-chatgpt" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", ""); got != "~/tmp/litellm-chatgpt" {
 		t.Fatalf("workspace user without branch = %q", got)
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main"); got != "~/tmp/litellm-chatgpt (main)" {
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", ""); got != "~/tmp/litellm-chatgpt (main)" {
 		t.Fatalf("workspace user with branch = %q", got)
+	}
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", "workstation"); got != "~/tmp/litellm-chatgpt (main) @ workstation" {
+		t.Fatalf("workspace user with branch and hostname = %q", got)
+	}
+	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", "workstation"); got != "~/tmp/litellm-chatgpt @ workstation" {
+		t.Fatalf("workspace user with hostname = %q", got)
 	}
 }
 

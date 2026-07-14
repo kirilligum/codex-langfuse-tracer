@@ -51,19 +51,30 @@ func workspaceUserID(cwd, gitBranch string) string {
 	if err != nil {
 		home = ""
 	}
-	return formatWorkspaceUserID(normalizeHomePath(cwd, home), gitBranch)
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = ""
+	}
+	return formatWorkspaceUserID(normalizeHomePath(cwd, home), gitBranch, hostname)
 }
 
-func formatWorkspaceUserID(path, gitBranch string) string {
+func formatWorkspaceUserID(path, gitBranch, hostname string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
 	}
 	gitBranch = trimMetadataValue(gitBranch, 80)
-	if gitBranch == "" {
+	hostname = trimMetadataValue(hostname, 80)
+	suffix := ""
+	if gitBranch != "" {
+		suffix += " (" + gitBranch + ")"
+	}
+	if hostname != "" {
+		suffix += " @ " + hostname
+	}
+	if suffix == "" {
 		return trimMetadataValue(path, 200)
 	}
-	suffix := " (" + gitBranch + ")"
 	if len(path)+len(suffix) <= 200 {
 		return path + suffix
 	}
