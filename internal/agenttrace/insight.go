@@ -53,6 +53,8 @@ type InsightRollup struct {
 	VerificationStatus       string
 	LastVerificationCommand  string
 	LastVerificationStatus   string
+	Outcome                  string
+	Outcomes                 []string
 	CommandKindCounts        map[string]int
 	ToolFamilyCounts         map[string]int
 	MCPServerCounts          map[string]int
@@ -172,6 +174,8 @@ func BuildInsightRollup(turn Turn) InsightRollup {
 	default:
 		rollup.VerificationStatus = "passed"
 	}
+	rollup.Outcomes = outcomeValues(rollup, paths)
+	rollup.Outcome = primaryOutcome(rollup.Outcomes)
 	return rollup
 }
 
@@ -185,6 +189,8 @@ func (r InsightRollup) Metadata() map[string]any {
 		"verification_status":        r.VerificationStatus,
 		"last_verification_command":  r.LastVerificationCommand,
 		"last_verification_status":   r.LastVerificationStatus,
+		"outcome":                    r.Outcome,
+		"outcomes":                   r.Outcomes,
 		"changed_extensions":         r.ChangedExtensions,
 		"touched_test_files":         r.TouchedTestFiles,
 		"navigation":                 strings.Join(r.navigationValues(), " "),
@@ -200,6 +206,9 @@ func (r InsightRollup) Metadata() map[string]any {
 
 func (r InsightRollup) navigationValues() []string {
 	values := []string{"verification:" + r.VerificationStatus}
+	for _, outcome := range r.Outcomes {
+		values = append(values, "outcome:"+outcome)
+	}
 	if r.FileChangeToolCount > 0 || r.ChangedFileCount > 0 {
 		values = append(values, "files:changed")
 	} else {
@@ -225,6 +234,76 @@ func (r InsightRollup) Tags() []string {
 		values = append(values, "mcp:"+server)
 	}
 	return sortedUnique(values)
+}
+
+func outcomeValues(rollup InsightRollup, changedPaths []string) []string {
+	values := []string{}
+	if rollup.ChangedFileCount == 0 {
+		values = append(values, "no_changes")
+	} else {
+		values = append(values, "changed_files")
+	}
+	if docsOnly(changedPaths) {
+		values = append(values, "docs_only")
+	}
+	if len(rollup.TouchedTestFiles) > 0 {
+		values = append(values, "tests_touched")
+	}
+	switch rollup.VerificationStatus {
+	case "passed":
+		values = append(values, "verification_passed")
+	case "failed":
+		values = append(values, "verification_failed")
+	case "not_run":
+		values = append(values, "verification_not_run")
+	}
+	if rollup.FailedCommandCount > 0 {
+		values = append(values, "failed_command")
+	}
+	if rollup.CommandKindCounts[CommandKindInstall] > 0 || rollup.CommandKindCounts[CommandKindNetwork] > 0 {
+		values = append(values, "install_or_network_used")
+	}
+	return sortedUnique(values)
+}
+
+func primaryOutcome(outcomes []string) string {
+	priority := []string{
+		"verification_failed",
+		"failed_command",
+		"verification_passed",
+		"docs_only",
+		"verification_not_run",
+		"install_or_network_used",
+		"changed_files",
+		"no_changes",
+	}
+	for _, want := range priority {
+		for _, outcome := range outcomes {
+			if outcome == want {
+				return outcome
+			}
+		}
+	}
+	if len(outcomes) > 0 {
+		return outcomes[0]
+	}
+	return "unknown"
+}
+
+func docsOnly(paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".adoc", ".md", ".rst", ".txt":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func CommandInsightMetadata(payload map[string]any) map[string]any {

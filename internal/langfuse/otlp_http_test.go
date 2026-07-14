@@ -2,11 +2,13 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 )
@@ -17,12 +19,27 @@ func TestOTLPHTTPExport(t *testing.T) {
 
 	var gotPath, gotAuth, gotVersion string
 	var gotBody bool
+	scorePosts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		gotVersion = r.Header.Get("x-langfuse-ingestion-version")
-		if r.ContentLength != 0 {
-			gotBody = true
+		switch r.URL.Path {
+		case "/api/public/otel/v1/traces":
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			gotVersion = r.Header.Get("x-langfuse-ingestion-version")
+			if r.ContentLength != 0 {
+				gotBody = true
+			}
+		case "/api/public/scores":
+			scorePosts++
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode score: %v", err)
+			}
+			if body["traceId"] == "" || body["id"] == "" || body["dataType"] == "" {
+				t.Fatalf("score body incomplete: %#v", body)
+			}
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -50,6 +67,9 @@ func TestOTLPHTTPExport(t *testing.T) {
 	}
 	if !gotBody {
 		t.Fatal("empty OTLP body")
+	}
+	if scorePosts != len(agenttrace.BuildDeterministicScores(completeTurn(t))) {
+		t.Fatalf("score posts = %d", scorePosts)
 	}
 }
 

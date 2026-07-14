@@ -36,6 +36,15 @@ go test ./internal/providers -count=1
 go test ./test -run TestProviderParserDispatchHasOneOwner -count=1
 ```
 
+Doctor, trace URL, JSON output, and deterministic score checks:
+
+```sh
+go test ./cmd/codex-langfuse-exporter -run 'TestDoctorMode|TestManualExportCLIJSONOutput' -count=1
+go test ./internal/agenttrace -run 'TestDeterministicScores|TestInsightRollup' -count=1
+go test ./internal/langfuse -run 'TestCreateDeterministicScores|TestOTLPHTTPExport' -count=1
+go test ./test -run TestDocsDiagnosticsScoresAndWorkspaceUserID -count=1
+```
+
 Langfuse OTLP projection and trace verification:
 
 ```sh
@@ -69,7 +78,7 @@ go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropi
 Live workspace user id check for a trace exported with `LANGFUSE_USER_ID_MODE = "workspace"`:
 
 ```sh
-LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="~/path/to/repo (branch)" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
+LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="path/to/repo(branch)@hostname" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
 ```
 
 Live Claude pricing check for a trace produced by the same validation session:

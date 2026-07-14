@@ -206,7 +206,8 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 		"tool_search_tool_count":     0,
 		"changed_file_count":         0,
 		"verification_command_count": 0,
-		"navigation":                 "command:install command:network command:other command:read command:search files:read_only tool:command tool:mcp tool:web_search verification:not_applicable",
+		"navigation":                 "command:install command:network command:other command:read command:search files:read_only outcome:install_or_network_used outcome:no_changes tool:command tool:mcp tool:web_search verification:not_applicable",
+		"outcome":                    "install_or_network_used",
 	}
 	for key, want := range want {
 		if got := metadata[key]; got != want {
@@ -233,7 +234,7 @@ func TestInsightCountMetadataSingleRepresentation(t *testing.T) {
 	if _, ok := changedMetadata["changed_files"]; ok {
 		t.Fatalf("root metadata must omit changed_files: %s", canonicalInsightJSON(changedMetadata))
 	}
-	if changedMetadata["navigation"] != "files:changed tool:file_change verification:not_run" {
+	if changedMetadata["navigation"] != "files:changed outcome:changed_files outcome:verification_not_run tool:file_change verification:not_run" {
 		t.Fatalf("changed navigation = %#v, metadata=%s", changedMetadata["navigation"], canonicalInsightJSON(changedMetadata))
 	}
 	requireNoDuplicateInsightFields(t, changedMetadata)
@@ -332,7 +333,7 @@ func TestInsightRollupProviderNeutralSemanticFamilies(t *testing.T) {
 	if metadata["changed_file_count"] != 1 {
 		t.Fatalf("file metadata = %s", canonicalInsightJSON(metadata))
 	}
-	if metadata["navigation"] != "command:test files:changed tool:command tool:file_change tool:generic tool:mcp verification:passed" {
+	if metadata["navigation"] != "command:test files:changed outcome:changed_files outcome:tests_touched outcome:verification_passed tool:command tool:file_change tool:generic tool:mcp verification:passed" {
 		t.Fatalf("navigation = %#v", metadata["navigation"])
 	}
 	tags := BuildInsightRollup(turn).Tags()

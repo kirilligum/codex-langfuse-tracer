@@ -332,7 +332,8 @@ func validateSingleRepresentationFixtureCoverage(t *testing.T) {
 		"web_search_tool_count":  float64(1),
 		"mcp_tool_count":         float64(1),
 		"tool_search_tool_count": float64(1),
-		"navigation":             "command:other files:changed tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run",
+		"navigation":             "command:other files:changed outcome:changed_files outcome:docs_only outcome:verification_not_run tool:command tool:file_change tool:mcp tool:tool_search tool:web_search verification:not_run",
+		"outcome":                "docs_only",
 	}
 	for key, value := range want {
 		if canonicalJSON(metadata[key]) != canonicalJSON(value) {
@@ -371,6 +372,9 @@ func validateGoldenLangfuseTagsContract(t *testing.T) {
 		"command:other",
 		"files:changed",
 		"mcp:github",
+		"outcome:changed_files",
+		"outcome:docs_only",
+		"outcome:verification_not_run",
 		"tool:command",
 		"tool:file_change",
 		"tool:mcp",

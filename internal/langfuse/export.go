@@ -55,6 +55,9 @@ func ExportTurn(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.
 	if status < 200 || status > 299 {
 		return status, fmt.Errorf("Langfuse OTLP export failed with HTTP %d", status)
 	}
+	if err := CreateDeterministicScores(ctx, cfg, turn, environment); err != nil {
+		return status, err
+	}
 	return status, nil
 }
 
@@ -300,7 +303,18 @@ func FetchTrace(ctx context.Context, cfg config.LangfuseConfig, traceID string) 
 	return body, nil
 }
 
+type TraceVerification struct {
+	HasInput  bool
+	HasOutput bool
+	Body      map[string]any
+}
+
 func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (bool, bool, error) {
+	verification, err := VerifyTrace(ctx, cfg, turn, timeout, interval)
+	return verification.HasInput, verification.HasOutput, err
+}
+
+func VerifyTrace(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (TraceVerification, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -310,18 +324,18 @@ func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn agenttra
 		} else {
 			hasInput, hasOutput := traceMatches(traceBody, turn.Profile().TranscriptName, agenttrace.ExportText(turn.InputText()), agenttrace.ExportText(turn.OutputText()))
 			if hasInput && hasOutput {
-				return true, true, nil
+				return TraceVerification{HasInput: true, HasOutput: true, Body: traceBody}, nil
 			}
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return false, false, lastErr
+				return TraceVerification{}, lastErr
 			}
-			return false, false, nil
+			return TraceVerification{}, nil
 		}
 		select {
 		case <-ctx.Done():
-			return false, false, ctx.Err()
+			return TraceVerification{}, ctx.Err()
 		case <-time.After(maxDuration(interval, 100*time.Millisecond)):
 		}
 	}
