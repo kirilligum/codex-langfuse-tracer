@@ -19,7 +19,7 @@ func TestOTLPHTTPExport(t *testing.T) {
 
 	var gotPath, gotAuth, gotVersion string
 	var gotBody bool
-	scorePosts := 0
+	scoreBatches := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/public/otel/v1/traces":
@@ -29,15 +29,17 @@ func TestOTLPHTTPExport(t *testing.T) {
 			if r.ContentLength != 0 {
 				gotBody = true
 			}
-		case "/api/public/scores":
-			scorePosts++
-			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode score: %v", err)
+		case "/api/public/ingestion":
+			scoreBatches++
+			var batch scoreIngestionBatch
+			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+				t.Fatalf("decode score batch: %v", err)
 			}
-			if body["traceId"] == "" || body["id"] == "" || body["dataType"] == "" {
-				t.Fatalf("score body incomplete: %#v", body)
+			if len(batch.Batch) != len(agenttrace.BuildDeterministicScores(completeTurn(t))) {
+				t.Fatalf("score batch incomplete: %#v", batch)
 			}
+			writeScoreBatchSuccess(t, w, batch)
+			return
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
@@ -68,8 +70,8 @@ func TestOTLPHTTPExport(t *testing.T) {
 	if !gotBody {
 		t.Fatal("empty OTLP body")
 	}
-	if scorePosts != len(agenttrace.BuildDeterministicScores(completeTurn(t))) {
-		t.Fatalf("score posts = %d", scorePosts)
+	if scoreBatches != 1 {
+		t.Fatalf("score batches = %d", scoreBatches)
 	}
 }
 

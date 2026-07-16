@@ -260,6 +260,14 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	}
 }
 
+func TestWaitBetweenExportsHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitBetweenExports(ctx, 60); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitBetweenExports error = %v, want context canceled", err)
+	}
+}
+
 // EVAL-007
 func TestEvalHookQueueDrainLatency(t *testing.T) {
 	t.Parallel()

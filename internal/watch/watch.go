@@ -55,10 +55,11 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 	watermark := state.ScanWatermarkNS
 	exportedCount := 0
 	exportFailed := false
+	attemptedExport := false
 
 	var queueExported int
 	var err error
-	state, queueExported, err = drainQueue(ctx, opts, state)
+	state, queueExported, err = drainQueue(ctx, opts, state, &attemptedExport)
 	if err != nil {
 		return state, queueExported, err
 	}
@@ -94,6 +95,12 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 				fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: missing export callback\n", turn.TraceID, sessionPath)
 				continue
 			}
+			if attemptedExport {
+				if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
+					return state, exportedCount, err
+				}
+			}
+			attemptedExport = true
 			status, err := opts.Export(ctx, turn)
 			if err != nil {
 				exportFailed = true
@@ -124,7 +131,7 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 	return state, exportedCount, nil
 }
 
-func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State) (exportstate.State, int, error) {
+func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, attemptedExport *bool) (exportstate.State, int, error) {
 	if len(state.Queue) == 0 {
 		return state, 0, nil
 	}
@@ -149,6 +156,12 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State) 
 				fmt.Fprintf(stderr, "ERROR: failed to export provider=%s path=%s: missing export callback\n", request.Provider, request.SourcePath)
 				continue
 			}
+			if *attemptedExport {
+				if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
+					return state, exportedCount, err
+				}
+			}
+			*attemptedExport = true
 			status, err := opts.Export(ctx, turn)
 			if err != nil {
 				fmt.Fprintf(stderr, "ERROR: failed to export provider=%s trace=%s path=%s: %v\n", request.Provider, turn.TraceID, request.SourcePath, err)
@@ -171,6 +184,21 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State) 
 		}
 	}
 	return state, exportedCount, nil
+}
+
+func waitBetweenExports(ctx context.Context, pollIntervalSeconds float64) error {
+	interval := time.Duration(pollIntervalSeconds * float64(time.Second))
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func parseQueuedTurns(request exportstate.QueueRequest) ([]agenttrace.Turn, error) {

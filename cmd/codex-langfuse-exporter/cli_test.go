@@ -193,8 +193,8 @@ func TestSyncModelPricingMode(t *testing.T) {
 		case "/api/public/otel/v1/traces":
 			otelPosts++
 			w.WriteHeader(http.StatusOK)
-		case "/api/public/scores":
-			w.WriteHeader(http.StatusOK)
+		case "/api/public/ingestion":
+			writeTestIngestionSuccess(t, w, r)
 		case "/api/public/projects":
 			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
 		case "/api/public/models":

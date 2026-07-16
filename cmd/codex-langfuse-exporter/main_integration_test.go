@@ -33,16 +33,16 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 			home := t.TempDir()
 			sourcePath := copyProviderSourceFixture(t, home, tc.provider, tc.fixture)
 			postCount := 0
-			scoreCount := 0
+			scoreBatchCount := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/public/otel/v1/traces":
 					postCount++
 					w.WriteHeader(http.StatusOK)
 					return
-				case "/api/public/scores":
-					scoreCount++
-					w.WriteHeader(http.StatusOK)
+				case "/api/public/ingestion":
+					scoreBatchCount++
+					writeTestIngestionSuccess(t, w, r)
 					return
 				case "/api/public/projects":
 					_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
@@ -63,8 +63,8 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 			if postCount != 1 {
 				t.Fatalf("postCount = %d, want 1", postCount)
 			}
-			if scoreCount == 0 {
-				t.Fatalf("scoreCount = %d, want > 0", scoreCount)
+			if scoreBatchCount != 1 {
+				t.Fatalf("scoreBatchCount = %d, want 1", scoreBatchCount)
 			}
 			if !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), tc.wantOutput) || !bytes.Contains(stdout.Bytes(), []byte("trace_url="+server.URL+"/project/project-test/traces/")) {
 				t.Fatalf("missing provider export stdout=%s", stdout.String())
@@ -80,8 +80,10 @@ func TestManualExportCLIJSONOutput(t *testing.T) {
 	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/public/otel/v1/traces", "/api/public/scores":
+		case "/api/public/otel/v1/traces":
 			w.WriteHeader(http.StatusOK)
+		case "/api/public/ingestion":
+			writeTestIngestionSuccess(t, w, r)
 		case "/api/public/projects":
 			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
 		default:
@@ -105,6 +107,29 @@ func TestManualExportCLIJSONOutput(t *testing.T) {
 	}
 	if result.TraceID == "" || result.Status != http.StatusOK || result.TraceURL != server.URL+"/project/project-test/traces/"+result.TraceID {
 		t.Fatalf("json result = %+v", result)
+	}
+}
+
+func writeTestIngestionSuccess(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	var body struct {
+		Batch []struct {
+			ID string `json:"id"`
+		} `json:"batch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("decode ingestion batch: %v", err)
+	}
+	if len(body.Batch) == 0 {
+		t.Fatal("empty ingestion batch")
+	}
+	successes := make([]map[string]any, 0, len(body.Batch))
+	for _, event := range body.Batch {
+		successes = append(successes, map[string]any{"id": event.ID, "status": http.StatusCreated})
+	}
+	w.WriteHeader(http.StatusMultiStatus)
+	if err := json.NewEncoder(w).Encode(map[string]any{"successes": successes, "errors": []any{}}); err != nil {
+		t.Fatalf("encode ingestion response: %v", err)
 	}
 }
 
@@ -134,8 +159,8 @@ func TestManualExportCLIVerificationFailure(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/public/otel/v1/traces":
 			w.WriteHeader(http.StatusOK)
-		case "/api/public/scores":
-			w.WriteHeader(http.StatusOK)
+		case "/api/public/ingestion":
+			writeTestIngestionSuccess(t, w, r)
 		case "/api/public/traces/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
 			_, _ = w.Write([]byte(`{"input":"","output":"","observations":[]}`))
 		default:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
@@ -15,17 +16,15 @@ func TestCreateDeterministicScores(t *testing.T) {
 	t.Parallel()
 
 	turn := completeTurn(t)
-	var posts []map[string]any
+	var gotBatch scoreIngestionBatch
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/public/scores" {
+		if r.URL.Path != "/api/public/ingestion" {
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode score: %v", err)
+		if err := json.NewDecoder(r.Body).Decode(&gotBatch); err != nil {
+			t.Fatalf("decode score batch: %v", err)
 		}
-		posts = append(posts, body)
-		w.WriteHeader(http.StatusOK)
+		writeScoreBatchSuccess(t, w, gotBatch)
 	}))
 	defer server.Close()
 
@@ -33,24 +32,57 @@ func TestCreateDeterministicScores(t *testing.T) {
 	if err := CreateDeterministicScores(context.Background(), cfg, turn, "default"); err != nil {
 		t.Fatalf("CreateDeterministicScores: %v", err)
 	}
-	if len(posts) != len(agenttrace.BuildDeterministicScores(turn)) {
-		t.Fatalf("posts = %d, want %d", len(posts), len(agenttrace.BuildDeterministicScores(turn)))
+	if len(gotBatch.Batch) != len(agenttrace.BuildDeterministicScores(turn)) {
+		t.Fatalf("events = %d, want %d", len(gotBatch.Batch), len(agenttrace.BuildDeterministicScores(turn)))
 	}
-	seen := map[string]map[string]any{}
-	for _, post := range posts {
-		name, _ := post["name"].(string)
-		seen[name] = post
-		if post["id"] == "" || post["traceId"] != turn.TraceID || post["environment"] != "default" {
-			t.Fatalf("score post incomplete: %#v", post)
+	seen := map[string]scoreIngestionEvent{}
+	for _, event := range gotBatch.Batch {
+		seen[event.Body.Name] = event
+		if event.ID == "" || event.Type != "score-create" || event.Timestamp == "" || event.Body.ID == "" || event.Body.TraceID != turn.TraceID || event.Body.Environment != "default" {
+			t.Fatalf("score event incomplete: %#v", event)
 		}
 	}
-	if seen["verification_passed"]["dataType"] != agenttrace.ScoreDataTypeBoolean {
+	if seen["verification_passed"].Body.DataType != agenttrace.ScoreDataTypeBoolean {
 		t.Fatalf("verification_passed = %#v", seen["verification_passed"])
 	}
-	if seen["outcome"]["dataType"] != agenttrace.ScoreDataTypeCategorical || seen["outcome"]["value"] == "" {
+	if seen["outcome"].Body.DataType != agenttrace.ScoreDataTypeCategorical || seen["outcome"].Body.Value == "" {
 		t.Fatalf("outcome = %#v", seen["outcome"])
 	}
-	if seen["changed_file_count"]["dataType"] != agenttrace.ScoreDataTypeNumeric {
+	if seen["changed_file_count"].Body.DataType != agenttrace.ScoreDataTypeNumeric {
 		t.Fatalf("changed_file_count = %#v", seen["changed_file_count"])
+	}
+}
+
+func TestCreateDeterministicScoresRejectsBatchErrors(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"event-id","status":400}]}`))
+	}))
+	defer server.Close()
+
+	cfg := config.LangfuseConfig{Host: server.URL, PublicKey: "pk-test", SecretKey: "sk-test"}
+	err := CreateDeterministicScores(context.Background(), cfg, completeTurn(t), "default")
+	if err == nil || !strings.Contains(err.Error(), "accepted=0 errors=1") {
+		t.Fatalf("CreateDeterministicScores error = %v", err)
+	}
+}
+
+func writeScoreBatchSuccess(t *testing.T, w http.ResponseWriter, batch scoreIngestionBatch) {
+	t.Helper()
+	result := scoreIngestionResponse{Successes: make([]struct {
+		ID     string `json:"id"`
+		Status int    `json:"status"`
+	}, 0, len(batch.Batch))}
+	for _, event := range batch.Batch {
+		result.Successes = append(result.Successes, struct {
+			ID     string `json:"id"`
+			Status int    `json:"status"`
+		}{ID: event.ID, Status: http.StatusCreated})
+	}
+	w.WriteHeader(http.StatusMultiStatus)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		t.Fatalf("encode score batch response: %v", err)
 	}
 }

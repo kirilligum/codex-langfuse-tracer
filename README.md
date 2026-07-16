@@ -237,6 +237,8 @@ There is one automatic export path:
 4. Each completed turn becomes one Langfuse trace named `codex.turn.transcript`.
 5. Successfully exported trace IDs are saved in `~/.codex/langfuse-export-state.json`.
 
+During catch-up after an outage, the watcher waits one configured poll interval between turn export attempts so the Langfuse ingestion and score queues receive bounded load.
+
 The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
 
 Claude Code support uses one automatic trigger path:
@@ -370,7 +372,7 @@ The exporter also creates deterministic trace-level Langfuse scores after each s
 - `changed_file_count`
 - `outcome`
 
-These scores are idempotent on re-export and use only parsed trace metadata. They do not make extra LLM calls.
+These scores are idempotent on re-export and use only parsed trace metadata. They do not make extra LLM calls. The eight score events are submitted in one Langfuse ingestion batch; trace export continues to use only the OTLP trace endpoint.
 
 ## Filtering
 

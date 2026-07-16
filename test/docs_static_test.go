@@ -438,7 +438,7 @@ func TestNoLocalCostDetailsOrDirectIngestionShortcut(t *testing.T) {
 			if strings.Contains(text, "cost_details") {
 				t.Fatalf("%s emits local cost_details", path)
 			}
-			if strings.Contains(text, "/api/public/ingestion") {
+			if strings.Contains(text, "/api/public/ingestion") && filepath.Base(path) != "scores.go" {
 				t.Fatalf("%s uses direct ingestion export path", path)
 			}
 		}
