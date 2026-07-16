@@ -544,6 +544,24 @@ Common failure modes:
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.
 
+### Optional ccgram Process
+
+ccgram is not required by this exporter. If ccgram is installed separately and its bot uses the `__main__` window in a tmux session named `ccgram`, it can remain stopped to conserve workstation memory and be started only when needed.
+
+Start the bot in its existing control window:
+
+```sh
+tmux send-keys -t ccgram:@0 'ccgram run' Enter
+```
+
+Stop the bot without closing the tmux session or its other windows:
+
+```sh
+tmux send-keys -t ccgram:@0 C-c
+```
+
+Use `tmux list-windows -t ccgram` first if the control window might not be `@0`.
+
 ## Development
 
 Run the local suite:
