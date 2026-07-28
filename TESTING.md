@@ -45,6 +45,12 @@ go test ./internal/langfuse -run 'TestCreateDeterministicScores|TestOTLPHTTPExpo
 go test ./test -run TestDocsDiagnosticsScoresAndWorkspaceUserID -count=1
 ```
 
+Langfuse MCP launcher compatibility check:
+
+```sh
+go test ./test -run TestDocsLangfuseMCPVersionConstraint -count=1
+```
+
 Langfuse OTLP projection and trace verification:
 
 ```sh

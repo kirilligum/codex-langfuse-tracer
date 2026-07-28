@@ -1,6 +1,6 @@
 [mcp_servers.langfuse]
 command = "uvx"
-args = ["--python", "3.11", "langfuse-mcp"]
+args = ["--python", "3.11", "--with", "mcp>=1.28,<2", "langfuse-mcp==0.10.0"]
 
 [mcp_servers.langfuse.env]
 # Use the Langfuse host that owns the API keys below.

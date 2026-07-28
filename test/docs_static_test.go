@@ -124,6 +124,30 @@ func TestDocsDiagnosticsScoresAndWorkspaceUserID(t *testing.T) {
 	}
 }
 
+func TestDocsLangfuseMCPVersionConstraint(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	exampleConfig := readRepoDoc(t, filepath.Join("examples", "codex-config.toml"))
+	for _, required := range []string{
+		`"mcp>=1.28,<2"`,
+		`"langfuse-mcp==0.10.0"`,
+	} {
+		if !strings.Contains(exampleConfig, required) {
+			t.Fatalf("example config missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"closed during `initialize`",
+		"`mcp>=1.28,<2`",
+		"incompatible MCP SDK v2",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+}
+
 // TEST-204
 func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 	t.Parallel()

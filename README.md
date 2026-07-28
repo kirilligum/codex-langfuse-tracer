@@ -533,6 +533,7 @@ Common failure modes:
 
 - Missing Langfuse credentials in `~/.codex/config.toml`.
 - Wrong Langfuse host for the project keys.
+- Codex reports that the `langfuse` MCP server closed during `initialize`: `langfuse-mcp==0.10.0` still uses the MCP Python SDK v1 API, so launch it with the tested `mcp>=1.28,<2` constraint shown in `examples/codex-config.toml`. An unconstrained `uvx langfuse-mcp` can resolve the incompatible MCP SDK v2.
 - `./install.sh` fails with `connect: connection refused`: Langfuse is not running at `LANGFUSE_HOST`, or the host URL points at the wrong machine or port.
 - `./install.sh` fails with `Langfuse model list /api/public/models failed with HTTP 401`: the configured public/secret key pair is not valid for the Langfuse instance at `LANGFUSE_HOST`. Seed the same `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, or create/copy a project key pair from the Langfuse UI and update `~/.codex/config.toml`.
 - `systemctl --user status codex-langfuse-watch.service` says the unit is not found after `./install.sh`: the installer likely failed before the service install step. Fix the Langfuse reachability or authentication error and rerun `./install.sh`.
