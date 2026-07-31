@@ -14,13 +14,14 @@ func TestEvalOTLPPayloadSizeAndLatency(t *testing.T) {
 
 	start := time.Now()
 	exporter := &memoryExporter{}
-	if err := EmitTurn(context.Background(), completeTurn(t), buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("EmitTurn: %v", err)
+	turn := completeTurn(t)
+	if err := EmitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitSpans: %v", err)
 	}
 	if len(exporter.Snapshots()) == 0 {
 		t.Fatal("no spans exported")
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("EmitTurn elapsed = %s, want <= 500ms", elapsed)
+		t.Fatalf("EmitSpans elapsed = %s, want <= 500ms", elapsed)
 	}
 }

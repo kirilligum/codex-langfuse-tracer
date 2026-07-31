@@ -249,10 +249,11 @@ func TestFullClaudeAcceptance(t *testing.T) {
 		StatePath: statePath,
 		Now:       fixedAcceptanceTime().Add(time.Minute),
 		Quiet:     true,
-		Export: func(_ context.Context, turn agenttrace.Turn) (int, error) {
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool) (int, error) {
 			exported = append(exported, turn)
 			return 201, nil
 		},
+		ExportScores: func(context.Context, agenttrace.Turn) error { return nil },
 	}, stateValue)
 	if err != nil {
 		t.Fatalf("ScanOnce Claude queue: %v", err)
@@ -349,8 +350,8 @@ func (e *acceptanceExporter) Shutdown(context.Context) error {
 func emitAcceptanceSpans(t *testing.T, turn agenttrace.Turn) acceptanceSpans {
 	t.Helper()
 	exporter := &acceptanceExporter{}
-	if err := langfuse.EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("EmitTurn: %v", err)
+	if err := langfuse.EmitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitSpans: %v", err)
 	}
 	exporter.mu.Lock()
 	defer exporter.mu.Unlock()

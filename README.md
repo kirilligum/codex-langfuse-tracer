@@ -2,15 +2,15 @@
 
 [![Codex Langfuse Tracer showcase](https://img.youtube.com/vi/Y6XycKR0Z0I/hqdefault.jpg)](https://youtu.be/Y6XycKR0Z0I)
 
-Export completed Codex CLI and Claude Code turns to Langfuse.
+Export progressive Codex CLI traces and completed Claude Code turns to Langfuse.
 
-This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends clean Langfuse traces with prompts, final answers, visible terminal activity, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
+This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends clean Langfuse traces with completed progress observations, prompts, final answers, visible terminal activity, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
 
-It is intentionally not a wrapper around `codex`. Codex runs normally; a `systemd --user` service exports completed turns in the background.
+It is intentionally not a wrapper around `codex`. Codex runs normally; a `systemd --user` service exports completed observations and finalizes completed turns in the background.
 
 ## Status
 
-- Tested with Codex CLI `0.128.0`.
+- Tested with Codex CLI `0.146.0`.
 - Claude Code support is implemented for explicit transcript export and Stop hook queueing.
 - Built with Go `1.26.0`.
 - Uses Codex rollout JSONL files under `~/.codex/sessions/`.
@@ -154,7 +154,7 @@ Installed files:
 ~/.codex/langfuse-export-state.json
 ```
 
-The state file records processed trace IDs so normal watcher runs do not duplicate exports.
+The state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches.
 
 If you want the user service to run even when you are logged out, enable lingering for your Linux user:
 
@@ -232,10 +232,16 @@ This repo does not install Codex or Langfuse.
 There is one automatic export path:
 
 1. `codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`.
-2. The exporter polls `~/.codex/sessions/` for `rollout-*.jsonl`.
-3. Completed turns with visible input and output are parsed.
-4. Each completed turn becomes one Langfuse trace named `codex.turn.transcript`.
-5. Successfully exported trace IDs are saved in `~/.codex/langfuse-export-state.json`.
+2. The exporter polls `~/.codex/sessions/` for `rollout-*.jsonl` every five seconds by default.
+3. For unfinished Codex turns, the first completed observation makes the trace visible during the next five-second polling cycle. Later scans send only completed observations after the persisted prefix.
+4. Completion sends the remaining observations plus `codex.agent`, `codex.transcript`, and `codex.terminal`, then creates deterministic trace-level scores.
+5. Progress and completion are saved in `~/.codex/langfuse-export-state.json`.
+
+Progressive export does not stream tokens or partial assistant text. It exports only completed observations already present in the rollout, such as a finished command, patch, MCP call, or visible commentary record. Completion-derived trace output, transcript, terminal aggregation, token usage, insight metadata, and tags are added only after Codex records the turn as complete.
+
+The version-1 state document uses `turn_progress[trace_id]` with `exported_observation_count` and `final_spans_exported`. A successful partial batch advances the observation count. A successful final span batch sets the final flag before score submission. The trace moves to `processed_trace_ids` only after scores succeed, and its `turn_progress` entry is then removed.
+
+Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
 
 During catch-up after an outage, the watcher waits one configured poll interval between turn export attempts so the Langfuse ingestion and score queues receive bounded load.
 
@@ -588,7 +594,7 @@ Keep that as the single behavioral contract. Do not add a second fixture registr
 This exporter is provider-neutral after parsing. Codex, Claude Code, and future coding agents such as Gemini CLI, OpenCode, Goose, or another local agent must converge on the same internal contract:
 
 ```text
-source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitTurn
+source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitSpans
 ```
 
 Add a new coding agent by extending the existing path:
@@ -614,4 +620,4 @@ If Langfuse MCP was added only for this setup, remove the optional `[mcp_servers
 
 ## Social Summary
 
-Codex Langfuse Tracer is a small Go exporter that watches local Codex CLI rollout files and turns completed coding-agent turns into clean Langfuse traces: prompts, final answers, terminal activity, shell commands, patch diffs, token usage, and verification metadata. Install once per workstation; Codex keeps running normally.
+Codex Langfuse Tracer is a small Go exporter that watches local Codex CLI rollout files and progressively turns coding-agent activity into clean Langfuse traces: completed subcalls first, then prompts, final answers, terminal activity, token usage, and verification metadata at completion. Install once per workstation; Codex keeps running normally.

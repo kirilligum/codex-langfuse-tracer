@@ -21,8 +21,8 @@ func TestSpanShapeAndIDs(t *testing.T) {
 
 	turn := completeTurn(t)
 	exporter := &memoryExporter{}
-	if err := EmitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("EmitTurn: %v", err)
+	if err := EmitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitSpans: %v", err)
 	}
 	spans := exporter.Snapshots()
 	if len(spans) != len(turn.Observations)+3 {
@@ -58,6 +58,80 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	if terminal.ParentSpanID != agent.SpanID {
 		t.Fatalf("terminal parent = %q want %q", terminal.ParentSpanID, agent.SpanID)
 	}
+}
+
+// TEST-603
+func TestProgressiveSpanAttributes(t *testing.T) {
+	t.Parallel()
+
+	turn := completeTurn(t)
+	turn.Completed = false
+	turn.AssistantTexts = nil
+	turn.TokenUsage = nil
+	turn.Observations = append([]agenttrace.Observation(nil), turn.Observations[:1]...)
+	turn.Observations[0].Output = "partial output contains sk-lf-partial-secret"
+	exporter := &memoryExporter{}
+	if err := emitSpans(context.Background(), turn, 0, false, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, exportOptions{UserIDMode: "workspace"}); err != nil {
+		t.Fatalf("emitSpans partial: %v", err)
+	}
+	spans := exporter.Snapshots()
+	if len(spans) != 1 {
+		t.Fatalf("partial span count = %d, want 1: %#v", len(spans), spanNames(spans))
+	}
+	span := spans[0]
+	if got, want := span.ParentSpanID, agenttrace.StableSpanID(turn.Profile().AgentSpanPrefix, turn.TraceID, turn.TurnID, ""); got != want {
+		t.Fatalf("partial parent = %q, want %q", got, want)
+	}
+	for _, key := range []string{
+		"langfuse.trace.name",
+		"langfuse.trace.metadata.provider",
+		"langfuse.trace.metadata.codex_session_id",
+		"langfuse.trace.metadata.codex_turn_id",
+		"langfuse.session.id",
+		"langfuse.environment",
+		"langfuse.version",
+		"langfuse.release",
+		"langfuse.observation.type",
+		"langfuse.observation.input",
+		"langfuse.observation.output",
+		"langfuse.observation.metadata",
+		"langfuse.observation.metadata.session_id",
+		"langfuse.observation.metadata.turn_id",
+		"langfuse.user.id",
+	} {
+		if _, ok := span.Attributes[key]; !ok {
+			t.Fatalf("partial span missing stable attribute %s: %#v", key, span.Attributes)
+		}
+	}
+	for _, key := range []string{
+		"langfuse.trace.input",
+		"langfuse.trace.output",
+		"langfuse.trace.tags",
+		"langfuse.trace.metadata.codex_transcript_exported",
+		"langfuse.observation.metadata.cwd",
+		"langfuse.observation.metadata.git_branch",
+		"langfuse.observation.usage_details",
+	} {
+		if _, ok := span.Attributes[key]; ok {
+			t.Fatalf("partial span has final-only attribute %s: %#v", key, span.Attributes)
+		}
+	}
+	for key := range span.Attributes {
+		if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+			t.Fatalf("partial span has final insight attribute %s", key)
+		}
+	}
+	if strings.Contains(strings.Join(attributeValues(span.Attributes), "\n"), "sk-lf-partial-secret") {
+		t.Fatalf("partial span leaked secret sentinel: %#v", span.Attributes)
+	}
+}
+
+func attributeValues(attributes map[string]string) []string {
+	values := make([]string, 0, len(attributes))
+	for _, value := range attributes {
+		values = append(values, value)
+	}
+	return values
 }
 
 // TEST-505
@@ -433,8 +507,8 @@ func emitTurnSpans(t *testing.T, turn agenttrace.Turn) spanSnapshots {
 func emitTurnSpansWithOptions(t *testing.T, turn agenttrace.Turn, opts exportOptions) spanSnapshots {
 	t.Helper()
 	exporter := &memoryExporter{}
-	if err := emitTurn(context.Background(), turn, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, opts); err != nil {
-		t.Fatalf("EmitTurn: %v", err)
+	if err := emitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, opts); err != nil {
+		t.Fatalf("emitSpans: %v", err)
 	}
 	return exporter.Snapshots()
 }

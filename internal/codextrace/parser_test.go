@@ -134,6 +134,59 @@ func TestStableIDs(t *testing.T) {
 	}
 }
 
+// TEST-601
+func TestIncompleteObservationPrefixStability(t *testing.T) {
+	t.Parallel()
+
+	sourcePath := filepath.Join("..", "..", "testdata", "sources", "codex", "incomplete-turn.jsonl")
+	raw, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("fixture lines = %d, want 5", len(lines))
+	}
+
+	prefixPath := filepath.Join(t.TempDir(), "rollout-prefix.jsonl")
+	if err := os.WriteFile(prefixPath, []byte(strings.Join(lines[:4], "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prefixTurns, err := ParseTurns(prefixPath)
+	if err != nil {
+		t.Fatalf("ParseTurns prefix: %v", err)
+	}
+	if len(prefixTurns) != 1 || prefixTurns[0].Completed || len(prefixTurns[0].Observations) != 1 {
+		t.Fatalf("prefix turn = %+v, want one incomplete turn with one observation", prefixTurns)
+	}
+
+	completedRaw := string(raw) + `{"timestamp":"2026-05-01T11:00:05Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Partial answer"}}` + "\n"
+	completedPath := filepath.Join(t.TempDir(), "rollout-complete.jsonl")
+	if err := os.WriteFile(completedPath, []byte(completedRaw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	completedTurns, err := ParseTurns(completedPath)
+	if err != nil {
+		t.Fatalf("ParseTurns completed: %v", err)
+	}
+	if len(completedTurns) != 1 || !completedTurns[0].Completed {
+		t.Fatalf("completed turn = %+v, want one completed turn", completedTurns)
+	}
+
+	prefix := prefixTurns[0]
+	completed := completedTurns[0]
+	if !reflect.DeepEqual(prefix.Observations, completed.Observations[:len(prefix.Observations)]) {
+		t.Fatalf("observation prefix changed\nprefix=%+v\ncompleted=%+v", prefix.Observations, completed.Observations)
+	}
+	profile := prefix.Profile()
+	prefixSpanID := agenttrace.StableSpanID(profile.ObservationPrefix, prefix.TraceID, prefix.TurnID, "0")
+	completedProfile := completed.Profile()
+	completedSpanID := agenttrace.StableSpanID(completedProfile.ObservationPrefix, completed.TraceID, completed.TurnID, "0")
+	if prefixSpanID != completedSpanID {
+		t.Fatalf("observation span id changed: prefix=%s completed=%s", prefixSpanID, completedSpanID)
+	}
+}
+
 // TEST-503
 func TestCodexParserUsesAgentTrace(t *testing.T) {
 	t.Parallel()

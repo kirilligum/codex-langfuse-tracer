@@ -28,6 +28,23 @@ go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'Test
 go test ./internal/watch -count=1
 ```
 
+Progressive unfinished-turn contracts:
+
+```sh
+go test ./internal/codextrace ./internal/watch -run 'TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan' -count=1
+go test ./internal/exportstate -run 'TestTurnProgressLifecycle|TestStateUpdatePreservesQueue' -count=1
+go test ./internal/langfuse -run 'TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes' -count=1
+go test ./internal/watch -run 'TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs' -count=1
+go test ./internal/watch -run TestEvalWatchExportLatency -count=1 -v
+go test ./test -run TestDocsProgressiveCodexVisibility -count=1
+```
+
+Live child-before-parent verification against the configured loopback Langfuse project:
+
+```sh
+LIVE_LANGFUSE_PROGRESSIVE_PROBE=1 go test ./internal/langfuse -run TestLiveProgressiveChildBeforeParent -count=1 -v
+```
+
 Provider CLI checks:
 
 ```sh

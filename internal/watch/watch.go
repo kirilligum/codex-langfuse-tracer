@@ -14,7 +14,8 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 )
 
-type ExportFunc func(context.Context, agenttrace.Turn) (int, error)
+type ExportSpansFunc func(context.Context, agenttrace.Turn, int, bool) (int, error)
+type ExportScoresFunc func(context.Context, agenttrace.Turn) error
 
 type ScanOptions struct {
 	Root                string
@@ -23,9 +24,49 @@ type ScanOptions struct {
 	Stdout              io.Writer
 	Stderr              io.Writer
 	Quiet               bool
-	Export              ExportFunc
+	ExportSpans         ExportSpansFunc
+	ExportScores        ExportScoresFunc
 	PollIntervalSeconds float64
 	InitialLookbackSecs int
+}
+
+type progressivePlan struct {
+	FirstObservationIndex int
+	ExportSpans           bool
+	Final                 bool
+	ExportScores          bool
+}
+
+func planTurn(turn agenttrace.Turn, progress exportstate.TurnProgress) (progressivePlan, error) {
+	if progress.ExportedObservationCount < 0 || progress.ExportedObservationCount > len(turn.Observations) {
+		return progressivePlan{}, fmt.Errorf("exported observation count %d outside [0,%d]", progress.ExportedObservationCount, len(turn.Observations))
+	}
+	if turn.TraceID == "" || turn.InputText() == "" {
+		return progressivePlan{}, nil
+	}
+	if !turn.Completed {
+		if progress.FinalSpansExported {
+			return progressivePlan{}, fmt.Errorf("incomplete turn has final span checkpoint")
+		}
+		if progress.ExportedObservationCount < len(turn.Observations) {
+			return progressivePlan{FirstObservationIndex: progress.ExportedObservationCount, ExportSpans: true}, nil
+		}
+		return progressivePlan{}, nil
+	}
+	if turn.OutputText() == "" {
+		return progressivePlan{}, nil
+	}
+	if progress.FinalSpansExported {
+		if progress.ExportedObservationCount != len(turn.Observations) {
+			return progressivePlan{}, fmt.Errorf("final span checkpoint has observation count %d, parsed %d", progress.ExportedObservationCount, len(turn.Observations))
+		}
+		return progressivePlan{ExportScores: true}, nil
+	}
+	return progressivePlan{
+		FirstObservationIndex: progress.ExportedObservationCount,
+		ExportSpans:           true,
+		Final:                 true,
+	}, nil
 }
 
 func InitializeState(statePath string, now time.Time, stdout io.Writer, quiet bool) (exportstate.State, error) {
@@ -49,7 +90,6 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
-	stdout := writerOrDiscard(opts.Stdout)
 	stderr := writerOrDiscard(opts.Stderr)
 	scanStartedNS := opts.Now.UnixNano()
 	watermark := state.ScanWatermarkNS
@@ -85,57 +125,105 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 			}
 			continue
 		}
-		for _, turn := range agenttrace.ExportableTurns(turns) {
-			endNS := parseNS(agenttrace.ISOToNS(turn.EndTS))
-			if endNS <= watermark || state.HasProcessed(turn.TraceID) {
+		for _, turn := range turns {
+			if state.HasProcessed(turn.TraceID) {
 				continue
 			}
-			if opts.Export == nil {
-				exportFailed = true
-				fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: missing export callback\n", turn.TraceID, sessionPath)
-				continue
-			}
-			if attemptedExport {
-				if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
-					return state, exportedCount, err
-				}
-			}
-			attemptedExport = true
-			status, err := opts.Export(ctx, turn)
+			var emitted int
+			var failed bool
+			state, emitted, failed, err = processTurn(ctx, opts, state, turn, sessionPath, &attemptedExport)
 			if err != nil {
-				exportFailed = true
-				fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: %v\n", turn.TraceID, sessionPath, err)
-				continue
+				return state, exportedCount + emitted, err
 			}
-			state.AddProcessed(turn.TraceID)
-			exportedCount++
-			if opts.StatePath != "" {
-				if err := exportstate.Save(opts.StatePath, state); err != nil {
-					return state, exportedCount, err
-				}
-			}
-			if !opts.Quiet {
-				fmt.Fprintf(stdout, "exported trace=%s status=%d path=%s\n", turn.TraceID, status, sessionPath)
-			}
+			exportedCount += emitted
+			exportFailed = exportFailed || failed
 		}
 	}
 
 	if !exportFailed {
-		state.ScanWatermarkNS = scanStartedNS
-		if opts.StatePath != "" {
-			if err := exportstate.Save(opts.StatePath, state); err != nil {
-				return state, exportedCount, err
-			}
+		state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
+			current.ScanWatermarkNS = scanStartedNS
+		})
+		if err != nil {
+			return state, exportedCount, err
 		}
 	}
 	return state, exportedCount, nil
+}
+
+func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
+	plan, err := planTurn(turn, state.ProgressFor(turn.TraceID))
+	if err != nil {
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to plan trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
+		return state, 0, true, nil
+	}
+	if !plan.ExportSpans && !plan.ExportScores {
+		return state, 0, false, nil
+	}
+	if *attemptedExport {
+		if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
+			return state, 0, false, err
+		}
+	}
+	*attemptedExport = true
+
+	stdout := writerOrDiscard(opts.Stdout)
+	stderr := writerOrDiscard(opts.Stderr)
+	emitted := 0
+	if plan.ExportSpans {
+		if opts.ExportSpans == nil {
+			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: missing span export callback\n", turn.TraceID, sourcePath)
+			return state, 0, true, nil
+		}
+		status, err := opts.ExportSpans(ctx, turn, plan.FirstObservationIndex, plan.Final)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s observations=%d:%d final=%t path=%s: %v\n", turn.TraceID, plan.FirstObservationIndex, len(turn.Observations), plan.Final, sourcePath, err)
+			return state, 0, true, nil
+		}
+		state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
+			progress := current.ProgressFor(turn.TraceID)
+			progress.ExportedObservationCount = len(turn.Observations)
+			if plan.Final {
+				progress.FinalSpansExported = true
+			}
+			current.SetProgress(turn.TraceID, progress)
+		})
+		if err != nil {
+			return state, 0, false, err
+		}
+		emitted = 1
+		if !opts.Quiet {
+			fmt.Fprintf(stdout, "exported trace=%s observations=%d:%d final=%t status=%d path=%s\n", turn.TraceID, plan.FirstObservationIndex, len(turn.Observations), plan.Final, status, sourcePath)
+		}
+		if !plan.Final {
+			return state, emitted, false, nil
+		}
+	}
+
+	if opts.ExportScores == nil {
+		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: missing score export callback\n", turn.TraceID, sourcePath)
+		return state, emitted, true, nil
+	}
+	if err := opts.ExportScores(ctx, turn); err != nil {
+		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
+		return state, emitted, true, nil
+	}
+	state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
+		current.AddProcessed(turn.TraceID)
+	})
+	if err != nil {
+		return state, emitted, false, err
+	}
+	if !opts.Quiet {
+		fmt.Fprintf(stdout, "scored trace=%s path=%s\n", turn.TraceID, sourcePath)
+	}
+	return state, emitted, false, nil
 }
 
 func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, attemptedExport *bool) (exportstate.State, int, error) {
 	if len(state.Queue) == 0 {
 		return state, 0, nil
 	}
-	stdout := writerOrDiscard(opts.Stdout)
 	stderr := writerOrDiscard(opts.Stderr)
 	exportedCount := 0
 	for _, request := range append([]exportstate.QueueRequest(nil), state.Queue...) {
@@ -146,44 +234,45 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, 
 			}
 			continue
 		}
-		requestExported := false
+		requestComplete := true
+		hasExportableTurn := false
 		for _, turn := range agenttrace.ExportableTurns(turns) {
+			hasExportableTurn = true
 			if state.HasProcessed(turn.TraceID) {
-				requestExported = true
 				continue
 			}
-			if opts.Export == nil {
-				fmt.Fprintf(stderr, "ERROR: failed to export provider=%s path=%s: missing export callback\n", request.Provider, request.SourcePath)
-				continue
-			}
-			if *attemptedExport {
-				if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
-					return state, exportedCount, err
-				}
-			}
-			*attemptedExport = true
-			status, err := opts.Export(ctx, turn)
+			var emitted int
+			var failed bool
+			state, emitted, failed, err = processTurn(ctx, opts, state, turn, request.SourcePath, attemptedExport)
 			if err != nil {
-				fmt.Fprintf(stderr, "ERROR: failed to export provider=%s trace=%s path=%s: %v\n", request.Provider, turn.TraceID, request.SourcePath, err)
-				continue
+				return state, exportedCount + emitted, err
 			}
-			state.AddProcessed(turn.TraceID)
-			exportedCount++
-			requestExported = true
-			if !opts.Quiet {
-				fmt.Fprintf(stdout, "exported provider=%s trace=%s status=%d path=%s\n", request.Provider, turn.TraceID, status, request.SourcePath)
+			exportedCount += emitted
+			if failed || !state.HasProcessed(turn.TraceID) {
+				requestComplete = false
 			}
 		}
-		if requestExported {
-			state.RemoveQueued(request)
-			if opts.StatePath != "" {
-				if err := exportstate.Save(opts.StatePath, state); err != nil {
-					return state, exportedCount, err
-				}
+		if hasExportableTurn && requestComplete {
+			state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
+				current.RemoveQueued(request)
+			})
+			if err != nil {
+				return state, exportedCount, err
 			}
 		}
 	}
 	return state, exportedCount, nil
+}
+
+func mutateState(path string, state exportstate.State, mutate func(*exportstate.State)) (exportstate.State, error) {
+	if path == "" {
+		mutate(&state)
+		return state, nil
+	}
+	return exportstate.Update(path, func(current *exportstate.State) error {
+		mutate(current)
+		return nil
+	})
 }
 
 func waitBetweenExports(ctx context.Context, pollIntervalSeconds float64) error {
@@ -254,10 +343,4 @@ func writerOrDiscard(writer io.Writer) io.Writer {
 		return writer
 	}
 	return io.Discard
-}
-
-func parseNS(value string) int64 {
-	var result int64
-	_, _ = fmt.Sscanf(value, "%d", &result)
-	return result
 }
