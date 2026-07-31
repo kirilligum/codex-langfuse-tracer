@@ -31,6 +31,50 @@ func TestDocsAndRuntimeDoNotReferencePythonExporter(t *testing.T) {
 	}
 }
 
+// TEST-605
+func TestDocsProgressiveCodexVisibility(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	agentNotes := readRepoDoc(t, "AGENTS.md")
+	for _, required := range []string{
+		"unfinished Codex turns",
+		"first completed observation",
+		"five-second polling cycle",
+		"`turn_progress`",
+		"`exported_observation_count`",
+		"`final_spans_exported`",
+		"at-least-once",
+		"does not stream tokens or partial assistant text",
+		"currently configured Langfuse target",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing progressive contract %q", required)
+		}
+	}
+	for _, required := range []string{
+		"TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan",
+		"TestTurnProgressLifecycle|TestStateUpdatePreservesQueue",
+		"TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes",
+		"TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs",
+		"TestEvalWatchExportLatency",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing progressive command fragment %q", required)
+		}
+	}
+	for _, forbiddenAlternative := range []string{
+		"native Codex OTEL path",
+		"wrapper export path",
+		"per-file observation fanout",
+	} {
+		if !strings.Contains(agentNotes, forbiddenAlternative) {
+			t.Fatalf("AGENTS missing canonical-path constraint %q", forbiddenAlternative)
+		}
+	}
+}
+
 // EVAL-007
 func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 	t.Parallel()
@@ -299,7 +343,7 @@ func TestDocsCodingAgentIntegrationGuide(t *testing.T) {
 		"Gemini CLI",
 		"OpenCode",
 		"Goose",
-		"source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitTurn",
+		"source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitSpans",
 		"internal/providers/providers.go",
 		"testdata/sources/<provider>/*.jsonl",
 		"testdata/manifest.json",

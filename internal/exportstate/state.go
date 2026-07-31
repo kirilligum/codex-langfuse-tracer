@@ -10,10 +10,16 @@ import (
 )
 
 type State struct {
-	Version           int            `json:"version"`
-	ScanWatermarkNS   int64          `json:"scan_watermark_ns"`
-	ProcessedTraceIDs []string       `json:"processed_trace_ids"`
-	Queue             []QueueRequest `json:"queue,omitempty"`
+	Version           int                     `json:"version"`
+	ScanWatermarkNS   int64                   `json:"scan_watermark_ns"`
+	ProcessedTraceIDs []string                `json:"processed_trace_ids"`
+	TurnProgress      map[string]TurnProgress `json:"turn_progress,omitempty"`
+	Queue             []QueueRequest          `json:"queue,omitempty"`
+}
+
+type TurnProgress struct {
+	ExportedObservationCount int  `json:"exported_observation_count"`
+	FinalSpansExported       bool `json:"final_spans_exported"`
 }
 
 type QueueRequest struct {
@@ -61,6 +67,29 @@ func Save(path string, state State) error {
 	return os.Rename(tmpPath, path)
 }
 
+func Update(path string, mutate func(*State) error) (State, error) {
+	unlock, err := lock(path)
+	if err != nil {
+		return State{}, err
+	}
+	defer unlock()
+
+	state, err := Load(path)
+	if err != nil {
+		return State{}, err
+	}
+	if state == nil {
+		state = &State{Version: 1}
+	}
+	if err := mutate(state); err != nil {
+		return State{}, err
+	}
+	if err := Save(path, *state); err != nil {
+		return State{}, err
+	}
+	return *state, nil
+}
+
 func (s State) HasProcessed(traceID string) bool {
 	for _, existing := range s.ProcessedTraceIDs {
 		if existing == traceID {
@@ -73,6 +102,18 @@ func (s State) HasProcessed(traceID string) bool {
 func (s *State) AddProcessed(traceID string) {
 	s.ProcessedTraceIDs = append(s.ProcessedTraceIDs, traceID)
 	s.ProcessedTraceIDs = uniqueSorted(s.ProcessedTraceIDs)
+	delete(s.TurnProgress, traceID)
+}
+
+func (s State) ProgressFor(traceID string) TurnProgress {
+	return s.TurnProgress[traceID]
+}
+
+func (s *State) SetProgress(traceID string, progress TurnProgress) {
+	if s.TurnProgress == nil {
+		s.TurnProgress = map[string]TurnProgress{}
+	}
+	s.TurnProgress[traceID] = progress
 }
 
 func Enqueue(path string, request QueueRequest) error {
@@ -86,29 +127,19 @@ func Enqueue(path string, request QueueRequest) error {
 	if err != nil {
 		return fmt.Errorf("queue request has invalid enqueued_at: %w", err)
 	}
-	unlock, err := lock(path)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	state, err := Load(path)
-	if err != nil {
-		return err
-	}
-	if state == nil {
-		state = &State{Version: 1}
-	}
-	if state.ScanWatermarkNS == 0 {
-		state.ScanWatermarkNS = enqueuedAt.UnixNano()
-	}
-	for _, existing := range state.Queue {
-		if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
-			return Save(path, *state)
+	_, err = Update(path, func(state *State) error {
+		if state.ScanWatermarkNS == 0 {
+			state.ScanWatermarkNS = enqueuedAt.UnixNano()
 		}
-	}
-	state.Queue = append(state.Queue, request)
-	return Save(path, *state)
+		for _, existing := range state.Queue {
+			if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
+				return nil
+			}
+		}
+		state.Queue = append(state.Queue, request)
+		return nil
+	})
+	return err
 }
 
 func (s *State) RemoveQueued(request QueueRequest) {
@@ -124,6 +155,12 @@ func (s *State) RemoveQueued(request QueueRequest) {
 
 func (s *State) normalize() {
 	s.ProcessedTraceIDs = uniqueSorted(s.ProcessedTraceIDs)
+	if s.TurnProgress == nil {
+		s.TurnProgress = map[string]TurnProgress{}
+	}
+	for _, traceID := range s.ProcessedTraceIDs {
+		delete(s.TurnProgress, traceID)
+	}
 	s.Queue = uniqueQueue(s.Queue)
 }
 

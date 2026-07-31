@@ -179,8 +179,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Stderr:              stderr,
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
-			Export: func(ctx context.Context, turn agenttrace.Turn) (int, error) {
-				return langfuse.ExportTurn(ctx, cfg, turn, opts.Environment, opts.ServiceName)
+			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool) (int, error) {
+				return langfuse.ExportSpans(ctx, cfg, turn, firstObservationIndex, final, opts.Environment, opts.ServiceName)
+			},
+			ExportScores: func(ctx context.Context, turn agenttrace.Turn) error {
+				return langfuse.CreateDeterministicScores(ctx, cfg, turn, opts.Environment)
 			},
 		})
 		if err != nil {
@@ -224,8 +227,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if !opts.JSON && !opts.Quiet {
 			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
 		}
-		status, err := langfuse.ExportTurn(ctx, cfg, turn, opts.Environment, opts.ServiceName)
+		status, err := langfuse.ExportSpans(ctx, cfg, turn, 0, true, opts.Environment, opts.ServiceName)
 		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: %v\n", err)
+			return 1
+		}
+		if err := langfuse.CreateDeterministicScores(ctx, cfg, turn, opts.Environment); err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}
