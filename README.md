@@ -247,6 +247,14 @@ During catch-up after an outage, the watcher waits one configured poll interval 
 
 The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
 
+### Multi-Machine Deployment
+
+Install one watcher on every workstation and configure every watcher with the same shared Langfuse URL and project key pair. A stable URL lets the machine serving Langfuse change without rewriting producer configuration. Each workstation keeps its own watcher state and source transcripts; do not copy or merge watcher state files between machines.
+
+The released exporter does not move Cloudflare tunnels, synchronize Langfuse databases, or reconcile traces between different Langfuse backends. Do not rsync live PostgreSQL, ClickHouse, object-store, or Docker volume data as a substitute. The accepted design is a single external gateway-promotion command plus deterministic trace-level reconciliation from each producer's local source corpus.
+
+Gateway promotion and reconciliation are planned but are not supported commands in the current release. The current state, ownership boundaries, exact intended UX, implementation phases, release gates, and recovery limitations are recorded in [the multi-machine tracing gateway handoff](plans/multi-machine-tracing-gateway-handoff.md). In particular, an offline producer's unsent traces cannot be reconstructed until its local source files are available again.
+
 Claude Code support uses one automatic trigger path:
 
 1. Claude Code sends a Stop hook payload containing `session_id`, `transcript_path`, `cwd`, and `hook_event_name`.

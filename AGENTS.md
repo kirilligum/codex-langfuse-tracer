@@ -6,6 +6,7 @@ Use these files as the source of truth:
 
 - `README.md`: user-facing install, configuration, usage, safety, and troubleshooting.
 - `TESTING.md`: local verification commands and production gate.
+- `plans/multi-machine-tracing-gateway-handoff.md`: canonical operational snapshot and implementation handoff for multi-machine gateway promotion and missing-trace reconciliation.
 - `testdata/manifest.json`: single fixture inventory.
 - `testdata/sources/` and `testdata/golden/`: normalized trace contract corpus.
 

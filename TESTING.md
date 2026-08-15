@@ -2,6 +2,8 @@
 
 Use these commands before and after code changes. They are intentionally direct Go commands so Codex/LLM maintainers do not need a separate harness.
 
+Multi-machine gateway promotion and missing-trace reconciliation are not implemented in the current release. Do not treat the machine-local `switch-langfuse-target` prototype as a production test command. The implementation sequence and future acceptance controls are in [the canonical handoff](plans/multi-machine-tracing-gateway-handoff.md); add the focused executable tests to this file when the repository-owned reconciliation mode exists.
+
 ## Fast Checks
 
 ```sh
