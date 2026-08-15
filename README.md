@@ -506,6 +506,8 @@ This exporter can send prompt text, assistant text, tool inputs, command output,
 
 The exporter redacts several common token/key patterns, but redaction is a last line of defense, not a security boundary.
 
+Do not pass API keys directly in process command-line arguments. Process-list commands can expose those arguments, and their output can then appear in a trace. Prefer private environment files, credential files, or the owning tool's secret store.
+
 The exporter does not emit:
 
 - hidden chain-of-thought or encrypted reasoning content

@@ -43,8 +43,8 @@ The following is a dated snapshot. Re-run the evidence commands before implement
 | Claude Code | The repository supports explicit transcript export and Stop-hook queueing. The Stop hook was not installed on the verified workstation. |
 | Gateway switching | `~/p/CLIProxyAPI-setup/scripts/switch-current-machine.sh` was committed at adjacent repository commit `22d1c0e` and switched only the CPA tunnel. It did not move the Langfuse tunnel or data. |
 | Release state | No new tracer commit, tag, or release was created for the operational client cutover. Machine-private configuration changes were not committed. |
-| Test state | Operational `--doctor` checks passed. `go test ./... -count=1` was not green under a WSL load average above 70: `TestEvalInsightRollupLatency` and `TestEvalClaudeParserDeterminismAndLatency` exceeded wall-clock thresholds. Both focused tests later passed with controlled CPU placement. A quiet-host run of the canonical command remains required before release. |
-| Security action | Private credential values appeared in diagnostic tool output during the operational cutover. No values belong in this repository. Rotate the affected workstation credentials through their owning systems before treating the incident as closed. |
+| Test state | Operational `--doctor` checks passed. The documentation contract suite passed. Repeated `go test ./... -count=1` runs were not green on the busy WSL host. In the final handoff run, `TestEvalInsightRollupLatency` measured 62.00668 ms against 10 ms and `TestEvalClaudeParserDeterminismAndLatency` measured 455.941475 ms against 200 ms; the final `test` package passed in 515.726 s. Both focused performance tests had passed with controlled CPU placement in an earlier run. A quiet-host run of the canonical command remains required before release. |
+| Security action | Private credential values appeared in diagnostic tool output during the operational cutover. A later process listing also captured an OpenRouter key embedded in an unrelated process's command-line arguments while the watcher was active, so the affected trace must be treated as sensitive. No values belong in this repository. Rotate the affected workstation credentials through their owning systems and apply the operator's trace-retention policy before treating the incident as closed. |
 
 ### Current runtime evidence commands
 
@@ -59,6 +59,17 @@ curl -fsS https://codex-langfuse-tracer.prls.co/api/public/health
 ```
 
 The separate `~/.codex/langfuse-exporter.toml` and systemd override are current machine-private deployment facts, not a public installation contract. Do not copy credentials or this workstation's private configuration into the repository.
+
+### Documentation handoff evidence
+
+The documentation-only change was validated with existing repository commands:
+
+```text
+git diff --check
+go test ./test -run 'TestDocs|TestEvalDocs' -count=1
+```
+
+Both passed. The full `go test ./... -count=1` result remains failed only on the two performance thresholds recorded in the table above; no threshold or test purpose was changed.
 
 ## Decisions
 
@@ -122,6 +133,8 @@ Moving the gateway does not move a running Codex or Claude process. An unfinishe
 ### ADR-MM-008: Keep secrets machine-private
 
 Project keys, Cloudflare API tokens, tunnel tokens, login credentials, and private `.env` files remain outside Git. Each machine receives the same canonical Langfuse project keys through private provisioning. Verification prints only HTTP status, project ID, counts, and redacted error context.
+
+Do not pass API keys directly in process arguments. Process-list diagnostics can expose command-line arguments, and this exporter can capture that terminal output. Use private environment files, credential files, or the owning tool's secret store.
 
 ## Architecture
 
