@@ -10,6 +10,22 @@ Multi-machine gateway promotion and missing-trace reconciliation are not impleme
 go test ./... -count=1
 ```
 
+## Performance Checks
+
+Correctness and determinism stay in the normal test suite. Binding latency gates cover the user-visible watcher scan and Claude hook queue drain; run them serially and repeat them five times:
+
+```sh
+go test -p=1 ./internal/watch -run '^(TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency)$' -parallel=1 -count=5 -v
+```
+
+Insight rollup and Claude parser micro-performance are non-binding Go benchmarks. Record five samples with allocation counts for comparison when either path changes:
+
+```sh
+go test -p=1 ./internal/agenttrace ./internal/claudetrace -run '^$' -bench 'Benchmark(InsightRollup|ClaudeParserCorpus)$' -benchmem -count=5
+```
+
+Do not turn a single benchmark sample into a release threshold. The rationale and superseded scheduler-sensitive assertions are recorded in [ADR-PERF-001](plans/performance-test-stability.md).
+
 Run the normalized rollout contract only:
 
 ```sh
@@ -146,5 +162,6 @@ go test ./... -coverpkg=./... -coverprofile=/tmp/codex-langfuse-tracer.all.cover
 go test ./internal/codextrace -run '^$' -fuzz=FuzzParseTurnsDoesNotPanic -fuzztime=10s
 go test ./internal/codextrace -run '^$' -fuzz=FuzzExportTextRedactsSentinels -fuzztime=10s
 go test ./internal/claudetrace ./internal/claudehook ./internal/exportstate -count=1
+go test -p=1 ./internal/watch -run '^(TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency)$' -parallel=1 -count=5 -v
 git diff --check
 ```

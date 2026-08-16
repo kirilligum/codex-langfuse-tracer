@@ -192,7 +192,7 @@ System: Codex Langfuse Tracer
 - Step 1 RED: create/update TEST-302 in `internal/codextrace/insight_test.go` for REQ-304, REQ-305, REQ-306, REQ-310, REQ-311, and REQ-312; run `go test ./internal/codextrace -run 'TestInsightCountMetadataSingleRepresentation|TestInsightRollup' -count=1`; expected FAIL because family counts are missing.
 - Step 2 GREEN: implement count fields in `internal/codextrace/insight.go` using one helper for sorted command/tool families; run `go test ./internal/codextrace -run 'TestInsightCountMetadataSingleRepresentation|TestInsightRollup' -count=1`; expected PASS.
 - Step 3 REFACTOR: remove any duplicated count construction and keep existing command classifier as the only classifier; run `go test ./internal/codextrace -count=1`; expected PASS.
-- Step 4 MEASURE: run EVAL-302 with `go test ./internal/codextrace -run 'TestEvalInsightRollupLatency' -count=3 -parallel 8`; expected PASS with the existing threshold.
+- Step 4 MEASURE: run EVAL-302 with `go test -p=1 ./internal/agenttrace -run '^TestInsightCountMetadataSingleRepresentation$' -bench '^BenchmarkInsightRollup$' -benchmem -count=5`; expected zero duplicate fields and five benchmark samples under ADR-PERF-001.
 - Exit gates:
   - Green criteria: metadata contains count fields and current rollup fields.
   - Yellow criteria: unknown commands increment `other_command_count`.
@@ -277,15 +277,15 @@ evaluations:
   - id: EVAL-302
     purpose: dev
     metrics:
-      - rollup_latency_pass_rate
+      - rollup_benchmark_sample_count
       - duplicate_metadata_field_count
     thresholds:
-      rollup_latency_pass_rate: 1.0
+      rollup_benchmark_sample_count: 5
       duplicate_metadata_field_count: 0
     seeds:
       - testdata/rollouts/complete-tools.jsonl
     runtime_budget: 20s
-    command: "go test ./internal/codextrace -run 'TestEvalInsightRollupLatency' -count=3 -parallel 8"
+    command: "go test -p=1 ./internal/agenttrace -run '^TestInsightCountMetadataSingleRepresentation$' -bench '^BenchmarkInsightRollup$' -benchmem -count=5"
   - id: EVAL-303
     purpose: holdout
     metrics:
@@ -534,6 +534,7 @@ command_observation:
 - ADR-002: Use count metadata as the single turn-level navigation representation.
 - ADR-003: Do not add dynamic tags or duplicate tool-name metadata in this pass.
 - ADR-004: Any future local pricing catalog requires a separate ADR and tests before implementation.
+- ADR-PERF-001: Replace developer-host rollup micro-timers with benchmark evidence and binding watcher latency gates; canonical decision is `plans/performance-test-stability.md`.
 
 ## 13. Consistency check
 

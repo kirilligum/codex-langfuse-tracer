@@ -90,7 +90,7 @@
 
 - REQ-411 type nfr: Tags shall be sorted, unique, deterministic, and lowercase. Acceptance: repeated rollup calls return identical canonical JSON and tag ordering.
 - REQ-412 type security: Tags shall not contain prompts, command output, file paths, cwd, session IDs, trace IDs, secrets, or exact MCP tool names. Acceptance: fixture tests reject forbidden substrings and high-cardinality fields in tags.
-- REQ-413 type perf: Tag derivation shall remain linear in the number of observations and shall not add measurable latency to normal rollup. Acceptance: 100 rollups over the complete fixture complete within 10ms on the local development machine, matching the current `TestEvalInsightRollupLatency` threshold.
+- REQ-413 type perf: Tag derivation shall remain linear in the number of observations and shall not add material latency to normal rollup. Acceptance: `BenchmarkInsightRollup` records time and allocations for the complete fixture when rollup logic changes, and the binding watcher latency gates pass. ADR-PERF-001 supersedes the former 10 ms developer-host micro-timer.
 - REQ-414 type reliability: Missing MCP invocation fields shall not fail parsing. Acceptance: missing `server` or `tool` fields omit the corresponding metadata and tag while preserving the MCP observation.
 
 ### Interface/API Requirements
@@ -770,6 +770,7 @@ ADR Updates:
 - ADR-CLT-TAGS-003: Keep exact MCP tool names in observation metadata, not trace tags.
 - ADR-CLT-TAGS-004: Use `install.sh` and the existing `codex-langfuse-watch.service`; do not add a second MCP watcher.
 - ADR-CLT-TAGS-005: Use `langfuse.trace.tags` for Langfuse OTel tag export.
+- ADR-PERF-001: Replace developer-host rollup micro-timers with benchmark evidence and binding watcher latency gates; canonical decision is `plans/performance-test-stability.md`.
 
 ## 13. Consistency Check
 

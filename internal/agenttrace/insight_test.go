@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TEST-102
@@ -398,14 +397,11 @@ func TestInsightRollupDeterminism(t *testing.T) {
 }
 
 // EVAL-103
-func TestEvalInsightRollupLatency(t *testing.T) {
+func BenchmarkInsightRollup(b *testing.B) {
 	turn := completeFixtureTurn()
-	start := time.Now()
-	for i := 0; i < 100; i++ {
+	b.ReportAllocs()
+	for b.Loop() {
 		_ = BuildInsightRollup(turn).Metadata()
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
-		t.Fatalf("100 rollups took %s, want <= 10ms", elapsed)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
@@ -288,26 +287,14 @@ func TestClaudeParserProviderSeparatedIDs(t *testing.T) {
 }
 
 // EVAL-004
-func TestEvalClaudeParserDeterminismAndLatency(t *testing.T) {
+func TestEvalClaudeParserDeterminism(t *testing.T) {
 	t.Parallel()
 
-	fixtures := []string{
-		"real-derived-structure-basic.jsonl",
-		"real-derived-structure-bash.jsonl",
-		"no-tools.jsonl",
-		"bash-tool.jsonl",
-		"generic-tool.jsonl",
-		"file-change-tool.jsonl",
-		"mcp-tool.jsonl",
-		"incomplete.jsonl",
-		"thinking.jsonl",
-		"live-metadata-records.jsonl",
-	}
+	fixtures := claudeParserFixtures()
 	first := map[string]string{}
-	start := time.Now()
 	for i := 0; i < 20; i++ {
 		for _, fixture := range fixtures {
-			turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "claude", fixture))
+			turns, err := ParseTurns(claudeFixturePath(fixture))
 			if err != nil {
 				t.Fatalf("ParseTurns(%s): %v", fixture, err)
 			}
@@ -322,9 +309,38 @@ func TestEvalClaudeParserDeterminismAndLatency(t *testing.T) {
 			}
 		}
 	}
-	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
-		t.Fatalf("fixture corpus parse latency = %s, want <= 200ms", elapsed)
+}
+
+// EVAL-004
+func BenchmarkClaudeParserCorpus(b *testing.B) {
+	fixtures := claudeParserFixtures()
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, fixture := range fixtures {
+			if _, err := ParseTurns(claudeFixturePath(fixture)); err != nil {
+				b.Fatalf("ParseTurns(%s): %v", fixture, err)
+			}
+		}
 	}
+}
+
+func claudeParserFixtures() []string {
+	return []string{
+		"real-derived-structure-basic.jsonl",
+		"real-derived-structure-bash.jsonl",
+		"no-tools.jsonl",
+		"bash-tool.jsonl",
+		"generic-tool.jsonl",
+		"file-change-tool.jsonl",
+		"mcp-tool.jsonl",
+		"incomplete.jsonl",
+		"thinking.jsonl",
+		"live-metadata-records.jsonl",
+	}
+}
+
+func claudeFixturePath(fixture string) string {
+	return filepath.Join("..", "..", "testdata", "sources", "claude", fixture)
 }
 
 func slicesContains(values []string, want string) bool {

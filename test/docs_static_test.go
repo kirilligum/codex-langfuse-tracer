@@ -482,6 +482,30 @@ func TestEvalDocsClaudeContractCompleteness(t *testing.T) {
 	}
 }
 
+// TEST-620
+func TestDocsPerformanceGateSeparation(t *testing.T) {
+	t.Parallel()
+
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	for _, required := range []string{
+		"Benchmark(InsightRollup|ClaudeParserCorpus)",
+		"TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency",
+		"performance-test-stability.md",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing performance-gate contract %q", required)
+		}
+	}
+	for _, retired := range []string{
+		"TestEvalInsightRollupLatency",
+		"TestEvalClaudeParserDeterminismAndLatency",
+	} {
+		if strings.Contains(testingDoc, retired) {
+			t.Fatalf("TESTING still references retired scheduler-sensitive test %q", retired)
+		}
+	}
+}
+
 // TEST-409
 func TestNoLocalCostDetailsOrDirectIngestionShortcut(t *testing.T) {
 	t.Parallel()
