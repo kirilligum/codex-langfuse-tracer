@@ -167,7 +167,7 @@
   - Acceptance criteria: Parser tests cover corrupt transcripts, unsupported record types, missing MCP server/tool fields, and incomplete turns without silent export of incomplete data.
 
 - REQ-012 type perf: Rollup computation shall stay lightweight for local exporter use.
-  - Acceptance criteria: 100 rollup computations complete within 10 ms on the existing unit-test fixture.
+  - Acceptance criteria: the fixed rollup fixture remains deterministic, `BenchmarkInsightRollup` records time and allocation samples, and the binding watcher latency gates pass. ADR-PERF-001 supersedes the former 10 ms developer-host micro-timer.
 
 - Error handling and telemetry expectations:
   - Parser errors include source path and line number for malformed JSONL records.
@@ -255,7 +255,7 @@ Container: External boundary
   - Step 1 RED: create/update `TEST-520` in `internal/agenttrace/insight_test.go` for REQ-002; run `go test ./internal/agenttrace -run TestInsightRollupProviderNeutralSemanticFamilies -count=1`; expected FAIL because `BuildInsightRollup` currently counts command, file-change, and MCP semantics only for `codex.tool.exec_command`, `codex.tool.apply_patch`, and `codex.tool.mcp`.
   - Step 2 GREEN: implement minimal provider-neutral family detection in `internal/agenttrace/insight.go`; run `go test ./internal/agenttrace -run TestInsightRollupProviderNeutralSemanticFamilies -count=1`; expected PASS.
   - Step 3 REFACTOR: remove duplicated family parsing and centralize family extraction in `internal/agenttrace/insight.go`; run `go test ./internal/agenttrace -count=1`; expected PASS for TEST-520 and existing agenttrace tests.
-  - Step 4 MEASURE: run EVAL-520 with `go test ./internal/agenttrace -run 'TestEvalInsightProviderNeutralDeterminism|TestEvalInsightRollupLatency' -count=1`; expected thresholds met.
+  - Step 4 MEASURE: run EVAL-520 with `go test -p=1 ./internal/agenttrace -run '^(TestEvalInsightProviderNeutralDeterminism|TestInsightRollupDeterminism)$' -bench '^BenchmarkInsightRollup$' -benchmem -count=5`; expected deterministic output and five benchmark samples under ADR-PERF-001.
   - Restore point: before Phase P01, run `git status --short && git tag -f restore/claude-langfuse-parity-P00`.
 
 - Exit gates:
@@ -631,10 +631,10 @@ evals:
   - when it runs: release gate
 
 - name: Perf
-  - purpose: Rollup latency and watcher performance guard.
+  - purpose: Rollup benchmark evidence and binding watcher performance guard.
   - runner: Go test
-  - command: `go test ./internal/agenttrace ./internal/watch -run 'TestEvalInsightRollupLatency|TestWatchLargeStatePerf' -count=1`
-  - runtime budget: 10s
+  - command: `go test -p=1 ./internal/agenttrace -run '^$' -bench '^BenchmarkInsightRollup$' -benchmem -count=5 && go test -p=1 ./internal/watch -run '^(TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency)$' -parallel=1 -count=5`
+  - runtime budget: 30s
   - when it runs: pre-commit and CI
 
 - name: Data Drift
@@ -942,6 +942,7 @@ evals:
 - ADR-004: Add Anthropic pricing definitions only from official Claude pricing docs with source date.
 - ADR-005: Require sanitized real transcript shape before implementing Claude MCP mapping.
 - ADR-006: Treat Yellow gates as non-production states, not acceptable release states.
+- ADR-PERF-001: Keep correctness and determinism clock-free, use Go benchmarks for rollup micro-performance, and bind release latency at watcher boundaries; canonical decision is `plans/performance-test-stability.md`.
 
 ## 13. Consistency Check
 

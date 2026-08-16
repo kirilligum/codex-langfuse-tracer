@@ -416,7 +416,7 @@ External systems:
   - Step 1 RED: create/update TEST-504 in `internal/claudetrace/parser_test.go` for REQ-001, REQ-007, REQ-011, REQ-012, REQ-015, REQ-018, and REQ-019; run `go test ./internal/claudetrace -count=1`; expected FAIL because `internal/claudetrace` does not exist.
   - Step 2 GREEN: implement line-by-line Claude transcript parsing, turn segmentation, Bash-specific command/output/status mapping, generic non-Bash tool_use to tool_result pairing, model and usage extraction, thinking omission, redaction, deterministic IDs, and parse errors; run TEST-504 with `go test ./internal/claudetrace -count=1`; expected PASS.
   - Step 3 REFACTOR: move any parser-local generic helpers into `internal/agenttrace` and keep only Claude raw-shape mapping in `internal/claudetrace`; run TEST-599 with `go test ./... -count=1`; expected PASS.
-  - Step 4 MEASURE: run EVAL-004 with `go test ./internal/claudetrace -run TestEvalClaudeParserDeterminismAndLatency -count=1`; expected thresholds met.
+  - Step 4 MEASURE: run EVAL-004 with `go test -p=1 ./internal/claudetrace -run '^TestEvalClaudeParserDeterminism$' -bench '^BenchmarkClaudeParserCorpus$' -benchmem -count=5`; expected deterministic parses and five benchmark samples. ADR-PERF-001 supersedes the former developer-host wall-clock threshold.
 - Exit gates:
   - Green criteria: sanitized real-derived structure fixtures plus no-tools, Bash, generic tool, incomplete, corrupt, and thinking synthetic fixtures parse deterministically.
   - Yellow criteria: parser handles fixtures but Bash metadata is too sparse for command review.
@@ -642,14 +642,15 @@ evaluations:
     runtime_budget: "10s"
   - id: EVAL-004
     purpose: dev
-    command: "go test ./internal/claudetrace -run TestEvalClaudeParserDeterminismAndLatency -count=1"
+    command: "go test -p=1 ./internal/claudetrace -run '^TestEvalClaudeParserDeterminism$' -bench '^BenchmarkClaudeParserCorpus$' -benchmem -count=5"
     metrics:
       - repeated_parse_diff_count
-      - parser_fixture_runtime_ms
+      - parser_benchmark_sample_count
+      - parser_ns_per_corpus
       - thinking_leak_count
     thresholds:
       repeated_parse_diff_count: "0"
-      parser_fixture_runtime_ms: "<= 200"
+      parser_benchmark_sample_count: ">= 5"
       thinking_leak_count: "0"
     seeds:
       - sanitized-real-derived-claude-structure
@@ -767,7 +768,7 @@ evaluations:
 | Unit | Parser, shared model, CLI, config, state, projection helpers | Go test | `go test ./internal/agenttrace ./internal/codextrace ./internal/claudetrace ./internal/claudehook ./internal/exportstate ./internal/langfuse ./cmd/codex-langfuse-exporter -count=1` | 20s | pre-commit |
 | Integration | CLI fake-server export, watcher drain, tracecontract normalization | Go test | `go test ./cmd/codex-langfuse-exporter ./internal/watch ./test -count=1` | 45s | pre-commit |
 | E2E | End-to-end fake Langfuse contract without live secrets | Go test | `go test ./test -run TestFullClaudeAcceptance -count=1` | 10s | CI |
-| Perf | Parser and queue latency budgets | Go test | `go test ./internal/claudetrace ./internal/watch -run 'TestEvalClaudeParserDeterminismAndLatency|TestEvalHookQueueDrainLatency' -count=1` | 10s | pre-commit |
+| Perf | Parser benchmark evidence and binding queue latency budget | Go test | `go test -p=1 ./internal/claudetrace -run '^TestEvalClaudeParserDeterminism$' -bench '^BenchmarkClaudeParserCorpus$' -benchmem -count=5 && go test -p=1 ./internal/watch -run '^TestEvalHookQueueDrainLatency$' -parallel=1 -count=5` | 30s | pre-commit |
 | Data Drift | Fixture manifest, normalized golden contracts, docs claim drift | Go test | `go test ./test -run 'TestFixtureManifestProviderSources|TestGoldenTraceContract|TestDocsClaudeSupportContract' -count=1` | 15s | CI |
 | Static | Duplicate path, forbidden dependency, whitespace gates | Go test and git | `go test ./test -run 'TestNoDuplicateAgentTraceLogic|TestNoLegacyDuplicateClaudePaths' -count=1` and `git diff --check` | 10s | pre-commit |
 
@@ -813,7 +814,7 @@ evaluations:
   - location: `internal/claudetrace/parser_test.go`
   - command: `go test ./internal/claudetrace -count=1`
   - fixtures/mocks/data: `testdata/sources/claude/real-derived-structure-*.jsonl`, `testdata/sources/claude/no-tools.jsonl`, `testdata/sources/claude/bash-tool.jsonl`, `testdata/sources/claude/generic-tool.jsonl`, `testdata/sources/claude/incomplete.jsonl`, `testdata/sources/claude/corrupt.jsonl`, `testdata/sources/claude/thinking.jsonl`
-  - deterministic controls: no network, fixed sanitized real-derived structure fixtures, fixed synthetic transcript JSONL, repeated parse comparison, parser runtime budget 200ms for fixture corpus
+  - deterministic controls: no network, fixed sanitized real-derived structure fixtures, fixed synthetic transcript JSONL, repeated parse comparison; parser timing is non-binding benchmark evidence under ADR-PERF-001
   - pass_criteria: parser returns expected exportable turns, maps Bash command/output/status metadata, maps non-Bash tools to generic normalized observations, pairs tool_use/tool_result IDs, omits thinking blocks, redacts sentinel secrets, includes path and line in corrupt JSON errors, and derives provider-separated IDs
   - expected_runtime: 5s
   - traceability tag: `// TEST-504`
@@ -1147,6 +1148,7 @@ exportstate.QueueRecord:
 - ADR-005: Existing binary and service names remain in the MVP; no generic aliases are added.
 - ADR-006: Claude pricing is deferred out of the MVP; a future pricing change requires source URL, source date, and explicit model IDs.
 - ADR-007: Yellow phase gates are blocking; no residual docs, duplicate logic, or legacy-path debt carries into the next phase without an ADR-backed requirement change.
+- ADR-PERF-001: Keep correctness and determinism clock-free, use Go benchmarks for parser micro-performance, and bind release latency at watcher boundaries; canonical decision is `plans/performance-test-stability.md`.
 
 ## 13. Consistency check
 

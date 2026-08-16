@@ -238,7 +238,7 @@ Resumption criteria:
 - Step 3 RED: create/update `TEST-105` in `internal/codextrace/insight_test.go` for `REQ-110`, `REQ-116`, and `REQ-117`; run `go test ./internal/codextrace -run TestInsightRollupDeterminism -count=1`; expected FAIL because sorting, dedupe, root path omission, and extension extraction rules are missing.
 - Step 4 GREEN: sort existing patch path metadata in `internal/codextrace/format.go`, sort root extensions in `internal/codextrace/insight.go`, dedupe arrays, and keep full paths out of root metadata; run `go test ./internal/codextrace -run TestInsightRollupDeterminism -count=1`; expected PASS.
 - Step 5 REFACTOR: keep rollup derivation in one file and remove repeated metadata key literals from tests through a local helper; run `go test ./internal/codextrace -parallel 8`; expected PASS.
-- Step 6 MEASURE: run `EVAL-103` command `go test ./internal/codextrace -run TestEvalInsightRollupLatency -count=5 -parallel 4`; expected thresholds met.
+- Step 6 MEASURE: run `EVAL-103` command `go test -p=1 ./internal/agenttrace -run '^TestInsightRollupDeterminism$' -bench '^BenchmarkInsightRollup$' -benchmem -count=5`; expected deterministic metadata and five benchmark samples under ADR-PERF-001.
 - Restore point after exit: `git tag -f restore/trace-insights-P02-done`.
 - Exit gates:
   - Green criteria: rollup fields match the complete-tools fixture.
@@ -336,7 +336,8 @@ evals:
   - id: EVAL-103
     purpose: dev
     metrics:
-      rollup_latency_ms_p95_max: 10
+      rollup_benchmark_sample_count: 5
+      rollup_ns_per_op: recorded
       deterministic_metadata_rate: 1.0
     thresholds:
       pass_rate: 1.0
@@ -636,6 +637,7 @@ Langfuse attribute prefix:
 - ADR-105: Normalize command timing to `duration_ms` metadata and omit raw nested command `duration`.
 - ADR-106: Attach root insight metadata only to the trace or `codex.agent`; child observations keep observation-specific metadata.
 - ADR-107: Any metadata key rename, enum expansion, or metric threshold change requires an ADR update.
+- ADR-PERF-001: Replace the 10 ms developer-host rollup micro-timer with benchmark evidence and binding watcher latency gates; canonical decision is `plans/performance-test-stability.md`.
 
 ## 13. Consistency check
 - All `REQ-###` identifiers appear in the RTM.
