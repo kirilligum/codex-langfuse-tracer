@@ -34,7 +34,7 @@ The following is a dated snapshot. Re-run the evidence commands before implement
 
 | Surface | Verified state on 2026-08-15 |
 | --- | --- |
-| Repository | `main` was clean and equal to `origin/main` at `8201488` (`feat: export unfinished Codex trace progress (#6)`). |
+| Repository | Performance-test implementation PR #8 merged to `main` at `4a3b4b4`. This handoff closeout changes evidence only; use the current runtime evidence commands below instead of treating the recorded SHA as the latest repository head. |
 | Canonical endpoint | `https://codex-langfuse-tracer.prls.co/api/public/health` returned HTTP 200 and the configured project keys authenticated. |
 | Current workstation | `codex-langfuse-watch.service` used `~/.codex/langfuse-exporter.toml`, targeted the canonical endpoint, was active with zero restarts, and had queue length zero. The private config mode was `0600`. |
 | Live delivery | An active trace returned HTTP 200 from the canonical endpoint and HTTP 404 from the workstation's local Langfuse instance. |
@@ -42,8 +42,8 @@ The following is a dated snapshot. Re-run the evidence commands before implement
 | Local Langfuse | A loopback instance at `http://127.0.0.1:3031` remained healthy but was not the configured export target. |
 | Claude Code | The repository supports explicit transcript export and Stop-hook queueing. The Stop hook was not installed on the verified workstation. |
 | Gateway switching | `~/p/CLIProxyAPI-setup/scripts/switch-current-machine.sh` was committed at adjacent repository commit `22d1c0e` and switched only the CPA tunnel. It did not move the Langfuse tunnel or data. |
-| Release state | No new tracer commit, tag, or release was created for the operational client cutover. Machine-private configuration changes were not committed. |
-| Test state | On 2026-08-15, `go test ./... -count=1` passed, including the `test` package in 297.984 s. The affected correctness packages passed ten consecutive runs. Five benchmark samples were recorded for `BenchmarkInsightRollup` and `BenchmarkClaudeParserCorpus`. The binding watcher and Claude queue latency tests passed 5/5; watcher scan wall time ranged from 55.865 ms to 132.401 ms with logical p95 of 5 s. [ADR-PERF-001](performance-test-stability.md) documents why the former developer-host micro-timers were retired, so no quiet-host rerun or CPU-placement workaround remains in the release gate. |
+| Release state | The operational client cutover did not require a tracer release. Test and documentation closeout PR #8 merged to `main` at `4a3b4b4`; because it changed no runtime code or configuration, no binary release or service deployment was applicable. Machine-private configuration changes were not committed. |
+| Test state | On merged `main` at `4a3b4b4`, `go test ./... -count=1` passed, including the `test` package in 311.945 s. The affected correctness packages passed ten consecutive runs. Five benchmark samples were recorded for `BenchmarkInsightRollup` and `BenchmarkClaudeParserCorpus`. The post-merge binding watcher and Claude queue latency tests passed 5/5; watcher scan wall time ranged from 18.785 ms to 75.770 ms with logical p95 of 5 s. [ADR-PERF-001](performance-test-stability.md) documents why the former developer-host micro-timers were retired. |
 | Security action | Private credential values appeared in diagnostic tool output during the operational cutover. A later process listing also captured an OpenRouter key embedded in an unrelated process's command-line arguments while the watcher was active, so the affected trace must be treated as sensitive. No values belong in this repository. Rotate the affected workstation credentials through their owning systems and apply the operator's trace-retention policy before treating the incident as closed. |
 
 ### Current runtime evidence commands
@@ -60,16 +60,19 @@ curl -fsS https://codex-langfuse-tracer.prls.co/api/public/health
 
 The separate `~/.codex/langfuse-exporter.toml` and systemd override are current machine-private deployment facts, not a public installation contract. Do not copy credentials or this workstation's private configuration into the repository.
 
-### Documentation handoff evidence
+### Closeout verification evidence
 
-The documentation-only change was validated with existing repository commands:
+The performance-test and documentation closeout was validated with existing repository commands:
 
 ```text
 git diff --check
 go test ./test -run 'TestDocs|TestEvalDocs' -count=1
+go test ./... -count=1
+go test -p=1 ./internal/watch -run '^(TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency)$' -parallel=1 -count=5 -v
+go test -p=1 ./internal/agenttrace ./internal/claudetrace -run '^$' -bench 'Benchmark(InsightRollup|ClaudeParserCorpus)$' -benchmem -count=5
 ```
 
-Both passed. The full `go test ./... -count=1` result remains failed only on the two performance thresholds recorded in the table above; no threshold or test purpose was changed.
+All correctness and binding latency commands passed. The benchmarks are non-binding engineering evidence, while the watcher and Claude queue tests remain the binding latency controls. No production behavior changed in this closeout.
 
 ## Decisions
 
@@ -261,7 +264,7 @@ make verify
 
 ### Phase 5: Release only with complete evidence
 
-Run the production gate in `TESTING.md` on a quiet host. Performance threshold failures are release-blocking; do not weaken thresholds because a shared workstation is busy.
+Run the production gate exactly as documented in `TESTING.md`. Microbenchmarks are non-binding engineering evidence; the binding watcher and Claude queue latency thresholds remain release-blocking. Do not add load-based skips, retries, CPU-affinity requirements, or alternate release paths.
 
 Required release evidence:
 

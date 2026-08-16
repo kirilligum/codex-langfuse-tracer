@@ -487,6 +487,7 @@ func TestDocsPerformanceGateSeparation(t *testing.T) {
 	t.Parallel()
 
 	testingDoc := readRepoDoc(t, "TESTING.md")
+	handoff := readRepoDoc(t, filepath.Join("plans", "multi-machine-tracing-gateway-handoff.md"))
 	for _, required := range []string{
 		"Benchmark(InsightRollup|ClaudeParserCorpus)",
 		"TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency",
@@ -502,6 +503,23 @@ func TestDocsPerformanceGateSeparation(t *testing.T) {
 	} {
 		if strings.Contains(testingDoc, retired) {
 			t.Fatalf("TESTING still references retired scheduler-sensitive test %q", retired)
+		}
+	}
+	for _, required := range []string{
+		"benchmarks are non-binding engineering evidence",
+		"binding watcher and Claude queue latency thresholds remain release-blocking",
+	} {
+		if !strings.Contains(handoff, required) {
+			t.Fatalf("gateway handoff missing performance closeout %q", required)
+		}
+	}
+	for _, stale := range []string{
+		"result remains failed",
+		"on a quiet host",
+		"Performance threshold failures are release-blocking",
+	} {
+		if strings.Contains(handoff, stale) {
+			t.Fatalf("gateway handoff contains superseded performance guidance %q", stale)
 		}
 	}
 }
