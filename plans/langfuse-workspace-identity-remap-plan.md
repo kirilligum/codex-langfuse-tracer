@@ -912,7 +912,7 @@ evaluations:
 - Deployment Results: Runtime PR #10 merged to `main`, and closeout evidence was published through PR #11; the exact legacy config key and version-1 state file were removed; `./install.sh` installed the merged exporter; the user service is active with zero restarts; doctor reports every check green; state is version 2 with a complete environment checkpoint and an empty retry queue.
 - CHECK-701 Results: PASS for trace `2d8e0ff1a5158f2464692e5c68a56efa` at `2026-08-17T03:09:52Z`. User/hostname match: true. Trace Environment match: true. Observation Environment match: true. Score Environment match: true. CWD metadata match: true. Branch metadata match: true. Legacy config absent: true. Version-1 state absent: true.
 - Live gate coverage: `TestLiveWorkspaceIdentityTrace` now verifies the trace, every returned observation, and every returned deterministic score through the authenticated API while emitting no private identity or content values on success.
-- Documentation follow-up: The version-1 cutover uses `install.sh` as the only service-start path, and `TestDocsWorkspaceIdentity` enforces the command order and absence of a manual start command.
+- Documentation follow-up: PR #12 makes `install.sh` the only service-start path for the version-1 cutover, and `TestDocsWorkspaceIdentity` enforces the command order and absence of a manual start command.
 - Residual risks: Existing Langfuse traces keep their historical environment because this plan intentionally does not migrate remote history. No plan-related implementation, deployment, migration, or acceptance work remains.
 
 ## Appendix: ADR index
