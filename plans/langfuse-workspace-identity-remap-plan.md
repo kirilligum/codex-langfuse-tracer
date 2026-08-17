@@ -1,7 +1,7 @@
 # Langfuse Workspace Identity Remap Plan
 
 - Project name: `codex-langfuse-tracer`
-- Version: 2.1
+- Version: 2.2
 - Owners: Repository maintainer Kirill Igumenshchev; implementation owner coding agent
 - Date: 2026-08-16
 - Document ID: CLT-PLAN-WORKSPACE-IDENTITY-001
@@ -875,6 +875,7 @@ evaluations:
 - CHECK-701 trace selection adjustment: `--latest` selected this still-open parent Codex rollout during the nested production probe. The completed probe was exported with `--session-id 01a00db2-18fd-7630-9101-920722e32c1e`, which uses the same manual export implementation while selecting the intended rollout deterministically.
 - CHECK-701 historical trace handling: The first post-reset `--latest` invocation replayed deterministic trace IDs that already existed in Langfuse with the former `default` environment. Existing remote traces were not rewritten or migrated. A new post-cutover probe supplied the acceptance evidence, preserving the one-way local cutover and no-legacy scope.
 - CHECK-701 public evidence adjustment: The procedure requested a trace URL. The configured host was verified locally but is omitted from this public repository; the trace ID and UTC timestamp retain auditable correlation without publishing private infrastructure coordinates.
+- P02 post-closeout documentation correction: The first published README installed the new exporter before deleting version-1 state and then required a separate service start. The final README now documents the canonical stop, exact state removal, then `./install.sh` sequence and statically forbids the redundant manual start path.
 - ADR/KER impact: ADR-701 through ADR-706 remain unchanged because the implementation preserves every recorded decision. This repository has no separate KER artifact or KER convention, so no KER was created.
 
 ### Phase P00 execution record
@@ -911,6 +912,7 @@ evaluations:
 - Deployment Results: Runtime PR #10 merged to `main`, and closeout evidence was published through PR #11; the exact legacy config key and version-1 state file were removed; `./install.sh` installed the merged exporter; the user service is active with zero restarts; doctor reports every check green; state is version 2 with a complete environment checkpoint and an empty retry queue.
 - CHECK-701 Results: PASS for trace `2d8e0ff1a5158f2464692e5c68a56efa` at `2026-08-17T03:09:52Z`. User/hostname match: true. Trace Environment match: true. Observation Environment match: true. Score Environment match: true. CWD metadata match: true. Branch metadata match: true. Legacy config absent: true. Version-1 state absent: true.
 - Live gate coverage: `TestLiveWorkspaceIdentityTrace` now verifies the trace, every returned observation, and every returned deterministic score through the authenticated API while emitting no private identity or content values on success.
+- Documentation follow-up: PR #12 makes `install.sh` the only service-start path for the version-1 cutover, and `TestDocsWorkspaceIdentity` enforces the command order and absence of a manual start command.
 - Residual risks: Existing Langfuse traces keep their historical environment because this plan intentionally does not migrate remote history. No plan-related implementation, deployment, migration, or acceptance work remains.
 
 ## Appendix: ADR index
