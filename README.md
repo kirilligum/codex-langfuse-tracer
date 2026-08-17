@@ -127,11 +127,20 @@ chmod 600 ~/.codex/config.toml
 
 ### 3. Install
 
+Version 1 state is intentionally incompatible and is not migrated. When upgrading a machine that has version 1 state, stop the existing watcher and perform this one-time destructive reset before installing:
+
+```sh
+systemctl --user stop codex-langfuse-watch.service
+rm -- ~/.codex/langfuse-export-state.json
+```
+
+Removing the file discards processed IDs, queued requests, the scan watermark, and partial progress. There is no compatibility state, backup path, or migration command.
+
 ```sh
 ./install.sh
 ```
 
-The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance. If model pricing sync fails, the installer stops before installing the `codex-langfuse-watch.service` unit.
+The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it. It is the only required service-start step. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance. If model pricing sync fails, the installer stops before installing the `codex-langfuse-watch.service` unit.
 
 Useful preflight checks after setting equivalent shell variables:
 
@@ -148,17 +157,7 @@ Installed files:
 ~/.codex/langfuse-export-state.json
 ```
 
-The version 2 state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches.
-
-Version 1 state is intentionally incompatible and is not migrated. After installing the new exporter, perform this one-time destructive reset before relying on the watcher:
-
-```sh
-systemctl --user stop codex-langfuse-watch.service
-rm -- ~/.codex/langfuse-export-state.json
-systemctl --user start codex-langfuse-watch.service
-```
-
-Removing the file discards processed IDs, queued requests, the scan watermark, and partial progress. A fresh version 2 file is created at startup, and recently modified session files can be exported again. There is no compatibility state, backup path, or migration command.
+The version 2 state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches. The installer starts the watcher, which creates fresh version 2 state when no state file exists; recently modified session files can then be exported again.
 
 If you want the user service to run even when you are logged out, enable lingering for your Linux user:
 

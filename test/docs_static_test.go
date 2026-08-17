@@ -152,11 +152,20 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 		"version 2",
 		"systemctl --user stop codex-langfuse-watch.service",
 		"rm -- ~/.codex/langfuse-export-state.json",
-		"systemctl --user start codex-langfuse-watch.service",
+		"It is the only required service-start step",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
 		}
+	}
+	stopIndex := strings.Index(readme, "systemctl --user stop codex-langfuse-watch.service")
+	removeIndex := strings.Index(readme, "rm -- ~/.codex/langfuse-export-state.json")
+	installIndex := strings.Index(readme, "./install.sh")
+	if stopIndex >= removeIndex || removeIndex >= installIndex {
+		t.Fatal("README must document the version 1 cutover as stop, remove state, then install")
+	}
+	if strings.Contains(readme, "systemctl --user start codex-langfuse-watch.service") {
+		t.Fatal("README must use install.sh as the only service-start path")
 	}
 	for _, required := range []string{
 		"TestDoctorMode",
