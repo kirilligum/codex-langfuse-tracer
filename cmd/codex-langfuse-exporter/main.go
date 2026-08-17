@@ -37,7 +37,6 @@ type options struct {
 	TurnID                string
 	ConfigPath            string
 	StateFile             string
-	Environment           string
 	ServiceName           string
 	PollIntervalSeconds   float64
 	JSON                  bool
@@ -48,6 +47,7 @@ type options struct {
 }
 
 var syncModelPricing = langfuse.SyncModelPricing
+var hostnameUserID = langfuse.HostnameUserID
 var errUnsupportedProvider = providers.ErrUnsupportedProvider
 var stdin io.Reader = os.Stdin
 
@@ -77,7 +77,6 @@ func parseArgs(args []string) (options, error) {
 		Provider:              agenttrace.ProviderCodex,
 		ConfigPath:            config.DefaultConfigPath(),
 		StateFile:             config.DefaultStatePath(),
-		Environment:           buildinfo.DefaultEnvironment,
 		ServiceName:           buildinfo.DefaultServiceName,
 		PollIntervalSeconds:   buildinfo.DefaultPollIntervalSeconds,
 		VerifyWaitSeconds:     25.0,
@@ -97,7 +96,6 @@ func parseArgs(args []string) (options, error) {
 	fs.StringVar(&opts.TurnID, "turn-id", "", "Only export one turn id from the selected session")
 	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "Path to ~/.codex/config.toml")
 	fs.StringVar(&opts.StateFile, "state-file", opts.StateFile, "Path to watch state file")
-	fs.StringVar(&opts.Environment, "environment", opts.Environment, "Langfuse environment")
 	fs.StringVar(&opts.ServiceName, "service-name", opts.ServiceName, "OTel service.name")
 	fs.Float64Var(&opts.PollIntervalSeconds, "poll-interval-seconds", opts.PollIntervalSeconds, "Watch poll interval")
 	fs.BoolVar(&opts.JSON, "json", false, "Emit machine-readable JSON for manual exports and doctor")
@@ -171,6 +169,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if opts.Doctor {
 		return runDoctor(ctx, cfg, opts, stdout, stderr)
 	}
+	userID, err := hostnameUserID()
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 1
+	}
 	if opts.Watch {
 		err := watch.WatchSessions(ctx, watch.ScanOptions{
 			Root:                config.CodexHome(),
@@ -179,11 +182,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Stderr:              stderr,
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
-			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool) (int, error) {
-				return langfuse.ExportSpans(ctx, cfg, turn, firstObservationIndex, final, opts.Environment, opts.ServiceName)
+			ResolveWorkspace:    langfuse.ResolveWorkspace,
+			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool, environment string) (int, error) {
+				return langfuse.ExportSpans(ctx, cfg, turn, firstObservationIndex, final, environment, userID, opts.ServiceName)
 			},
-			ExportScores: func(ctx context.Context, turn agenttrace.Turn) error {
-				return langfuse.CreateDeterministicScores(ctx, cfg, turn, opts.Environment)
+			ExportScores: func(ctx context.Context, turn agenttrace.Turn, environment string) error {
+				return langfuse.CreateDeterministicScores(ctx, cfg, turn, environment)
 			},
 		})
 		if err != nil {
@@ -224,15 +228,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	projectID := ""
 	for _, turn := range exportable {
-		if !opts.JSON && !opts.Quiet {
-			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
-		}
-		status, err := langfuse.ExportSpans(ctx, cfg, turn, 0, true, opts.Environment, opts.ServiceName)
+		resolvedTurn, environment, err := langfuse.ResolveWorkspace(ctx, turn)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}
-		if err := langfuse.CreateDeterministicScores(ctx, cfg, turn, opts.Environment); err != nil {
+		turn = resolvedTurn
+		if !opts.JSON && !opts.Quiet {
+			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
+		}
+		status, err := langfuse.ExportSpans(ctx, cfg, turn, 0, true, environment, userID, opts.ServiceName)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: %v\n", err)
+			return 1
+		}
+		if err := langfuse.CreateDeterministicScores(ctx, cfg, turn, environment); err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}

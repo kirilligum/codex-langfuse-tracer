@@ -7,5 +7,4 @@ args = ["--python", "3.11", "--with", "mcp>=1.28,<2", "langfuse-mcp==0.10.0"]
 LANGFUSE_HOST = "http://localhost:3000"
 LANGFUSE_PUBLIC_KEY = "<LANGFUSE_PUBLIC_KEY>"
 LANGFUSE_SECRET_KEY = "<LANGFUSE_SECRET_KEY>"
-# Optional: show compact folder(branch)@hostname in Langfuse's User column.
-# LANGFUSE_USER_ID_MODE = "workspace"
+# Workspace identity needs no configuration; the exporter uses Git and hostname directly.

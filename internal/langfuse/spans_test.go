@@ -3,7 +3,6 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -21,7 +20,7 @@ func TestSpanShapeAndIDs(t *testing.T) {
 
 	turn := completeTurn(t)
 	exporter := &memoryExporter{}
-	if err := EmitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := EmitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	spans := exporter.Snapshots()
@@ -71,7 +70,7 @@ func TestProgressiveSpanAttributes(t *testing.T) {
 	turn.Observations = append([]agenttrace.Observation(nil), turn.Observations[:1]...)
 	turn.Observations[0].Output = "partial output contains sk-lf-partial-secret"
 	exporter := &memoryExporter{}
-	if err := emitSpans(context.Background(), turn, 0, false, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, exportOptions{UserIDMode: "workspace"}); err != nil {
+	if err := emitSpans(context.Background(), turn, 0, false, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("emitSpans partial: %v", err)
 	}
 	spans := exporter.Snapshots()
@@ -243,12 +242,16 @@ func TestCountMetadataExportedOnAgent(t *testing.T) {
 func TestWorkspaceGitBranchMetadataExported(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	runGit(t, root, "init")
+	root := initWorkspaceRepository(t)
 	runGit(t, root, "checkout", "-b", "feature/langfuse-branch")
 
 	turn := completeTurn(t)
 	turn.CWD = root
+	var err error
+	turn, _, err = ResolveWorkspace(context.Background(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spans := emitTurnSpans(t, turn)
 	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
 		span := spans.ByName(name)
@@ -264,69 +267,58 @@ func TestWorkspaceGitBranchMetadataExported(t *testing.T) {
 	}
 }
 
-func TestWorkspaceUserIDModeExportsNormalizedCWD(t *testing.T) {
+// TEST-702
+func TestWorkspaceIdentityProjection(t *testing.T) {
 	t.Parallel()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
 	turn := completeTurn(t)
-	turn.CWD = filepath.Join(home, "tmp", "litellm-chatgpt")
-	turn.GitBranch = "feature/workspace-user"
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantUserID := "tmp/litellm-chatgpt(feature/workspace-user)"
-	if hostname != "" {
-		wantUserID += "@" + hostname
-	}
-	spans := emitTurnSpansWithOptions(t, turn, exportOptions{UserIDMode: "workspace"})
-	for _, name := range []string{"codex.agent", "codex.transcript", agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand)} {
-		span := spans.ByName(name)
-		if span.Name == "" {
-			t.Fatalf("missing span %s", name)
-		}
-		if span.Attributes["langfuse.user.id"] != wantUserID {
-			t.Fatalf("%s user id = %q", name, span.Attributes["langfuse.user.id"])
-		}
-	}
+	turn.CWD = "/workspace/repository/nested"
+	turn.GitBranch = "Feature/One"
+	const environment = "repository--feature-one-a1b2c3"
+	const hostname = "devbox-01"
 
-	if got := normalizeHomePath("/home/kirill/tmp/litellm-chatgpt", "/home/kirill"); got != "~/tmp/litellm-chatgpt" {
-		t.Fatalf("normalized home cwd = %q", got)
+	exporter := &memoryExporter{}
+	if err := EmitSpans(context.Background(), turn, 0, true, environment, hostname, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitSpans final: %v", err)
 	}
-	if got := normalizeHomePath("/home/kirill", "/home/kirill"); got != "~" {
-		t.Fatalf("normalized home root = %q", got)
+	assertProjectedIdentity(t, exporter.Snapshots(), environment, hostname, turn.CWD, turn.GitBranch)
+
+	partial := turn
+	partial.Completed = false
+	partial.AssistantTexts = nil
+	partial.TokenUsage = nil
+	partial.Observations = append([]agenttrace.Observation(nil), turn.Observations[:1]...)
+	exporter = &memoryExporter{}
+	if err := EmitSpans(context.Background(), partial, 0, false, environment, hostname, buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatalf("EmitSpans partial: %v", err)
 	}
-	if got := normalizeHomePath("/home/kirill-other/app", "/home/kirill"); got != "/home/kirill-other/app" {
-		t.Fatalf("normalized sibling home = %q", got)
+	partialSpans := exporter.Snapshots()
+	if len(partialSpans) != 1 {
+		t.Fatalf("partial spans = %d, want 1", len(partialSpans))
 	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", ""); got != "tmp/litellm-chatgpt" {
-		t.Fatalf("workspace user without branch = %q", got)
-	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", ""); got != "tmp/litellm-chatgpt(main)" {
-		t.Fatalf("workspace user with branch = %q", got)
-	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "main", "workstation"); got != "tmp/litellm-chatgpt(main)@workstation" {
-		t.Fatalf("workspace user with branch and hostname = %q", got)
-	}
-	if got := formatWorkspaceUserID("~/tmp/litellm-chatgpt", "", "workstation"); got != "tmp/litellm-chatgpt@workstation" {
-		t.Fatalf("workspace user with hostname = %q", got)
-	}
-	if got := formatWorkspaceUserID("/srv/app", "main", "workstation"); got != "/srv/app(main)@workstation" {
-		t.Fatalf("workspace user outside home = %q", got)
-	}
+	assertProjectedIdentity(t, partialSpans, environment, hostname, "", "")
 }
 
-func TestDefaultUserIDModeDoesNotSetUserID(t *testing.T) {
-	t.Parallel()
-
-	turn := completeTurn(t)
-	turn.CWD = filepath.Join("/home", "kirill", "tmp", "litellm-chatgpt")
-	for _, span := range emitTurnSpans(t, turn) {
-		if _, ok := span.Attributes["langfuse.user.id"]; ok {
-			t.Fatalf("%s has user id in default mode: %#v", span.Name, span.Attributes)
+func assertProjectedIdentity(t *testing.T, spans spanSnapshots, environment, hostname, cwd, branch string) {
+	t.Helper()
+	if len(spans) == 0 {
+		t.Fatal("no spans projected")
+	}
+	for _, span := range spans {
+		if span.ResourceAttrs["langfuse.environment"] != environment {
+			t.Fatalf("%s resource environment = %q", span.Name, span.ResourceAttrs["langfuse.environment"])
+		}
+		if span.Attributes["langfuse.environment"] != environment {
+			t.Fatalf("%s environment = %q", span.Name, span.Attributes["langfuse.environment"])
+		}
+		if span.Attributes["langfuse.user.id"] != hostname {
+			t.Fatalf("%s user id = %q", span.Name, span.Attributes["langfuse.user.id"])
+		}
+		if cwd != "" && span.Attributes["langfuse.observation.metadata.cwd"] != cwd {
+			t.Fatalf("%s cwd = %q", span.Name, span.Attributes["langfuse.observation.metadata.cwd"])
+		}
+		if branch != "" && span.Attributes["langfuse.observation.metadata.git_branch"] != branch {
+			t.Fatalf("%s branch = %q", span.Name, span.Attributes["langfuse.observation.metadata.git_branch"])
 		}
 	}
 }
@@ -501,13 +493,8 @@ func emitCompleteTurnSpans(t *testing.T) spanSnapshots {
 
 func emitTurnSpans(t *testing.T, turn agenttrace.Turn) spanSnapshots {
 	t.Helper()
-	return emitTurnSpansWithOptions(t, turn, exportOptions{})
-}
-
-func emitTurnSpansWithOptions(t *testing.T, turn agenttrace.Turn, opts exportOptions) spanSnapshots {
-	t.Helper()
 	exporter := &memoryExporter{}
-	if err := emitSpans(context.Background(), turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName, exporter, opts); err != nil {
+	if err := emitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("emitSpans: %v", err)
 	}
 	return exporter.Snapshots()

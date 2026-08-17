@@ -53,9 +53,10 @@ func TestExportStateQueueDedupe(t *testing.T) {
 // TEST-602
 func TestStateUpdatePreservesQueue(t *testing.T) {
 	t.Parallel()
+	// TEST-703
 
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := Save(path, State{Version: 1, ScanWatermarkNS: 10}); err != nil {
+	if err := Save(path, State{Version: 2, ScanWatermarkNS: 10}); err != nil {
 		t.Fatal(err)
 	}
 	stale, err := Load(path)
@@ -71,9 +72,9 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 99})
+	stale.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 99, Environment: "stale--main-a1b2c3"})
 	updated, err := Update(path, func(current *State) error {
-		current.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 1})
+		current.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 1, Environment: "repository--main-b2c3d4"})
 		return nil
 	})
 	if err != nil {
@@ -84,6 +85,9 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 	}
 	if got := updated.ProgressFor("trace-progress").ExportedObservationCount; got != 1 {
 		t.Fatalf("progress count = %d, want 1", got)
+	}
+	if got := updated.ProgressFor("trace-progress").Environment; got != "repository--main-b2c3d4" {
+		t.Fatalf("progress environment = %q", got)
 	}
 	loaded, err := Load(path)
 	if err != nil {

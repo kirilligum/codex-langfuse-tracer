@@ -18,8 +18,9 @@ type State struct {
 }
 
 type TurnProgress struct {
-	ExportedObservationCount int  `json:"exported_observation_count"`
-	FinalSpansExported       bool `json:"final_spans_exported"`
+	ExportedObservationCount int    `json:"exported_observation_count"`
+	FinalSpansExported       bool   `json:"final_spans_exported"`
+	Environment              string `json:"environment"`
 }
 
 type QueueRequest struct {
@@ -42,15 +43,21 @@ func Load(path string) (*State, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, err
 	}
-	if state.Version != 1 {
+	if state.Version != 2 {
 		return nil, fmt.Errorf("unsupported watch state version in %s", path)
+	}
+	if err := state.validate(); err != nil {
+		return nil, err
 	}
 	state.normalize()
 	return &state, nil
 }
 
 func Save(path string, state State) error {
-	state.Version = 1
+	state.Version = 2
+	if err := state.validate(); err != nil {
+		return err
+	}
 	state.normalize()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -79,7 +86,7 @@ func Update(path string, mutate func(*State) error) (State, error) {
 		return State{}, err
 	}
 	if state == nil {
-		state = &State{Version: 1}
+		state = &State{Version: 2}
 	}
 	if err := mutate(state); err != nil {
 		return State{}, err
@@ -162,6 +169,15 @@ func (s *State) normalize() {
 		delete(s.TurnProgress, traceID)
 	}
 	s.Queue = uniqueQueue(s.Queue)
+}
+
+func (s State) validate() error {
+	for traceID, progress := range s.TurnProgress {
+		if progress.Environment == "" {
+			return fmt.Errorf("turn progress %s requires environment", traceID)
+		}
+	}
+	return nil
 }
 
 func uniqueQueue(values []QueueRequest) []QueueRequest {

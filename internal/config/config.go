@@ -11,16 +11,10 @@ import (
 )
 
 type LangfuseConfig struct {
-	Host       string
-	PublicKey  string
-	SecretKey  string
-	UserIDMode string
+	Host      string
+	PublicKey string
+	SecretKey string
 }
-
-const (
-	UserIDModeDefault   = ""
-	UserIDModeWorkspace = "workspace"
-)
 
 func CodexHome() string {
 	if value := os.Getenv("CODEX_HOME"); value != "" {
@@ -62,11 +56,6 @@ func Load(path string) (LangfuseConfig, error) {
 	host := strings.TrimRight(env["LANGFUSE_HOST"], "/")
 	publicKey := env["LANGFUSE_PUBLIC_KEY"]
 	secretKey := env["LANGFUSE_SECRET_KEY"]
-	userIDMode, err := parseUserIDMode(env["LANGFUSE_USER_ID_MODE"])
-	if err != nil {
-		return LangfuseConfig{}, fmt.Errorf("%w in [mcp_servers.langfuse.env] in %s", err, path)
-	}
-
 	missing := make([]string, 0, 3)
 	if host == "" {
 		missing = append(missing, "host")
@@ -81,16 +70,5 @@ func Load(path string) (LangfuseConfig, error) {
 		return LangfuseConfig{}, fmt.Errorf("missing Langfuse %s in [mcp_servers.langfuse.env] in %s", strings.Join(missing, "/"), path)
 	}
 
-	return LangfuseConfig{Host: host, PublicKey: publicKey, SecretKey: secretKey, UserIDMode: userIDMode}, nil
-}
-
-func parseUserIDMode(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "default":
-		return UserIDModeDefault, nil
-	case UserIDModeWorkspace:
-		return UserIDModeWorkspace, nil
-	default:
-		return "", fmt.Errorf("invalid LANGFUSE_USER_ID_MODE %q; use \"workspace\" or leave it unset", value)
-	}
+	return LangfuseConfig{Host: host, PublicKey: publicKey, SecretKey: secretKey}, nil
 }

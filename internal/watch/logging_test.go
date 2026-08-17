@@ -22,19 +22,20 @@ func TestWatchLogs(t *testing.T) {
 	if err := os.Chtimes(rolloutPath, now.Add(-30*time.Second), now.Add(-30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	state := exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
 	if err := exportstate.Save(statePath, state); err != nil {
 		t.Fatal(err)
 	}
 
 	var stdout, stderr bytes.Buffer
 	_, _, err := ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now,
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now,
+		Stdout:           &stdout,
+		Stderr:           &stderr,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			return 201, nil
 		},
 		ExportScores: successfulScores,
@@ -47,19 +48,20 @@ func TestWatchLogs(t *testing.T) {
 		t.Fatalf("success log missing: %s", stdout.String())
 	}
 
-	state = exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state = exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
 	stdout.Reset()
 	stderr.Reset()
 	if err := exportstate.Save(statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now,
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now,
+		Stdout:           &stdout,
+		Stderr:           &stderr,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			return 0, errors.New("export failed")
 		},
 		ExportScores: successfulScores,

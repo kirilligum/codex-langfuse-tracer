@@ -55,7 +55,7 @@ func TestDocsProgressiveCodexVisibility(t *testing.T) {
 	}
 	for _, required := range []string{
 		"TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan",
-		"TestTurnProgressLifecycle|TestStateUpdatePreservesQueue",
+		"TestVersion2State|TestStateUpdatePreservesQueue",
 		"TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes",
 		"TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs",
 		"TestEvalWatchExportLatency",
@@ -127,7 +127,8 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 	}
 }
 
-func TestDocsDiagnosticsScoresAndWorkspaceUserID(t *testing.T) {
+// TEST-705
+func TestDocsWorkspaceIdentity(t *testing.T) {
 	t.Parallel()
 
 	readme := readRepoDoc(t, "README.md")
@@ -139,8 +140,19 @@ func TestDocsDiagnosticsScoresAndWorkspaceUserID(t *testing.T) {
 		"trace_url",
 		"deterministic trace-level Langfuse scores",
 		"They do not make extra LLM calls",
-		"app(main)@devbox",
-		"LANGFUSE_USER_ID_MODE = \"workspace\"",
+		"`langfuse.environment`",
+		"`repository-folder--branch-<hash>`",
+		"first six lowercase hexadecimal SHA-256",
+		"export-time branch",
+		"detached HEAD uses `detached`",
+		"Non-Git, missing, unreadable, or timed-out working directories use `default`",
+		"`langfuse.user.id`",
+		"Linux runtime hostname",
+		"Identity fields are not configurable",
+		"version 2",
+		"systemctl --user stop codex-langfuse-watch.service",
+		"rm -- ~/.codex/langfuse-export-state.json",
+		"systemctl --user start codex-langfuse-watch.service",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
@@ -151,19 +163,39 @@ func TestDocsDiagnosticsScoresAndWorkspaceUserID(t *testing.T) {
 		"TestManualExportCLIJSONOutput",
 		"TestDeterministicScores",
 		"TestCreateDeterministicScores",
-		"TestDocsDiagnosticsScoresAndWorkspaceUserID",
-		"path/to/repo(branch)@hostname",
+		"TestDocsWorkspaceIdentity",
+		"TestWorkspaceIdentity",
+		"TestManualWorkspaceIdentity",
+		"TestWatchEnvironmentSnapshot|TestWatchEnvironmentRetry",
+		"LIVE_LANGFUSE_IDENTITY_TRACE_ID",
+		"LIVE_LANGFUSE_HOSTNAME",
+		"LIVE_LANGFUSE_ENVIRONMENT",
+		"TestLiveWorkspaceIdentityTrace",
 	} {
 		if !strings.Contains(testingDoc, required) {
 			t.Fatalf("TESTING missing %q", required)
 		}
 	}
-	for _, required := range []string{
-		"folder(branch)@hostname",
-		"LANGFUSE_USER_ID_MODE = \"workspace\"",
+	if !strings.Contains(exampleConfig, "Workspace identity needs no configuration") {
+		t.Fatal("example config does not state the single identity path")
+	}
+	for _, document := range []struct {
+		name string
+		text string
+	}{
+		{name: "README", text: readme},
+		{name: "TESTING", text: testingDoc},
+		{name: "example config", text: exampleConfig},
 	} {
-		if !strings.Contains(exampleConfig, required) {
-			t.Fatalf("example config missing %q", required)
+		for _, forbidden := range []string{
+			strings.Join([]string{"LANGFUSE", "USER", "ID", "MODE"}, "_"),
+			strings.Join([]string{"--", "environment"}, ""),
+			"folder(branch)@hostname",
+			"path/to/repo(branch)@hostname",
+		} {
+			if strings.Contains(document.text, forbidden) {
+				t.Fatalf("%s retains legacy identity surface %q", document.name, forbidden)
+			}
 		}
 	}
 }

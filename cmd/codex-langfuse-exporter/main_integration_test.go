@@ -4,12 +4,153 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	"google.golang.org/protobuf/proto"
 )
+
+// TEST-704
+func TestManualWorkspaceIdentity(t *testing.T) {
+	home := t.TempDir()
+	repository := filepath.Join(home, "Repository")
+	nested := filepath.Join(repository, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repository, "init")
+	runTestGit(t, repository,
+		"-c", "user.name=Test",
+		"-c", "user.email=test@example.com",
+		"commit", "--allow-empty", "-m", "initial",
+	)
+	runTestGit(t, repository, "checkout", "-b", "Feature/One")
+
+	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
+	raw, err := os.ReadFile(rolloutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.ReplaceAll(string(raw), "/tmp/codex-langfuse-fixture", nested))
+	if err := os.WriteFile(rolloutPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, wantEnvironment, err := langfuse.ResolveWorkspace(context.Background(), agenttrace.Turn{CWD: nested})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const wantHostname = "devbox-01"
+	hostnameCalls := 0
+	previousHostnameUserID := hostnameUserID
+	hostnameUserID = func() (string, error) {
+		hostnameCalls++
+		return wantHostname, nil
+	}
+	t.Cleanup(func() { hostnameUserID = previousHostnameUserID })
+
+	var spanEnvironments []string
+	var spanUserIDs []string
+	var scoreEnvironments []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/public/otel/v1/traces":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request collectortrace.ExportTraceServiceRequest
+			if err := proto.Unmarshal(body, &request); err != nil {
+				t.Fatal(err)
+			}
+			for _, resourceSpans := range request.ResourceSpans {
+				environment := testOTLPString(resourceSpans.Resource.Attributes, "langfuse.environment")
+				for _, scopeSpans := range resourceSpans.ScopeSpans {
+					for _, span := range scopeSpans.Spans {
+						spanEnvironments = append(spanEnvironments, environment)
+						spanUserIDs = append(spanUserIDs, testOTLPString(span.Attributes, "langfuse.user.id"))
+					}
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		case "/api/public/ingestion":
+			var batch struct {
+				Batch []struct {
+					Body struct {
+						Environment string `json:"environment"`
+					} `json:"body"`
+				} `json:"batch"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range batch.Batch {
+				scoreEnvironments = append(scoreEnvironments, event.Body.Environment)
+			}
+			successes := make([]map[string]any, len(batch.Batch))
+			for index := range successes {
+				successes[index] = map[string]any{"id": "accepted", "status": http.StatusCreated}
+			}
+			w.WriteHeader(http.StatusMultiStatus)
+			_ = json.NewEncoder(w).Encode(map[string]any{"successes": successes, "errors": []any{}})
+		case "/api/public/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	configPath := writeLangfuseConfig(t, home, server.URL)
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--no-verify"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if hostnameCalls != 1 {
+		t.Fatalf("hostname calls = %d, want 1", hostnameCalls)
+	}
+	if len(spanEnvironments) == 0 || len(scoreEnvironments) == 0 {
+		t.Fatalf("missing identity payloads spans=%v scores=%v", spanEnvironments, scoreEnvironments)
+	}
+	for _, environment := range append(spanEnvironments, scoreEnvironments...) {
+		if environment != wantEnvironment {
+			t.Fatalf("environment = %q, want %q", environment, wantEnvironment)
+		}
+	}
+	for _, userID := range spanUserIDs {
+		if userID != wantHostname {
+			t.Fatalf("user id = %q, want %q", userID, wantHostname)
+		}
+	}
+}
+
+func testOTLPString(attributes []*commonv1.KeyValue, key string) string {
+	for _, attribute := range attributes {
+		if attribute.Key == key {
+			return attribute.Value.GetStringValue()
+		}
+	}
+	return ""
+}
+
+func runTestGit(t *testing.T, directory string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
 
 // TEST-015
 // TEST-506

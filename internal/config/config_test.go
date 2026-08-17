@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -32,7 +33,7 @@ command = "uvx"
 LANGFUSE_HOST = "http://localhost:3000/"
 LANGFUSE_PUBLIC_KEY = "pk-lf-test"
 LANGFUSE_SECRET_KEY = "sk-lf-test"
-LANGFUSE_USER_ID_MODE = "workspace"
+LANGFUSE_USER_ID_MODE = "invalid-stale-value"
 `), 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +49,8 @@ LANGFUSE_USER_ID_MODE = "workspace"
 	if cfg.PublicKey != "pk-lf-test" || cfg.SecretKey != "sk-lf-test" {
 		t.Fatalf("keys not parsed: %+v", cfg)
 	}
-	if cfg.UserIDMode != UserIDModeWorkspace {
-		t.Fatalf("user id mode = %q", cfg.UserIDMode)
+	if _, ok := reflect.TypeOf(cfg).FieldByName("UserIDMode"); ok {
+		t.Fatalf("LangfuseConfig retains UserIDMode: %+v", cfg)
 	}
 
 	missingPath := filepath.Join(home, "missing.toml")
@@ -74,24 +75,6 @@ LANGFUSE_HOST = "http://localhost:3000"
 	}
 	if !strings.Contains(err.Error(), "public key/secret key") {
 		t.Fatalf("incomplete error = %v", err)
-	}
-
-	invalidModePath := filepath.Join(home, "invalid-mode.toml")
-	if err := os.WriteFile(invalidModePath, []byte(`
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "http://localhost:3000"
-LANGFUSE_PUBLIC_KEY = "pk-lf-test"
-LANGFUSE_SECRET_KEY = "sk-lf-test"
-LANGFUSE_USER_ID_MODE = "cwd"
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Load(invalidModePath)
-	if err == nil {
-		t.Fatal("Load(invalid mode) succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "LANGFUSE_USER_ID_MODE") {
-		t.Fatalf("invalid mode error = %v", err)
 	}
 
 	t.Setenv("CODEX_HOME", "")

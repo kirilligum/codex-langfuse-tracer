@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestWatchProgressiveLifecycle(t *testing.T) {
 	root, statePath, rolloutPath := progressiveWatchFixture(t)
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
-	state := exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
 	if err := exportstate.Save(statePath, state); err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +87,14 @@ func TestWatchProgressiveLifecycle(t *testing.T) {
 	var spans []spanCall
 	scores := 0
 	opts := ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		ExportSpans: func(_ context.Context, _ agenttrace.Turn, first int, final bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		ExportSpans: func(_ context.Context, _ agenttrace.Turn, first int, final bool, _ string) (int, error) {
 			spans = append(spans, spanCall{First: first, Final: final})
 			return 200, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn) error {
+		ExportScores: func(context.Context, agenttrace.Turn, string) error {
 			scores++
 			return nil
 		},
@@ -141,7 +143,7 @@ func TestWatchProgressiveFailureRetry(t *testing.T) {
 	root, statePath, rolloutPath := progressiveWatchFixture(t)
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
-	state := exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
 	if err := exportstate.Save(statePath, state); err != nil {
 		t.Fatal(err)
 	}
@@ -151,17 +153,18 @@ func TestWatchProgressiveFailureRetry(t *testing.T) {
 	failSpan := true
 	failScore := true
 	opts := ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Quiet:     true,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Quiet:            true,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			spanAttempts++
 			if failSpan {
 				return 0, errors.New("injected span failure")
 			}
 			return 202, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn) error {
+		ExportScores: func(context.Context, agenttrace.Turn, string) error {
 			scoreAttempts++
 			if failScore {
 				return errors.New("injected score failure")
@@ -204,6 +207,148 @@ func TestWatchProgressiveFailureRetry(t *testing.T) {
 	}
 	if spanAttempts != spansAfterFinal || scoreAttempts != 2 || !state.HasProcessed(traceID) {
 		t.Fatalf("score retry spans=%d want=%d scores=%d state=%+v", spanAttempts, spansAfterFinal, scoreAttempts, state)
+	}
+}
+
+// TEST-704
+func TestWatchEnvironmentSnapshot(t *testing.T) {
+	t.Parallel()
+
+	legacyStatePath := filepath.Join(t.TempDir(), "legacy-state.json")
+	if err := os.WriteFile(legacyStatePath, []byte("{\"version\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WatchSessions(context.Background(), ScanOptions{StatePath: legacyStatePath, Quiet: true}); err == nil || !strings.Contains(err.Error(), "unsupported watch state version") {
+		t.Fatalf("version 1 startup error = %v", err)
+	}
+
+	root, statePath, rolloutPath := progressiveWatchFixture(t)
+	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-time.Second))
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
+	if err := exportstate.Save(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	const environment = "repository--feature-one-a1b2c3"
+	resolverCalls := 0
+	state, _, err := ScanOnce(context.Background(), ScanOptions{
+		Root:      root,
+		StatePath: statePath,
+		Now:       now,
+		Quiet:     true,
+		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			resolverCalls++
+			turn.GitBranch = "feature/one"
+			return turn, environment, nil
+		},
+		ExportSpans: func(_ context.Context, _ agenttrace.Turn, _ int, _ bool, gotEnvironment string) (int, error) {
+			if gotEnvironment != environment {
+				t.Fatalf("span environment = %q", gotEnvironment)
+			}
+			persisted, err := exportstate.Load(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if progress := persisted.ProgressFor(incompleteTraceID(t)); progress.Environment != environment {
+				t.Fatalf("pre-network progress = %+v", progress)
+			}
+			return 0, errors.New("injected OTLP failure")
+		},
+		ExportScores: func(context.Context, agenttrace.Turn, string) error {
+			t.Fatal("scores must not run after failed partial OTLP")
+			return nil
+		},
+	}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolverCalls)
+	}
+	if progress := state.ProgressFor(incompleteTraceID(t)); progress.Environment != environment || progress.ExportedObservationCount != 0 {
+		t.Fatalf("failed span progress = %+v", progress)
+	}
+}
+
+// TEST-704
+func TestWatchEnvironmentRetry(t *testing.T) {
+	t.Parallel()
+
+	root, statePath, rolloutPath := progressiveWatchFixture(t)
+	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-time.Second))
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
+	if err := exportstate.Save(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	const firstEnvironment = "repository--feature-one-a1b2c3"
+	const changedEnvironment = "repository--feature-two-b2c3d4"
+	resolverCalls := 0
+	spanAttempts := 0
+	scoreAttempts := 0
+	var spanEnvironments []string
+	var scoreEnvironments []string
+	opts := ScanOptions{
+		Root:      root,
+		StatePath: statePath,
+		Quiet:     true,
+		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			resolverCalls++
+			if resolverCalls == 1 {
+				turn.GitBranch = "feature/one"
+				return turn, firstEnvironment, nil
+			}
+			turn.GitBranch = "feature/two"
+			return turn, changedEnvironment, nil
+		},
+		ExportSpans: func(_ context.Context, _ agenttrace.Turn, _ int, _ bool, environment string) (int, error) {
+			spanAttempts++
+			spanEnvironments = append(spanEnvironments, environment)
+			if spanAttempts == 1 {
+				return 0, errors.New("injected first span failure")
+			}
+			return 202, nil
+		},
+		ExportScores: func(_ context.Context, _ agenttrace.Turn, environment string) error {
+			scoreAttempts++
+			scoreEnvironments = append(scoreEnvironments, environment)
+			if scoreAttempts == 1 {
+				return errors.New("injected first score failure")
+			}
+			return nil
+		},
+	}
+
+	state, _, err := ScanOnce(context.Background(), withScanNow(opts, now), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRolloutLine(t, rolloutPath, `{"timestamp":"2026-05-01T11:00:05Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Partial answer"}}`)
+	setMTime(t, rolloutPath, now.Add(1500*time.Millisecond))
+	state, _, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(2*time.Second)), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolverCallsBeforeScoreRetry := resolverCalls
+	state, _, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(3*time.Second)), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolverCalls != resolverCallsBeforeScoreRetry {
+		t.Fatalf("score-only retry resolved workspace: before=%d after=%d", resolverCallsBeforeScoreRetry, resolverCalls)
+	}
+	for _, environment := range append(spanEnvironments, scoreEnvironments...) {
+		if environment != firstEnvironment {
+			t.Fatalf("progressive environment changed: spans=%v scores=%v", spanEnvironments, scoreEnvironments)
+		}
+	}
+	if spanAttempts != 3 || scoreAttempts != 2 || !state.HasProcessed(incompleteTraceID(t)) {
+		t.Fatalf("retry lifecycle spans=%d scores=%d state=%+v", spanAttempts, scoreAttempts, state)
 	}
 }
 
@@ -272,15 +417,19 @@ func TestWatchScanSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state := exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	if err := exportstate.Save(statePath, state); err != nil {
+		t.Fatal(err)
+	}
 	var stderr bytes.Buffer
 	exportCalls := 0
 	state, exported, err := ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now,
-		Stderr:    &stderr,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now,
+		Stderr:           &stderr,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			exportCalls++
 			return 0, errors.New("boom")
 		},
@@ -301,12 +450,13 @@ func TestWatchScanSemantics(t *testing.T) {
 
 	var stdout bytes.Buffer
 	state, exported, err = ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now.Add(time.Minute),
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now.Add(time.Minute),
+		Stdout:           &stdout,
+		Stderr:           &stderr,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			exportCalls++
 			return 200, nil
 		},
@@ -323,10 +473,11 @@ func TestWatchScanSemantics(t *testing.T) {
 	}
 
 	state, exported, err = ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now.Add(2 * time.Minute),
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now.Add(2 * time.Minute),
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			t.Fatal("duplicate export callback should not run")
 			return 0, nil
 		},
@@ -369,11 +520,12 @@ func TestInitializeStateAndWatchCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = WatchSessions(ctx, ScanOptions{
+		ResolveWorkspace:    testWorkspace,
 		Root:                root,
 		StatePath:           statePath,
 		PollIntervalSeconds: 0.001,
 		Quiet:               true,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			t.Fatal("export should not run for empty canceled watch")
 			return 0, nil
 		},
@@ -392,7 +544,7 @@ func TestWatchDrainsClaudeQueue(t *testing.T) {
 	statePath := filepath.Join(root, "langfuse-export-state.json")
 	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
-	state := exportstate.State{Version: 1, ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano()}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano()}
 	state.Queue = []exportstate.QueueRequest{{
 		Provider:   agenttrace.ProviderClaude,
 		SourcePath: transcriptPath,
@@ -406,10 +558,11 @@ func TestWatchDrainsClaudeQueue(t *testing.T) {
 
 	exportedTraceIDs := []string{}
 	state, exported, err := ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       time.Date(2026, 5, 4, 12, 1, 0, 0, time.UTC),
-		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              time.Date(2026, 5, 4, 12, 1, 0, 0, time.UTC),
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
 			exportedTraceIDs = append(exportedTraceIDs, turn.TraceID)
 			return 202, nil
 		},
@@ -426,10 +579,11 @@ func TestWatchDrainsClaudeQueue(t *testing.T) {
 	}
 
 	state, exported, err = ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       time.Date(2026, 5, 4, 12, 2, 0, 0, time.UTC),
-		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              time.Date(2026, 5, 4, 12, 2, 0, 0, time.UTC),
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
 			t.Fatalf("duplicate queued trace exported: %+v", turn)
 			return 0, nil
 		},
@@ -452,7 +606,7 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
 	initial := exportstate.State{
-		Version:         1,
+		Version:         2,
 		ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano(),
 	}
 	if err := exportstate.Save(statePath, initial); err != nil {
@@ -465,11 +619,12 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- WatchSessions(ctx, ScanOptions{
+			ResolveWorkspace:    testWorkspace,
 			Root:                root,
 			StatePath:           statePath,
 			PollIntervalSeconds: 0.01,
 			Quiet:               true,
-			ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool) (int, error) {
+			ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
 				exported <- turn.TraceID
 				cancel()
 				return 202, nil
@@ -526,7 +681,7 @@ func TestEvalHookQueueDrainLatency(t *testing.T) {
 	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
 	state := exportstate.State{
-		Version:         1,
+		Version:         2,
 		ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano(),
 		Queue: []exportstate.QueueRequest{{
 			Provider:   agenttrace.ProviderClaude,
@@ -535,13 +690,17 @@ func TestEvalHookQueueDrainLatency(t *testing.T) {
 			EnqueuedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		}},
 	}
+	if err := exportstate.Save(statePath, state); err != nil {
+		t.Fatal(err)
+	}
 	start := time.Now()
 	_, exported, err := ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       time.Date(2026, 5, 4, 12, 1, 0, 0, time.UTC),
-		Quiet:     true,
-		ExportSpans: func(context.Context, agenttrace.Turn, int, bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              time.Date(2026, 5, 4, 12, 1, 0, 0, time.UTC),
+		Quiet:            true,
+		ExportSpans: func(context.Context, agenttrace.Turn, int, bool, string) (int, error) {
 			return 202, nil
 		},
 		ExportScores: successfulScores,
@@ -581,6 +740,10 @@ func copyFile(t *testing.T, src, dst string) {
 	}
 }
 
-func successfulScores(context.Context, agenttrace.Turn) error {
+func successfulScores(context.Context, agenttrace.Turn, string) error {
 	return nil
+}
+
+func testWorkspace(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+	return turn, "default", nil
 }

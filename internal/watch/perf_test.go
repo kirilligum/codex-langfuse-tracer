@@ -57,12 +57,17 @@ func TestEvalWatchExportLatency(t *testing.T) {
 
 	logicalLatencies := make([]time.Duration, 0, 20)
 	batchesByTrace := map[string]int{}
+	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	if err := exportstate.Save(statePath, state); err != nil {
+		t.Fatal(err)
+	}
 	start := time.Now()
 	_, exported, err := ScanOnce(context.Background(), ScanOptions{
-		Root:      root,
-		StatePath: statePath,
-		Now:       now,
-		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool) (int, error) {
+		ResolveWorkspace: testWorkspace,
+		Root:             root,
+		StatePath:        statePath,
+		Now:              now,
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
 			batchesByTrace[turn.TraceID]++
 			if !turn.Completed {
 				endNS, parseErr := strconv.ParseInt(turn.Observations[len(turn.Observations)-1].EndTimeUnixNS, 10, 64)
@@ -73,8 +78,8 @@ func TestEvalWatchExportLatency(t *testing.T) {
 			}
 			return 200, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn) error { return nil },
-	}, exportstate.State{Version: 1, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()})
+		ExportScores: func(context.Context, agenttrace.Turn, string) error { return nil },
+	}, state)
 	if err != nil {
 		t.Fatal(err)
 	}

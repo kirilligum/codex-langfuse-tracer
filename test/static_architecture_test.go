@@ -118,6 +118,42 @@ func TestNoLegacyDuplicateClaudePaths(t *testing.T) {
 	}
 }
 
+// TEST-704
+func TestRemovedIdentityOverrides(t *testing.T) {
+	t.Parallel()
+
+	checks := map[string][]string{
+		filepath.Join("..", "internal", "config", "config.go"): {
+			"UserIDMode",
+			strings.Join([]string{"LANGFUSE", "USER", "ID", "MODE"}, "_"),
+		},
+		filepath.Join("..", "internal", "buildinfo", "buildinfo.go"): {"DefaultEnvironment"},
+		filepath.Join("..", "cmd", "codex-langfuse-exporter", "main.go"): {
+			"opts.Environment",
+			"&opts.Environment",
+		},
+		filepath.Join("..", "internal", "langfuse", "workspace.go"): {
+			"workspaceUserID",
+			strings.Join([]string{"format", "Workspace", "UserID"}, ""),
+			"normalizeHomePath",
+			"enrichWorkspaceMetadata",
+			"func gitBranch",
+		},
+		filepath.Join("..", "internal", "langfuse", "export.go"): {
+			"userIDAttribute",
+			"func exportSpans",
+		},
+	}
+	for path, forbiddenValues := range checks {
+		content := readText(t, path)
+		for _, forbidden := range forbiddenValues {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s retains identity override or legacy path %q", path, forbidden)
+			}
+		}
+	}
+}
+
 // TEST-513
 func TestProviderParserDispatchHasOneOwner(t *testing.T) {
 	t.Parallel()

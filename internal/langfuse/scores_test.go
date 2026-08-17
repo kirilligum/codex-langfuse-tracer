@@ -14,6 +14,7 @@ import (
 
 func TestCreateDeterministicScores(t *testing.T) {
 	t.Parallel()
+	// TEST-702
 
 	turn := completeTurn(t)
 	var gotBatch scoreIngestionBatch
@@ -29,7 +30,8 @@ func TestCreateDeterministicScores(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.LangfuseConfig{Host: server.URL, PublicKey: "pk-test", SecretKey: "sk-test"}
-	if err := CreateDeterministicScores(context.Background(), cfg, turn, "default"); err != nil {
+	const environment = "repository--feature-one-a1b2c3"
+	if err := CreateDeterministicScores(context.Background(), cfg, turn, environment); err != nil {
 		t.Fatalf("CreateDeterministicScores: %v", err)
 	}
 	if len(gotBatch.Batch) != len(agenttrace.BuildDeterministicScores(turn)) {
@@ -38,7 +40,7 @@ func TestCreateDeterministicScores(t *testing.T) {
 	seen := map[string]scoreIngestionEvent{}
 	for _, event := range gotBatch.Batch {
 		seen[event.Body.Name] = event
-		if event.ID == "" || event.Type != "score-create" || event.Timestamp == "" || event.Body.ID == "" || event.Body.TraceID != turn.TraceID || event.Body.Environment != "default" {
+		if event.ID == "" || event.Type != "score-create" || event.Timestamp == "" || event.Body.ID == "" || event.Body.TraceID != turn.TraceID || event.Body.Environment != environment {
 			t.Fatalf("score event incomplete: %#v", event)
 		}
 	}
