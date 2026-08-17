@@ -50,7 +50,7 @@ Progressive unfinished-turn contracts:
 
 ```sh
 go test ./internal/codextrace ./internal/watch -run 'TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan' -count=1
-go test ./internal/exportstate -run 'TestTurnProgressLifecycle|TestStateUpdatePreservesQueue' -count=1
+go test ./internal/exportstate -run 'TestVersion2State|TestStateUpdatePreservesQueue' -count=1
 go test ./internal/langfuse -run 'TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes' -count=1
 go test ./internal/watch -run 'TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs' -count=1
 go test ./internal/watch -run TestEvalWatchExportLatency -count=1 -v
@@ -77,7 +77,7 @@ Doctor, trace URL, JSON output, and deterministic score checks:
 go test ./cmd/codex-langfuse-exporter -run 'TestDoctorMode|TestManualExportCLIJSONOutput' -count=1
 go test ./internal/agenttrace -run 'TestDeterministicScores|TestInsightRollup' -count=1
 go test ./internal/langfuse -run 'TestCreateDeterministicScores|TestOTLPHTTPExport' -count=1
-go test ./test -run TestDocsDiagnosticsScoresAndWorkspaceUserID -count=1
+go test ./test -run TestDocsWorkspaceIdentity -count=1
 ```
 
 Langfuse MCP launcher compatibility check:
@@ -116,10 +116,25 @@ Model pricing sync checks:
 go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropicModels|TestModelDefinitionSyncCreatesMissingModels' -count=1
 ```
 
-Live workspace user id check for a trace exported with `LANGFUSE_USER_ID_MODE = "workspace"`:
+Workspace identity checks:
 
 ```sh
-LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID="<trace-id>" LIVE_LANGFUSE_WORKSPACE_USER_ID="path/to/repo(branch)@hostname" go test ./internal/langfuse -run TestLiveWorkspaceUserIDTrace -count=1
+go test ./internal/langfuse -run '^(TestWorkspaceIdentity|TestWorkspaceIdentityProjection|TestOTLPProgressiveThenFinal)$' -count=1
+go test ./cmd/codex-langfuse-exporter -run '^TestManualWorkspaceIdentity$' -count=1
+go test ./internal/watch -run '^(TestWatchEnvironmentSnapshot|TestWatchEnvironmentRetry)$' -count=1
+go test ./test -run '^TestDocsWorkspaceIdentity$' -count=1
+```
+
+After an explicitly authorized deployment and the destructive version 1 reset documented in `README.md`, verify that startup created only version 2 state:
+
+```sh
+jq -e '.version == 2' ~/.codex/langfuse-export-state.json
+```
+
+To compare one authorized live trace with locally observed identity values:
+
+```sh
+LIVE_LANGFUSE_IDENTITY_TRACE_ID="<trace-id>" LIVE_LANGFUSE_HOSTNAME="$(hostname)" LIVE_LANGFUSE_ENVIRONMENT="<derived-environment>" go test ./internal/langfuse -run TestLiveWorkspaceIdentityTrace -count=1
 ```
 
 Live Claude pricing check for a trace produced by the same validation session:

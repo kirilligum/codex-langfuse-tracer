@@ -51,14 +51,18 @@ func TestLiveLangfuseTranscriptModelUsageAndCost(t *testing.T) {
 	}
 }
 
-func TestLiveWorkspaceUserIDTrace(t *testing.T) {
-	traceID := os.Getenv("LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID")
+func TestLiveWorkspaceIdentityTrace(t *testing.T) {
+	traceID := os.Getenv("LIVE_LANGFUSE_IDENTITY_TRACE_ID")
 	if traceID == "" {
-		t.Skip("set LIVE_LANGFUSE_WORKSPACE_USER_TRACE_ID to run live workspace user_id verification")
+		t.Skip("set LIVE_LANGFUSE_IDENTITY_TRACE_ID to run live workspace identity verification")
 	}
-	wantUserID := os.Getenv("LIVE_LANGFUSE_WORKSPACE_USER_ID")
+	wantUserID := os.Getenv("LIVE_LANGFUSE_HOSTNAME")
 	if wantUserID == "" {
-		t.Skip("set LIVE_LANGFUSE_WORKSPACE_USER_ID to run live workspace user_id verification")
+		t.Skip("set LIVE_LANGFUSE_HOSTNAME to run live workspace identity verification")
+	}
+	wantEnvironment := os.Getenv("LIVE_LANGFUSE_ENVIRONMENT")
+	if wantEnvironment == "" {
+		t.Skip("set LIVE_LANGFUSE_ENVIRONMENT to run live workspace identity verification")
 	}
 
 	cfg, err := config.Load(config.DefaultConfigPath())
@@ -74,6 +78,9 @@ func TestLiveWorkspaceUserIDTrace(t *testing.T) {
 			"userId":    trace["userId"],
 			"metadata":  trace["metadata"],
 		}))
+	}
+	if got := liveStringValue(trace["environment"]); got != wantEnvironment {
+		t.Fatalf("trace environment = %q, want %q", got, wantEnvironment)
 	}
 }
 

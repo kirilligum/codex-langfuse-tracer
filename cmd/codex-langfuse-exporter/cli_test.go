@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +33,6 @@ func TestCLIFlags(t *testing.T) {
 	}
 	if opts.Provider != "codex" {
 		t.Fatalf("default provider = %q, want codex", opts.Provider)
-	}
-	if opts.Environment != buildinfo.DefaultEnvironment {
-		t.Fatalf("environment = %q, want %q", opts.Environment, buildinfo.DefaultEnvironment)
 	}
 	if opts.ServiceName != buildinfo.DefaultServiceName {
 		t.Fatalf("service name = %q, want %q", opts.ServiceName, buildinfo.DefaultServiceName)
@@ -95,6 +93,22 @@ func TestCLIFlags(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "--json is supported only") {
 			t.Fatalf("parseArgs(%v) error = %v, want unsupported JSON mode error", args, err)
 		}
+	}
+}
+
+// TEST-704
+func TestCLIIdentityFlags(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseArgs([]string{"--latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reflect.TypeOf(opts).FieldByName("Environment"); ok {
+		t.Fatalf("options retains Environment: %+v", opts)
+	}
+	if _, err := parseArgs([]string{"--latest", "--environment", "staging"}); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -environment") {
+		t.Fatalf("--environment error = %v", err)
 	}
 }
 
@@ -220,7 +234,7 @@ func TestSyncModelPricingMode(t *testing.T) {
 func TestDoctorMode(t *testing.T) {
 	home := t.TempDir()
 	statePath := filepath.Join(home, "state.json")
-	if err := exportstate.Save(statePath, exportstate.State{Version: 1, ProcessedTraceIDs: []string{"trace-1"}}); err != nil {
+	if err := exportstate.Save(statePath, exportstate.State{Version: 2, ProcessedTraceIDs: []string{"trace-1"}}); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

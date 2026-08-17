@@ -14,6 +14,7 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,6 +22,8 @@ type otlpSpan struct {
 	Name         string
 	SpanID       string
 	ParentSpanID string
+	Environment  string
+	UserID       string
 }
 
 // TEST-603
@@ -45,11 +48,13 @@ func TestOTLPProgressiveThenFinal(t *testing.T) {
 	partial.AssistantTexts = nil
 	partial.TokenUsage = nil
 	partial.Observations = append([]agenttrace.Observation(nil), complete.Observations[:1]...)
+	const environment = "repository--feature-one-a1b2c3"
+	const hostname = "devbox-01"
 
-	if status, err := ExportSpans(context.Background(), cfg, partial, 0, false, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName); err != nil || status != http.StatusOK {
+	if status, err := ExportSpans(context.Background(), cfg, partial, 0, false, environment, hostname, buildinfo.DefaultServiceName); err != nil || status != http.StatusOK {
 		t.Fatalf("partial ExportSpans status=%d err=%v", status, err)
 	}
-	if status, err := ExportSpans(context.Background(), cfg, complete, 1, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName); err != nil || status != http.StatusOK {
+	if status, err := ExportSpans(context.Background(), cfg, complete, 1, true, environment, hostname, buildinfo.DefaultServiceName); err != nil || status != http.StatusOK {
 		t.Fatalf("final ExportSpans status=%d err=%v", status, err)
 	}
 
@@ -72,6 +77,11 @@ func TestOTLPProgressiveThenFinal(t *testing.T) {
 			t.Fatalf("final request resent checkpointed observation: %+v", span)
 		}
 	}
+	for _, span := range append(partialSpans, finalSpans...) {
+		if span.Environment != environment || span.UserID != hostname {
+			t.Fatalf("progressive identity mismatch: %#v", span)
+		}
+	}
 }
 
 func decodeOTLPSpans(t *testing.T, request *http.Request) []otlpSpan {
@@ -86,12 +96,16 @@ func decodeOTLPSpans(t *testing.T, request *http.Request) []otlpSpan {
 	}
 	var spans []otlpSpan
 	for _, resourceSpans := range batch.ResourceSpans {
+		resourceAttributes := otlpAttributes(resourceSpans.Resource.Attributes)
 		for _, scopeSpans := range resourceSpans.ScopeSpans {
 			for _, span := range scopeSpans.Spans {
+				attributes := otlpAttributes(span.Attributes)
 				spans = append(spans, otlpSpan{
 					Name:         span.Name,
 					SpanID:       hex.EncodeToString(span.SpanId),
 					ParentSpanID: hex.EncodeToString(span.ParentSpanId),
+					Environment:  resourceAttributes["langfuse.environment"],
+					UserID:       attributes["langfuse.user.id"],
 				})
 			}
 		}
@@ -99,12 +113,22 @@ func decodeOTLPSpans(t *testing.T, request *http.Request) []otlpSpan {
 	return spans
 }
 
+func otlpAttributes(attributes []*commonv1.KeyValue) map[string]string {
+	result := make(map[string]string, len(attributes))
+	for _, attribute := range attributes {
+		result[attribute.Key] = attribute.Value.GetStringValue()
+	}
+	return result
+}
+
 // TEST-008
 func TestOTLPHTTPExport(t *testing.T) {
 	t.Parallel()
+	// TEST-702
 
 	var gotPath, gotAuth, gotVersion string
 	var gotBody bool
+	var gotSpans []otlpSpan
 	scoreBatches := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -115,6 +139,7 @@ func TestOTLPHTTPExport(t *testing.T) {
 			if r.ContentLength != 0 {
 				gotBody = true
 			}
+			gotSpans = decodeOTLPSpans(t, r)
 		case "/api/public/ingestion":
 			scoreBatches++
 			var batch scoreIngestionBatch
@@ -139,11 +164,13 @@ func TestOTLPHTTPExport(t *testing.T) {
 		SecretKey: "sk-lf-test",
 	}
 	turn := completeTurn(t)
-	status, err := ExportSpans(context.Background(), cfg, turn, 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName)
+	const environment = "repository--feature-one-a1b2c3"
+	const hostname = "devbox-01"
+	status, err := ExportSpans(context.Background(), cfg, turn, 0, true, environment, hostname, buildinfo.DefaultServiceName)
 	if err != nil {
 		t.Fatalf("ExportSpans: %v", err)
 	}
-	if err := CreateDeterministicScores(context.Background(), cfg, turn, buildinfo.DefaultEnvironment); err != nil {
+	if err := CreateDeterministicScores(context.Background(), cfg, turn, environment); err != nil {
 		t.Fatalf("CreateDeterministicScores: %v", err)
 	}
 	if status != http.StatusOK {
@@ -160,6 +187,14 @@ func TestOTLPHTTPExport(t *testing.T) {
 	}
 	if !gotBody {
 		t.Fatal("empty OTLP body")
+	}
+	if len(gotSpans) == 0 {
+		t.Fatal("no OTLP spans")
+	}
+	for _, span := range gotSpans {
+		if span.Environment != environment || span.UserID != hostname {
+			t.Fatalf("OTLP identity mismatch: %#v", span)
+		}
 	}
 	if scoreBatches != 1 {
 		t.Fatalf("score batches = %d", scoreBatches)
@@ -180,7 +215,7 @@ func TestOTLPHTTPExportFailure(t *testing.T) {
 		Host:      server.URL,
 		PublicKey: "pk-lf-test",
 		SecretKey: "sk-lf-test",
-	}, completeTurn(t), 0, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName)
+	}, completeTurn(t), 0, true, "default", "test-host", buildinfo.DefaultServiceName)
 	if err == nil {
 		t.Fatalf("ExportSpans status=%d err=nil, want error", status)
 	}

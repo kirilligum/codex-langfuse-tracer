@@ -52,20 +52,18 @@ func CreateDeterministicScores(ctx context.Context, cfg config.LangfuseConfig, t
 	batch := scoreIngestionBatch{Batch: make([]scoreIngestionEvent, 0, len(agenttrace.BuildDeterministicScores(turn)))}
 	for _, score := range agenttrace.BuildDeterministicScores(turn) {
 		payload := scorePayload{
-			ID:       stableScoreID(turn.TraceID, score.Name),
-			TraceID:  turn.TraceID,
-			Name:     score.Name,
-			Value:    score.Value,
-			DataType: score.DataType,
-			Comment:  score.Comment,
+			ID:          stableScoreID(turn.TraceID, score.Name),
+			TraceID:     turn.TraceID,
+			Name:        score.Name,
+			Value:       score.Value,
+			DataType:    score.DataType,
+			Comment:     score.Comment,
+			Environment: environment,
 			Metadata: map[string]any{
 				"provider": turn.Profile().Provider,
 				"source":   "codex-langfuse-tracer",
 				"kind":     "deterministic",
 			},
-		}
-		if isValidScoreEnvironment(environment) {
-			payload.Environment = environment
 		}
 		batch.Batch = append(batch.Batch, scoreIngestionEvent{
 			ID:        stableScoreEventID(turn.TraceID, score.Name),
@@ -114,18 +112,4 @@ func stableScoreID(traceID, name string) string {
 func stableScoreEventID(traceID, name string) string {
 	sum := sha256.Sum256([]byte("score-event:" + traceID + ":" + name))
 	return fmt.Sprintf("%x", sum)[:32]
-}
-
-func isValidScoreEnvironment(environment string) bool {
-	environment = strings.TrimSpace(environment)
-	if environment == "" || strings.HasPrefix(environment, "langfuse") {
-		return false
-	}
-	for _, r := range environment {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }

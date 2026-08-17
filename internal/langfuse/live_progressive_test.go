@@ -62,7 +62,11 @@ func TestLiveProgressiveChildBeforeParent(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	status, err := ExportSpans(ctx, cfg, turn, 0, false, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName)
+	userID, err := HostnameUserID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := ExportSpans(ctx, cfg, turn, 0, false, "default", userID, buildinfo.DefaultServiceName)
 	cancel()
 	if err != nil {
 		t.Fatalf("export partial spans status=%d: %v", status, err)
@@ -80,7 +84,7 @@ func TestLiveProgressiveChildBeforeParent(t *testing.T) {
 	turn.AssistantTexts = []string{"progressive feasibility complete"}
 	turn.EndTS = now.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	status, err = ExportSpans(ctx, cfg, turn, 1, true, buildinfo.DefaultEnvironment, buildinfo.DefaultServiceName)
+	status, err = ExportSpans(ctx, cfg, turn, 1, true, "default", userID, buildinfo.DefaultServiceName)
 	cancel()
 	if err != nil {
 		t.Fatalf("export final spans status=%d: %v", status, err)

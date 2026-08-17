@@ -32,27 +32,33 @@ func (m *memoryExporter) Snapshots() spanSnapshots {
 		for _, attr := range span.Attributes() {
 			attrs[string(attr.Key)] = attr.Value.Emit()
 		}
+		resourceAttrs := map[string]string{}
+		for _, attr := range span.Resource().Attributes() {
+			resourceAttrs[string(attr.Key)] = attr.Value.Emit()
+		}
 		parent := ""
 		if span.Parent().IsValid() {
 			parent = span.Parent().SpanID().String()
 		}
 		snapshots = append(snapshots, spanSnapshot{
-			Name:         span.Name(),
-			TraceID:      span.SpanContext().TraceID().String(),
-			SpanID:       span.SpanContext().SpanID().String(),
-			ParentSpanID: parent,
-			Attributes:   attrs,
+			Name:          span.Name(),
+			TraceID:       span.SpanContext().TraceID().String(),
+			SpanID:        span.SpanContext().SpanID().String(),
+			ParentSpanID:  parent,
+			Attributes:    attrs,
+			ResourceAttrs: resourceAttrs,
 		})
 	}
 	return snapshots
 }
 
 type spanSnapshot struct {
-	Name         string
-	TraceID      string
-	SpanID       string
-	ParentSpanID string
-	Attributes   map[string]string
+	Name          string
+	TraceID       string
+	SpanID        string
+	ParentSpanID  string
+	Attributes    map[string]string
+	ResourceAttrs map[string]string
 }
 
 type spanSnapshots []spanSnapshot

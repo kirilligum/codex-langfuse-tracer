@@ -14,8 +14,9 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 )
 
-type ExportSpansFunc func(context.Context, agenttrace.Turn, int, bool) (int, error)
-type ExportScoresFunc func(context.Context, agenttrace.Turn) error
+type ResolveWorkspaceFunc func(context.Context, agenttrace.Turn) (agenttrace.Turn, string, error)
+type ExportSpansFunc func(context.Context, agenttrace.Turn, int, bool, string) (int, error)
+type ExportScoresFunc func(context.Context, agenttrace.Turn, string) error
 
 type ScanOptions struct {
 	Root                string
@@ -24,6 +25,7 @@ type ScanOptions struct {
 	Stdout              io.Writer
 	Stderr              io.Writer
 	Quiet               bool
+	ResolveWorkspace    ResolveWorkspaceFunc
 	ExportSpans         ExportSpansFunc
 	ExportScores        ExportScoresFunc
 	PollIntervalSeconds float64
@@ -74,7 +76,7 @@ func InitializeState(statePath string, now time.Time, stdout io.Writer, quiet bo
 		now = time.Now()
 	}
 	state := exportstate.State{
-		Version:         1,
+		Version:         2,
 		ScanWatermarkNS: now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano(),
 	}
 	if err := exportstate.Save(statePath, state); err != nil {
@@ -152,13 +154,40 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 }
 
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
-	plan, err := planTurn(turn, state.ProgressFor(turn.TraceID))
+	progress := state.ProgressFor(turn.TraceID)
+	plan, err := planTurn(turn, progress)
 	if err != nil {
 		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to plan trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
 		return state, 0, true, nil
 	}
 	if !plan.ExportSpans && !plan.ExportScores {
 		return state, 0, false, nil
+	}
+	environment := progress.Environment
+	if plan.ExportSpans {
+		if opts.ResolveWorkspace == nil {
+			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", turn.TraceID, sourcePath)
+			return state, 0, true, nil
+		}
+		resolvedTurn, resolvedEnvironment, err := opts.ResolveWorkspace(ctx, turn)
+		if err != nil {
+			return state, 0, false, err
+		}
+		turn = resolvedTurn
+		if environment == "" {
+			environment = resolvedEnvironment
+			state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
+				currentProgress := current.ProgressFor(turn.TraceID)
+				currentProgress.Environment = environment
+				current.SetProgress(turn.TraceID, currentProgress)
+			})
+			if err != nil {
+				return state, 0, false, err
+			}
+		}
+	}
+	if environment == "" {
+		return state, 0, false, fmt.Errorf("turn progress %s requires environment", turn.TraceID)
 	}
 	if *attemptedExport {
 		if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
@@ -175,7 +204,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: missing span export callback\n", turn.TraceID, sourcePath)
 			return state, 0, true, nil
 		}
-		status, err := opts.ExportSpans(ctx, turn, plan.FirstObservationIndex, plan.Final)
+		status, err := opts.ExportSpans(ctx, turn, plan.FirstObservationIndex, plan.Final, environment)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s observations=%d:%d final=%t path=%s: %v\n", turn.TraceID, plan.FirstObservationIndex, len(turn.Observations), plan.Final, sourcePath, err)
 			return state, 0, true, nil
@@ -204,7 +233,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: missing score export callback\n", turn.TraceID, sourcePath)
 		return state, emitted, true, nil
 	}
-	if err := opts.ExportScores(ctx, turn); err != nil {
+	if err := opts.ExportScores(ctx, turn, environment); err != nil {
 		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
 		return state, emitted, true, nil
 	}

@@ -117,13 +117,7 @@ Host examples:
 
 If your config already has a `[mcp_servers.langfuse]` block for Langfuse MCP, keep it. The exporter only reads the `env` values.
 
-Optional: if you want Langfuse's built-in User column to show the Codex working directory instead of a real user id, add this setting to `[mcp_servers.langfuse.env]`:
-
-```toml
-LANGFUSE_USER_ID_MODE = "workspace"
-```
-
-In workspace mode, `/home/<linux-user>/...` under the current user's home directory is shown without the `~/` prefix, the current Git branch is appended when available, and the machine hostname is appended without spaces. For example, `/home/alice/app` on branch `main` from host `devbox` becomes `app(main)@devbox`. Leave `LANGFUSE_USER_ID_MODE` unset for normal Langfuse user behavior.
+Workspace identity needs no additional configuration. The exporter always maps the repository and export-time branch to Langfuse Environment and the Linux runtime hostname to Langfuse User, as described in [How It Works](#how-it-works). Identity fields are not configurable.
 
 Protect the config file if it contains hosted or shared-instance API keys:
 
@@ -154,7 +148,17 @@ Installed files:
 ~/.codex/langfuse-export-state.json
 ```
 
-The state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches.
+The version 2 state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches.
+
+Version 1 state is intentionally incompatible and is not migrated. After installing the new exporter, perform this one-time destructive reset before relying on the watcher:
+
+```sh
+systemctl --user stop codex-langfuse-watch.service
+rm -- ~/.codex/langfuse-export-state.json
+systemctl --user start codex-langfuse-watch.service
+```
+
+Removing the file discards processed IDs, queued requests, the scan watermark, and partial progress. A fresh version 2 file is created at startup, and recently modified session files can be exported again. There is no compatibility state, backup path, or migration command.
 
 If you want the user service to run even when you are logged out, enable lingering for your Linux user:
 
@@ -239,7 +243,7 @@ There is one automatic export path:
 
 Progressive export does not stream tokens or partial assistant text. It exports only completed observations already present in the rollout, such as a finished command, patch, MCP call, or visible commentary record. Completion-derived trace output, transcript, terminal aggregation, token usage, insight metadata, and tags are added only after Codex records the turn as complete.
 
-The version-1 state document uses `turn_progress[trace_id]` with `exported_observation_count` and `final_spans_exported`. A successful partial batch advances the observation count. A successful final span batch sets the final flag before score submission. The trace moves to `processed_trace_ids` only after scores succeed, and its `turn_progress` entry is then removed.
+The version 2 state document uses `turn_progress[trace_id]` with `exported_observation_count`, `final_spans_exported`, and `environment`. The environment is saved before the first network attempt. A successful partial batch advances the observation count. A successful final span batch sets the final flag before score submission. The trace moves to `processed_trace_ids` only after scores succeed, and its `turn_progress` entry is then removed.
 
 Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
 
@@ -330,7 +334,9 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 
 `outcome` and `outcomes` are deterministic, code-derived labels such as `no_changes`, `changed_files`, `docs_only`, `tests_touched`, `verification_not_run`, `verification_passed`, `verification_failed`, `failed_command`, and `install_or_network_used`. They do not use LLM judgment and do not claim the task was semantically solved.
 
-Workspace metadata includes `cwd` and, when `cwd` is inside an attached Git worktree, `git_branch`. The branch is resolved from the working directory at export time and is omitted for non-Git directories or detached HEAD checkouts. If `LANGFUSE_USER_ID_MODE = "workspace"` is set, the exporter also sets `langfuse.user.id` to a compact normalized cwd plus branch and hostname, such as `app(main)@devbox`, so the Langfuse User column can be used as a workspace column.
+Workspace metadata includes the exact `cwd` and, when `cwd` is inside an attached Git worktree, the export-time branch as `git_branch`. The exporter maps the worktree-root folder and export-time branch to `langfuse.environment` in the form `repository-folder--branch-<hash>`. Repository and branch text is normalized to lowercase Langfuse-safe characters, the value is capped at 40 characters, and every Git environment ends with the first six lowercase hexadecimal SHA-256 characters of the raw repository folder, a NUL separator, and raw branch. A detached HEAD uses `detached`; its `git_branch` metadata remains omitted. Non-Git, missing, unreadable, or timed-out working directories use `default`.
+
+Every exported span sets `langfuse.user.id` to the trimmed, non-empty Linux runtime hostname captured once when the export process starts. This is machine identity, not a human account or workspace path. The same persisted Environment is used for progressive spans, final spans, and deterministic scores even if the checked-out branch changes before a retry.
 
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 
