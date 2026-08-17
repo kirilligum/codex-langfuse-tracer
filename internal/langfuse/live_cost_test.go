@@ -64,6 +64,14 @@ func TestLiveWorkspaceIdentityTrace(t *testing.T) {
 	if wantEnvironment == "" {
 		t.Skip("set LIVE_LANGFUSE_ENVIRONMENT to run live workspace identity verification")
 	}
+	wantCWD := os.Getenv("LIVE_LANGFUSE_CWD")
+	if wantCWD == "" {
+		t.Skip("set LIVE_LANGFUSE_CWD to run live workspace identity verification")
+	}
+	wantBranch := os.Getenv("LIVE_LANGFUSE_BRANCH")
+	if wantBranch == "" {
+		t.Skip("set LIVE_LANGFUSE_BRANCH to run live workspace identity verification")
+	}
 
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
@@ -81,6 +89,39 @@ func TestLiveWorkspaceIdentityTrace(t *testing.T) {
 	}
 	if got := liveStringValue(trace["environment"]); got != wantEnvironment {
 		t.Fatalf("trace environment = %q, want %q", got, wantEnvironment)
+	}
+	if got := liveStringValue(liveMapValue(trace["metadata"])["git_branch"]); got != wantBranch {
+		t.Fatalf("trace git branch metadata does not match the expected branch")
+	}
+
+	observationsBody := liveGet(t, cfg, "/api/public/observations?traceId="+url.QueryEscape(traceID)+"&limit=100")
+	observations := liveSliceValue(observationsBody["data"])
+	if len(observations) == 0 {
+		t.Fatal("live identity trace has no observations")
+	}
+	for _, raw := range observations {
+		observation := liveMapValue(raw)
+		if liveStringValue(observation["environment"]) != wantEnvironment {
+			t.Fatal("an observation environment does not match the trace environment")
+		}
+		metadata := liveMapValue(observation["metadata"])
+		if liveStringValue(metadata["cwd"]) != wantCWD {
+			t.Fatal("an observation CWD metadata value does not match the expected CWD")
+		}
+		if liveStringValue(metadata["git_branch"]) != wantBranch {
+			t.Fatal("an observation git branch metadata value does not match the expected branch")
+		}
+	}
+
+	scoresBody := liveGet(t, cfg, "/api/public/v3/scores?traceId="+url.QueryEscape(traceID)+"&limit=100")
+	scores := liveSliceValue(scoresBody["data"])
+	if len(scores) == 0 {
+		t.Fatal("live identity trace has no deterministic scores")
+	}
+	for _, raw := range scores {
+		if liveStringValue(liveMapValue(raw)["environment"]) != wantEnvironment {
+			t.Fatal("a deterministic score environment does not match the trace environment")
+		}
 	}
 }
 

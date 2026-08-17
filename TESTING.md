@@ -134,8 +134,10 @@ jq -e '.version == 2' ~/.codex/langfuse-export-state.json
 To compare one authorized live trace with locally observed identity values:
 
 ```sh
-LIVE_LANGFUSE_IDENTITY_TRACE_ID="<trace-id>" LIVE_LANGFUSE_HOSTNAME="$(hostname)" LIVE_LANGFUSE_ENVIRONMENT="<derived-environment>" go test ./internal/langfuse -run TestLiveWorkspaceIdentityTrace -count=1
+LIVE_LANGFUSE_IDENTITY_TRACE_ID="<trace-id>" LIVE_LANGFUSE_HOSTNAME="$(hostname)" LIVE_LANGFUSE_ENVIRONMENT="<derived-environment>" LIVE_LANGFUSE_CWD="$(pwd -P)" LIVE_LANGFUSE_BRANCH="$(git branch --show-current)" go test ./internal/langfuse -run TestLiveWorkspaceIdentityTrace -count=1
 ```
+
+This live gate checks the trace User and Environment, every observation's Environment and CWD/branch metadata, and every deterministic score's Environment without printing those private values on success.
 
 Live Claude pricing check for a trace produced by the same validation session:
 

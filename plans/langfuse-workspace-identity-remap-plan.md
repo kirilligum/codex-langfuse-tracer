@@ -1,11 +1,11 @@
 # Langfuse Workspace Identity Remap Plan
 
 - Project name: `codex-langfuse-tracer`
-- Version: 2.0
+- Version: 2.1
 - Owners: Repository maintainer Kirill Igumenshchev; implementation owner coding agent
 - Date: 2026-08-16
 - Document ID: CLT-PLAN-WORKSPACE-IDENTITY-001
-- Status: Repository implementation complete; CHECK-701 awaits separate operational authorization
+- Status: Complete; repository implementation, destructive cutover, deployment, and CHECK-701 are green
 - Standards basis: ISO/IEC/IEEE 29148-inspired requirements structure, ISO/IEC/IEEE 29119-3-inspired verification documentation, and ISO/IEC/IEEE 12207-inspired lifecycle evidence. This plan is standards-informed and is not a certification claim.
 - Compute controls: `branch_limits: 1`, `reflection_passes: 1`, `early_stop%: 95`. Follow one implementation path. Stop design exploration after one review pass finds no unresolved correctness issue and at least 95% of binding evidence is green; phase exit still requires every mandatory gate.
 
@@ -488,7 +488,7 @@ System: codex-langfuse-tracer
   - Local/non-local scope: Local state and process behavior.
   - Architectural changes count: 1 — progress gains one environment checkpoint.
 
-### Phase P02: Public contract and repository gates are complete
+### Phase P02: Public contract, repository gates, and operational cutover are complete
 
 - Phase goal: Publish the destructive one-way migration and pass all repository-local acceptance gates without stale identity surfaces.
 - Scope and objectives: Implement REQ-710, REQ-711, and REQ-714 documentation behavior and validate REQ-701 through REQ-714.
@@ -496,10 +496,10 @@ System: codex-langfuse-tracer
 - Lifecycle evidence:
   - Requirements evidence: Required and forbidden documentation literals, complete test output, traceability matrix, and diff hygiene.
   - Design/code surface evidence: README behavior, TESTING commands, concise example config, and no additional guide.
-  - Verification method: TEST-705, TEST-706, TEST-707, and optional CHECK-701.
+  - Verification method: TEST-705, TEST-706, TEST-707, and CHECK-701.
   - Validation purpose: Demonstrate one public setup, one destructive state transition, and no stale runtime or documentation path.
-  - Configuration checkpoint: Record Git SHA, branch, Go version, full command output, diff summary, and optional live match booleans.
-  - Risks and assumptions: Repository-local acceptance performs no state deletion, service restart, config mutation, or live write.
+  - Configuration checkpoint: Record Git SHA, branch, Go version, full command output, diff summary, service/state status, and live match booleans.
+  - Risks and assumptions: CHECK-701 is destructive and runs only after explicit authorization; public evidence omits the configured host, local hostname, CWD, prompt, output, and credentials.
 
 - P02.S01 Add failing documentation coverage
   - Action: Rename the static documentation test and require always-on hostname disclosure, hashed environment format, export-time branch, non-Git default, removed overrides, version-2 state, and exact destructive reset procedure. Add `// TEST-705` tags.
@@ -567,14 +567,14 @@ System: codex-langfuse-tracer
   - Unlocks: Phase P02 exit.
 
 - Exit gates:
-  - Proceed: TEST-705, TEST-706, and TEST-707 pass; CHECK-701 passes only when operational execution is separately authorized.
+  - Proceed: TEST-705, TEST-706, TEST-707, and the explicitly authorized CHECK-701 pass.
   - Escalate: Live Langfuse displays values different from local payload captures or the target upgrades to an incompatible score endpoint before release.
   - Stop: Public behavior cannot be described without a legacy path, fallback, or alternate configuration.
 - Phase metrics:
   - Confidence: 96% — static guards and full Go acceptance cover the public contract.
   - Long-term robustness: 95% — stale setup becomes an executable failure.
   - Internal interactions: 4 — docs, static tests, full suite, and diff hygiene interact.
-  - External interactions: 0 mandatory — live validation requires separate authorization.
+  - External interactions: 2 — the explicitly authorized cutover changes the local service/state/config and validates one trace through the configured Langfuse API.
   - Complexity: 18% — work is deletion, concise documentation, and verification.
   - Feature creep: 0% — no runtime behavior is added in this phase.
   - Technical debt: 1% — legacy terminology and setup are removed.
@@ -872,6 +872,9 @@ evaluations:
 - P01 validation-order adjustment: Version-2 progress validation runs before normalization. This is stricter than the original step wording and prevents malformed progress from being silently removed when the same trace is also marked processed.
 - P01 coverage completion: The generic version-1 loader rejection was initially tested directly; `TestWatchEnvironmentSnapshot` now also verifies that `WatchSessions` rejects version 1 before workspace resolution, state mutation, or network callbacks.
 - P02 hygiene adjustment: A static test initially contained a stale symbol as a literal and therefore matched TEST-707 itself. The test now constructs that forbidden value from components so the repository-wide zero-match gate remains exact.
+- CHECK-701 trace selection adjustment: `--latest` selected this still-open parent Codex rollout during the nested production probe. The completed probe was exported with `--session-id 01a00db2-18fd-7630-9101-920722e32c1e`, which uses the same manual export implementation while selecting the intended rollout deterministically.
+- CHECK-701 historical trace handling: The first post-reset `--latest` invocation replayed deterministic trace IDs that already existed in Langfuse with the former `default` environment. Existing remote traces were not rewritten or migrated. A new post-cutover probe supplied the acceptance evidence, preserving the one-way local cutover and no-legacy scope.
+- CHECK-701 public evidence adjustment: The procedure requested a trace URL. The configured host was verified locally but is omitted from this public repository; the trace ID and UTC timestamp retain auditable correlation without publishing private infrastructure coordinates.
 - ADR/KER impact: ADR-701 through ADR-706 remain unchanged because the implementation preserves every recorded decision. This repository has no separate KER artifact or KER convention, so no KER was created.
 
 ### Phase P00 execution record
@@ -890,7 +893,7 @@ evaluations:
 
 - Phase Status: Complete
 - Completed at: 2026-08-16
-- Base Git SHA: `62271e260be932c87ad4e8a77bd5a5da66196c96`; changes remain in the working tree.
+- Base Git SHA: `62271e260be932c87ad4e8a77bd5a5da66196c96`; implementation merged through PR #10 at `60ac5c2edd7a2b2739a36bc17653cb241f5490c7`.
 - Completed Steps: P01.S01 through P01.S06
 - Quantitative Results: Five EVAL-702 samples passed; scan wall time ranged from 5.27 ms to 6.53 ms; logical p95 was 5 s in every sample; duplicate batches were 0.
 - Issues/Resolutions: Direct `ScanOnce` tests were updated to initialize their state file before pre-network mutation. State validation was ordered before normalization so no malformed progress entry can be silently discarded.
@@ -899,13 +902,16 @@ evaluations:
 
 ### Phase P02 execution record
 
-- Phase Status: Complete for repository-local scope
-- Completed at: 2026-08-16T19:53:46-07:00
+- Phase Status: Complete, including authorized operational scope
+- Completed at: 2026-08-16T20:09:52-07:00
 - Completed Steps: P02.S01 through P02.S05
 - Quantitative Results: TEST-705 passed; uncached TEST-706 passed every package with the acceptance package completing in 31.921 s; TEST-707 returned no stale-surface matches and no diff whitespace errors.
 - Commands and exit codes: `go test ./... -count=1` and `git diff --check` exited 0; both stale-surface searches returned the expected no-match status.
 - Evidence paths: `README.md`, `TESTING.md`, `examples/codex-config.toml`, `test/docs_static_test.go`, and the full Go test corpus.
-- Residual risks: CHECK-701 was not run because it requires separate authorization to edit private config, stop or restart the user service, delete version-1 state, and write a live trace.
+- Deployment Results: PR #10 merged to `main`; the exact legacy config key and version-1 state file were removed; `./install.sh` installed the merged exporter; the user service is active with zero restarts; doctor reports every check green; state is version 2 with a complete environment checkpoint and an empty retry queue.
+- CHECK-701 Results: PASS for trace `2d8e0ff1a5158f2464692e5c68a56efa` at `2026-08-17T03:09:52Z`. User/hostname match: true. Trace Environment match: true. Observation Environment match: true. Score Environment match: true. CWD metadata match: true. Branch metadata match: true. Legacy config absent: true. Version-1 state absent: true.
+- Live gate coverage: `TestLiveWorkspaceIdentityTrace` now verifies the trace, every returned observation, and every returned deterministic score through the authenticated API while emitting no private identity or content values on success.
+- Residual risks: Existing Langfuse traces keep their historical environment because this plan intentionally does not migrate remote history. No plan-related implementation, deployment, migration, or acceptance work remains.
 
 ## Appendix: ADR index
 
