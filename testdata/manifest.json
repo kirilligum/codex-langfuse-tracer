@@ -10,7 +10,6 @@
       "categories": [
         "completed_turn",
         "trace_preview",
-        "terminal_stream",
         "commentary",
         "visible_reasoning_summary",
         "hidden_reasoning_exclusion",
@@ -33,8 +32,7 @@
       "categories": [
         "completed_turn",
         "no_tools",
-        "trace_preview",
-        "terminal_stream"
+        "trace_preview"
       ]
     },
     {
@@ -47,8 +45,7 @@
         "completed_turn",
         "incomplete_turn",
         "multi_turn",
-        "trace_preview",
-        "terminal_stream"
+        "trace_preview"
       ]
     },
     {
@@ -62,8 +59,7 @@
         "command_tool",
         "file_change_metadata",
         "failed_command",
-        "verification_metadata",
-        "terminal_stream"
+        "verification_metadata"
       ]
     },
     {
@@ -86,8 +82,7 @@
       "golden": "testdata/golden/unknown-event.normalized.json",
       "categories": [
         "completed_turn",
-        "unknown_event",
-        "terminal_stream"
+        "unknown_event"
       ]
     },
     {
@@ -99,8 +94,7 @@
       "categories": [
         "completed_turn",
         "visible_reasoning_summary",
-        "hidden_reasoning_exclusion",
-        "terminal_stream"
+        "hidden_reasoning_exclusion"
       ]
     },
     {
@@ -112,8 +106,7 @@
       "categories": [
         "completed_turn",
         "web_search",
-        "web_search_contract",
-        "terminal_stream"
+        "web_search_contract"
       ]
     },
     {
@@ -138,7 +131,6 @@
         "completed_turn",
         "repeated_turn_context",
         "trace_preview",
-        "terminal_stream",
         "commentary"
       ]
     },
@@ -153,8 +145,7 @@
         "command_tool",
         "file_change_metadata",
         "redaction",
-        "tool_output_redaction",
-        "terminal_stream"
+        "tool_output_redaction"
       ]
     },
     {
@@ -188,8 +179,7 @@
         "claude",
         "claude_real_derived_structure",
         "no_tools",
-        "trace_preview",
-        "terminal_stream"
+        "trace_preview"
       ]
     },
     {
@@ -202,8 +192,7 @@
         "completed_turn",
         "claude",
         "claude_real_derived_structure",
-        "claude_command_tool",
-        "terminal_stream"
+        "claude_command_tool"
       ]
     },
     {
@@ -230,8 +219,7 @@
         "completed_turn",
         "claude",
         "claude_synthetic",
-        "claude_command_tool",
-        "terminal_stream"
+        "claude_command_tool"
       ]
     },
     {
@@ -245,8 +233,7 @@
         "claude",
         "claude_synthetic",
         "claude_file_change_tool",
-        "file_change_metadata",
-        "terminal_stream"
+        "file_change_metadata"
       ]
     },
     {
@@ -260,8 +247,7 @@
         "claude",
         "claude_synthetic",
         "claude_mcp_tool",
-        "mcp_tool",
-        "terminal_stream"
+        "mcp_tool"
       ]
     },
     {
@@ -324,8 +310,7 @@
         "completed_turn",
         "claude",
         "claude_live_metadata",
-        "hidden_reasoning_exclusion",
-        "terminal_stream"
+        "hidden_reasoning_exclusion"
       ]
     }
   ]

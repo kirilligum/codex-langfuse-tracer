@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "2b5c9a23ab5ac8b69d54bc63ec57b5ad",
   "session_id": "claude-file-change-tool",
   "turn_id": "claude-file-change-user",
-  "input": "Update README.",
-  "output": "README updated.",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-file-change-tool",
   "metadata": {
@@ -97,16 +95,6 @@
         "moved_files": [],
         "status": "success",
         "tool_name": "Edit"
-      }
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:07:00Z user\nUpdate README.\n\n## 2026-05-04T12:07:02Z tool.file_change\nInput:\n{\n  \"file_path\": \"README.md\",\n  \"new_string\": \"new\",\n  \"old_string\": \"old\"\n}\n\nOutput:\nFile updated.\n\n## 2026-05-04T12:07:03Z assistant.final\nREADME updated.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "claude-file-change-user"
       }
     }
   ]

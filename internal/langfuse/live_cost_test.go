@@ -3,6 +3,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,31 +24,23 @@ func TestLiveLangfuseTranscriptModelUsageAndCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	trace := liveTraceForSession(t, cfg, sessionID)
-	transcript := liveTranscriptObservation(t, cfg, liveStringValue(trace["id"]))
+	observations := liveObservationsForSession(t, cfg, sessionID)
+	transcript := liveNamedObservation(t, observations, "codex.transcript", "session "+sessionID)
 
-	if liveStringValue(transcript["model"]) == "" {
+	if transcript.ModelName() == "" {
 		t.Fatalf("codex.transcript model is empty; usage cannot match Langfuse model pricing: %s", liveCostSummary(transcript))
 	}
-	if liveStringValue(transcript["modelId"]) == "" {
+	if transcript.ModelID == "" {
 		t.Fatalf("codex.transcript modelId is empty; Langfuse did not attach model pricing: %s", liveCostSummary(transcript))
 	}
-	if liveFloatValue(transcript["inputPrice"]) <= 0 || liveFloatValue(transcript["outputPrice"]) <= 0 {
+	if liveFloatValue(transcript.InputPrice) <= 0 || liveFloatValue(transcript.OutputPrice) <= 0 {
 		t.Fatalf("codex.transcript prices are empty; Langfuse did not attach input/output pricing: %s", liveCostSummary(transcript))
 	}
-	usage := liveMapValue(transcript["usageDetails"])
-	if liveIntValue(usage["input"]) == 0 || liveIntValue(usage["output"]) == 0 || liveIntValue(usage["total"]) == 0 {
+	if liveIntValue(transcript.UsageDetails["input"]) == 0 || liveIntValue(transcript.UsageDetails["output"]) == 0 || liveIntValue(transcript.UsageDetails["total"]) == 0 {
 		t.Fatalf("codex.transcript usageDetails incomplete: %s", liveCostSummary(transcript))
 	}
-	if cost := liveFloatValue(transcript["calculatedTotalCost"]); cost <= 0 {
-		t.Fatalf("codex.transcript calculatedTotalCost = %v, want > 0: %s", transcript["calculatedTotalCost"], liveCostSummary(transcript))
-	}
-	if cost := liveFloatValue(trace["totalCost"]); cost <= 0 {
-		t.Fatalf("trace totalCost = %v, want > 0: %s", trace["totalCost"], canonicalLiveJSON(map[string]any{
-			"id":        trace["id"],
-			"sessionId": trace["sessionId"],
-			"totalCost": trace["totalCost"],
-		}))
+	if transcript.TotalCost <= 0 {
+		t.Fatalf("codex.transcript totalCost = %v, want > 0: %s", transcript.TotalCost, liveCostSummary(transcript))
 	}
 }
 
@@ -77,82 +70,73 @@ func TestLiveWorkspaceIdentityTrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	trace := liveGet(t, cfg, "/api/public/traces/"+url.PathEscape(traceID))
-	if got := liveStringValue(trace["userId"]); got != wantUserID {
-		t.Fatalf("trace userId = %q, want %q: %s", got, wantUserID, canonicalLiveJSON(map[string]any{
-			"id":        trace["id"],
-			"name":      trace["name"],
-			"sessionId": trace["sessionId"],
-			"userId":    trace["userId"],
-			"metadata":  trace["metadata"],
-		}))
-	}
-	if got := liveStringValue(trace["environment"]); got != wantEnvironment {
-		t.Fatalf("trace environment = %q, want %q", got, wantEnvironment)
-	}
-	if got := liveStringValue(liveMapValue(trace["metadata"])["git_branch"]); got != wantBranch {
-		t.Fatalf("trace git branch metadata does not match the expected branch")
-	}
-
-	observationsBody := liveGet(t, cfg, "/api/public/observations?traceId="+url.QueryEscape(traceID)+"&limit=100")
-	observations := liveSliceValue(observationsBody["data"])
+	observations := liveObservationsForTrace(t, cfg, traceID, "core,basic,metadata,trace_context")
 	if len(observations) == 0 {
-		t.Fatal("live identity trace has no observations")
+		t.Fatalf("live identity trace has no observations")
 	}
-	for _, raw := range observations {
-		observation := liveMapValue(raw)
-		if liveStringValue(observation["environment"]) != wantEnvironment {
-			t.Fatal("an observation environment does not match the trace environment")
+	for _, observation := range observations {
+		if observation.UserID != wantUserID {
+			t.Fatalf("observation %s userId = %q, want %q", observation.Name, observation.UserID, wantUserID)
 		}
-		metadata := liveMapValue(observation["metadata"])
-		if liveStringValue(metadata["cwd"]) != wantCWD {
-			t.Fatal("an observation CWD metadata value does not match the expected CWD")
+		if observation.Environment != wantEnvironment {
+			t.Fatalf("observation %s environment = %q, want %q", observation.Name, observation.Environment, wantEnvironment)
 		}
-		if liveStringValue(metadata["git_branch"]) != wantBranch {
-			t.Fatal("an observation git branch metadata value does not match the expected branch")
+		if liveStringValue(observation.Metadata["cwd"]) != wantCWD {
+			t.Fatalf("observation %s CWD metadata does not match", observation.Name)
+		}
+		if liveStringValue(observation.Metadata["git_branch"]) != wantBranch {
+			t.Fatalf("observation %s git branch metadata does not match", observation.Name)
 		}
 	}
 
-	scoresBody := liveGet(t, cfg, "/api/public/v3/scores?traceId="+url.QueryEscape(traceID)+"&limit=100")
-	scores := liveSliceValue(scoresBody["data"])
+	scores := liveScores(t, cfg, traceID)
 	if len(scores) == 0 {
 		t.Fatal("live identity trace has no deterministic scores")
 	}
-	for _, raw := range scores {
-		if liveStringValue(liveMapValue(raw)["environment"]) != wantEnvironment {
+	for _, score := range scores {
+		if liveStringValue(score["environment"]) != wantEnvironment {
 			t.Fatal("a deterministic score environment does not match the trace environment")
 		}
 	}
 }
 
-func liveTraceForSession(t *testing.T, cfg config.LangfuseConfig, sessionID string) map[string]any {
+func liveObservationsForSession(t *testing.T, cfg config.LangfuseConfig, sessionID string) []Observation {
 	t.Helper()
-	body := liveGet(t, cfg, "/api/public/traces?sessionId="+url.QueryEscape(sessionID)+"&limit=10")
-	for _, raw := range liveSliceValue(body["data"]) {
-		trace := liveMapValue(raw)
-		if liveStringValue(trace["sessionId"]) == sessionID {
-			return trace
-		}
-	}
-	t.Fatalf("no Langfuse trace found for session %s: %s", sessionID, canonicalLiveJSON(body))
-	return nil
+	return liveListObservations(t, cfg, ObservationQuery{
+		Filter: stringFilter("sessionId", sessionID),
+		Fields: "core,basic,metadata,model,usage,trace_context",
+		Limit:  1000,
+	})
 }
 
-func liveTranscriptObservation(t *testing.T, cfg config.LangfuseConfig, traceID string) map[string]any {
+func liveObservationsForTrace(t *testing.T, cfg config.LangfuseConfig, traceID, fields string) []Observation {
 	t.Helper()
-	body := liveGet(t, cfg, "/api/public/observations?traceId="+url.QueryEscape(traceID)+"&name=codex.transcript&limit=10")
-	for _, raw := range liveSliceValue(body["data"]) {
-		observation := liveMapValue(raw)
-		if liveStringValue(observation["name"]) == "codex.transcript" {
+	return liveListObservations(t, cfg, ObservationQuery{TraceID: traceID, Fields: fields, Limit: 1000})
+}
+
+func liveListObservations(t *testing.T, cfg config.LangfuseConfig, query ObservationQuery) []Observation {
+	t.Helper()
+	observations, err := NewObservationClient(cfg).List(context.Background(), query)
+	if err != nil {
+		t.Fatalf("list Langfuse v2 observations: %v", err)
+	}
+	return observations
+}
+
+func liveNamedObservation(t *testing.T, observations []Observation, name, subject string) Observation {
+	t.Helper()
+	for _, observation := range observations {
+		if observation.Name == name {
 			return observation
 		}
 	}
-	t.Fatalf("no codex.transcript observation found for trace %s: %s", traceID, canonicalLiveJSON(body))
-	return nil
+	t.Fatalf("no %s observation found for %s: %s", name, subject, canonicalLiveJSON(observations))
+	return Observation{}
 }
 
-func liveGet(t *testing.T, cfg config.LangfuseConfig, path string) map[string]any {
+func liveScores(t *testing.T, cfg config.LangfuseConfig, traceID string) []map[string]any {
 	t.Helper()
+	path := "/api/public/v3/scores?traceId=" + url.QueryEscape(traceID) + "&limit=100"
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(cfg.Host, "/")+path, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -166,11 +150,13 @@ func liveGet(t *testing.T, cfg config.LangfuseConfig, path string) map[string]an
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		t.Fatalf("GET %s returned HTTP %d", path, resp.StatusCode)
 	}
-	var body map[string]any
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	return body
+	return body.Data
 }
 
 func canonicalLiveJSON(value any) string {
@@ -178,26 +164,13 @@ func canonicalLiveJSON(value any) string {
 	return string(raw)
 }
 
-func liveCostSummary(observation map[string]any) string {
+func liveCostSummary(observation Observation) string {
 	return canonicalLiveJSON(map[string]any{
-		"id":                     observation["id"],
-		"model":                  observation["model"],
-		"modelId":                observation["modelId"],
-		"usage":                  observation["usage"],
-		"usageDetails":           observation["usageDetails"],
-		"calculatedInputCost":    observation["calculatedInputCost"],
-		"calculatedOutputCost":   observation["calculatedOutputCost"],
-		"calculatedTotalCost":    observation["calculatedTotalCost"],
-		"inputPrice":             observation["inputPrice"],
-		"outputPrice":            observation["outputPrice"],
-		"totalPrice":             observation["totalPrice"],
-		"usagePricingTierId":     observation["usagePricingTierId"],
-		"usagePricingTierName":   observation["usagePricingTierName"],
-		"traceId":                observation["traceId"],
-		"environment":            observation["environment"],
-		"name":                   observation["name"],
-		"type":                   observation["type"],
-		"langfuseModelAttribute": liveMapValue(observation["metadata"])["attributes"],
+		"id": observation.ID, "model": observation.ModelName(), "modelId": observation.ModelID,
+		"usageDetails": observation.UsageDetails, "costDetails": observation.CostDetails,
+		"inputPrice": observation.InputPrice, "outputPrice": observation.OutputPrice, "totalPrice": observation.TotalPrice,
+		"totalCost": observation.TotalCost, "traceId": observation.TraceID, "environment": observation.Environment,
+		"name": observation.Name, "type": observation.Type,
 	})
 }
 
@@ -210,9 +183,13 @@ func liveFloatValue(value any) float64 {
 	case json.Number:
 		result, _ := typed.Float64()
 		return result
-	default:
-		return 0
+	case string:
+		var result float64
+		if _, err := fmt.Sscan(typed, &result); err == nil {
+			return result
+		}
 	}
+	return 0
 }
 
 func liveIntValue(value any) int {
@@ -224,9 +201,13 @@ func liveIntValue(value any) int {
 	case json.Number:
 		result, _ := typed.Int64()
 		return int(result)
-	default:
-		return 0
+	case string:
+		var result int
+		if _, err := fmt.Sscan(typed, &result); err == nil {
+			return result
+		}
 	}
+	return 0
 }
 
 func liveStringValue(value any) string {
@@ -234,18 +215,4 @@ func liveStringValue(value any) string {
 		return text
 	}
 	return ""
-}
-
-func liveMapValue(value any) map[string]any {
-	if typed, ok := value.(map[string]any); ok {
-		return typed
-	}
-	return map[string]any{}
-}
-
-func liveSliceValue(value any) []any {
-	if typed, ok := value.([]any); ok {
-		return typed
-	}
-	return nil
 }

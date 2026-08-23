@@ -27,7 +27,10 @@ func AuthHeader(cfg config.LangfuseConfig) string {
 	return "Basic " + token
 }
 
-func ExportSpans(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, firstObservationIndex int, final bool, environment, userID, serviceName string) (int, error) {
+func ExportSpans(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, environment, userID, serviceName string) (int, error) {
+	if !turn.Completed || turn.TraceID == "" || turn.InputText() == "" || turn.OutputText() == "" {
+		return 0, fmt.Errorf("span export requires a completed turn with non-empty input and output")
+	}
 	recorder := &statusRecorder{base: http.DefaultTransport}
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(strings.TrimRight(cfg.Host, "/")+"/api/public/otel/v1/traces"),
@@ -40,7 +43,7 @@ func ExportSpans(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace
 	if err != nil {
 		return 0, err
 	}
-	if err := emitSpans(ctx, turn, firstObservationIndex, final, environment, userID, serviceName, exporter); err != nil {
+	if err := emitSpans(ctx, turn, environment, userID, serviceName, exporter); err != nil {
 		_ = exporter.Shutdown(ctx)
 		return 0, err
 	}
@@ -76,24 +79,15 @@ func (s *statusRecorder) StatusCode() int {
 	return s.statusCode
 }
 
-func EmitSpans(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
-	return emitSpans(ctx, turn, firstObservationIndex, final, environment, userID, serviceName, exporter)
+func EmitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
+	return emitSpans(ctx, turn, environment, userID, serviceName, exporter)
 }
 
-func emitSpans(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
-	if firstObservationIndex < 0 || firstObservationIndex > len(turn.Observations) {
-		return fmt.Errorf("first observation index %d outside [0,%d]", firstObservationIndex, len(turn.Observations))
+func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
+	if !turn.Completed || turn.TraceID == "" || turn.InputText() == "" || turn.OutputText() == "" {
+		return fmt.Errorf("span projection requires a completed turn with non-empty input and output")
 	}
-	if final && !turn.Completed {
-		return fmt.Errorf("final span projection requires a completed turn")
-	}
-	if !final && firstObservationIndex == len(turn.Observations) {
-		return fmt.Errorf("partial span projection is empty")
-	}
-	ids, err := spanIDs(turn, firstObservationIndex, final)
-	if err != nil {
-		return err
-	}
+	ids := spanIDs(turn)
 	res, err := resource.New(ctx, resource.WithAttributes(
 		attribute.String("service.name", serviceName),
 		attribute.String("langfuse.environment", environment),
@@ -111,80 +105,43 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, firstObservationIndex 
 
 	parentCtx := ctx
 	var agent trace.Span
-	traceTags := []string(nil)
-	if final {
-		traceTags = agenttrace.BuildTraceTags(turn)
-		parentCtx, agent = tracer.Start(ctx, profile.AgentName,
-			trace.WithTimestamp(parseTime(turn.StartTS)),
-			trace.WithAttributes(turnAttributes(turn, environment, userID, "agent", true, traceTags)...),
-		)
-		transcriptCtx, transcript := tracer.Start(parentCtx, profile.TranscriptName,
-			trace.WithTimestamp(parseTime(turn.StartTS)),
-			trace.WithAttributes(transcriptAttributes(turn, environment, userID, traceTags)...),
-		)
-		transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
-		_ = transcriptCtx
-	} else {
-		parentCtx, err = futureAgentParentContext(ctx, turn)
-		if err != nil {
-			return err
-		}
+	traceTags := agenttrace.BuildTraceTags(turn)
+	parentCtx, agent = tracer.Start(ctx, profile.AgentName,
+		trace.WithTimestamp(parseTime(turn.StartTS)),
+		trace.WithAttributes(turnAttributes(turn, environment, userID, traceTags)...),
+	)
+	transcriptCtx, transcript := tracer.Start(parentCtx, profile.TranscriptName,
+		trace.WithTimestamp(parseTime(turn.StartTS)),
+		trace.WithAttributes(transcriptAttributes(turn, environment, userID, traceTags)...),
+	)
+	transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
+	_ = transcriptCtx
+	for _, observation := range turn.Observations {
+		emitObservation(parentCtx, tracer, turn, observation, environment, userID, traceTags)
 	}
-
-	for index := firstObservationIndex; index < len(turn.Observations); index++ {
-		emitObservation(parentCtx, tracer, turn, turn.Observations[index], environment, userID, traceTags, final)
-	}
-	if final {
-		if terminal := agenttrace.TerminalObservation(turn); terminal != nil {
-			emitObservation(parentCtx, tracer, turn, *terminal, environment, userID, traceTags, true)
-		}
-		agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
-	}
+	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	return provider.Shutdown(ctx)
 }
 
-func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, userID string, traceTags []string, final bool) {
+func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, userID string, traceTags []string) {
 	_, span := tracer.Start(ctx, observation.Name,
 		trace.WithTimestamp(nsTime(observation.StartTimeUnixNS)),
-		trace.WithAttributes(observationAttributes(turn, observation, environment, userID, traceTags, final)...),
+		trace.WithAttributes(observationAttributes(turn, observation, environment, userID, traceTags)...),
 	)
 	span.End(trace.WithTimestamp(nsTime(observation.EndTimeUnixNS)))
 }
 
-func spanIDs(turn agenttrace.Turn, firstObservationIndex int, final bool) ([]string, error) {
+func spanIDs(turn agenttrace.Turn) []string {
 	profile := turn.Profile()
-	ids := make([]string, 0, len(turn.Observations)-firstObservationIndex+3)
-	if final {
-		ids = append(ids,
-			agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
-			agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
-		)
-	}
-	for index := firstObservationIndex; index < len(turn.Observations); index++ {
+	ids := make([]string, 0, len(turn.Observations)+2)
+	ids = append(ids,
+		agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
+		agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
+	)
+	for index := range turn.Observations {
 		ids = append(ids, agenttrace.StableSpanID(profile.ObservationPrefix, turn.TraceID, turn.TurnID, strconv.Itoa(index)))
 	}
-	if final && agenttrace.TerminalObservation(turn) != nil {
-		ids = append(ids, agenttrace.StableSpanID(profile.ObservationPrefix, turn.TraceID, turn.TurnID, "terminal"))
-	}
-	return ids, nil
-}
-
-func futureAgentParentContext(ctx context.Context, turn agenttrace.Turn) (context.Context, error) {
-	traceID, err := trace.TraceIDFromHex(turn.TraceID)
-	if err != nil {
-		return nil, fmt.Errorf("parse trace id: %w", err)
-	}
-	parentID, err := trace.SpanIDFromHex(agenttrace.StableSpanID(turn.Profile().AgentSpanPrefix, turn.TraceID, turn.TurnID, ""))
-	if err != nil {
-		return nil, fmt.Errorf("parse future agent span id: %w", err)
-	}
-	parent := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     parentID,
-		TraceFlags: trace.FlagsSampled,
-		Remote:     true,
-	})
-	return trace.ContextWithRemoteSpanContext(ctx, parent), nil
+	return ids
 }
 
 func baseObservationAttributes(turn agenttrace.Turn, environment, userID, observationType, input, output string) []attribute.KeyValue {
@@ -197,31 +154,23 @@ func baseObservationAttributes(turn agenttrace.Turn, environment, userID, observ
 		attribute.String("langfuse.version", buildinfo.Version),
 		attribute.String("langfuse.release", buildinfo.Version),
 		attribute.String("langfuse.observation.type", observationType),
-		attribute.String("langfuse.observation.input", strconv.Quote(agenttrace.ExportText(input))),
-		attribute.String("langfuse.observation.output", strconv.Quote(agenttrace.ExportText(output))),
 		attribute.String("langfuse.user.id", userID),
+	}
+	if value := agenttrace.ExportText(input); value != "" {
+		attrs = append(attrs, attribute.String("langfuse.observation.input", strconv.Quote(value)))
+	}
+	if value := agenttrace.ExportText(output); value != "" {
+		attrs = append(attrs, attribute.String("langfuse.observation.output", strconv.Quote(value)))
 	}
 	return attrs
 }
 
-func turnAttributes(turn agenttrace.Turn, environment, userID, observationType string, includeTraceIO bool, traceTags []string) []attribute.KeyValue {
-	attrs := baseObservationAttributes(turn, environment, userID, observationType, turn.InputText(), turn.OutputText())
-	attrs = append(attrs, traceTagAttributes(traceTags)...)
-	if includeTraceIO {
-		attrs = append(attrs,
-			attribute.String("langfuse.trace.input", agenttrace.ExportText(turn.InputText())),
-			attribute.String("langfuse.trace.output", agenttrace.ExportText(turn.OutputText())),
-		)
-	}
-	attrs = append(attrs, metadataAttributes(turn)...)
-	if includeTraceIO {
-		attrs = append(attrs, insightMetadataAttributes(turn)...)
-	}
-	return attrs
+func turnAttributes(turn agenttrace.Turn, environment, userID string, traceTags []string) []attribute.KeyValue {
+	return projectionAttributes(turn, environment, userID, "agent", turn.InputText(), turn.OutputText(), traceTags, true)
 }
 
 func transcriptAttributes(turn agenttrace.Turn, environment, userID string, traceTags []string) []attribute.KeyValue {
-	attrs := turnAttributes(turn, environment, userID, "generation", false, traceTags)
+	attrs := projectionAttributes(turn, environment, userID, "generation", turn.InputText(), turn.OutputText(), traceTags, false)
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("langfuse.observation.model.name", turn.Model))
 	}
@@ -235,14 +184,8 @@ func transcriptAttributes(turn agenttrace.Turn, environment, userID string, trac
 	return attrs
 }
 
-func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observation, environment, userID string, traceTags []string, final bool) []attribute.KeyValue {
-	attrs := baseObservationAttributes(turn, environment, userID, observation.Type, observation.Input, observation.Output)
-	if final {
-		attrs = append(attrs, traceTagAttributes(traceTags)...)
-		attrs = append(attrs, metadataAttributes(turn)...)
-	} else {
-		attrs = append(attrs, stableMetadataAttributes(turn)...)
-	}
+func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observation, environment, userID string, traceTags []string) []attribute.KeyValue {
+	attrs := projectionAttributes(turn, environment, userID, observation.Type, observation.Input, observation.Output, traceTags, false)
 	if len(observation.Metadata) > 0 {
 		attrs = append(attrs, attribute.String("langfuse.observation.metadata", jsonString(observation.Metadata)))
 	}
@@ -251,6 +194,16 @@ func observationAttributes(turn agenttrace.Turn, observation agenttrace.Observat
 			attribute.String("langfuse.observation.level", "ERROR"),
 			attribute.String("langfuse.observation.status_message", statusMessage),
 		)
+	}
+	return attrs
+}
+
+func projectionAttributes(turn agenttrace.Turn, environment, userID, observationType, input, output string, traceTags []string, includeInsights bool) []attribute.KeyValue {
+	attrs := baseObservationAttributes(turn, environment, userID, observationType, input, output)
+	attrs = append(attrs, traceTagAttributes(traceTags)...)
+	attrs = append(attrs, metadataAttributes(turn)...)
+	if includeInsights {
+		attrs = append(attrs, insightMetadataAttributes(turn)...)
 	}
 	return attrs
 }
@@ -322,86 +275,6 @@ func insightMetadataAttributes(turn agenttrace.Turn) []attribute.KeyValue {
 		}
 	}
 	return attrs
-}
-
-func FetchTrace(ctx context.Context, cfg config.LangfuseConfig, traceID string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.Host, "/")+"/api/public/traces/"+traceID, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", AuthHeader(cfg))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("Langfuse trace fetch failed with HTTP %d", resp.StatusCode)
-	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
-	}
-	return body, nil
-}
-
-type TraceVerification struct {
-	HasInput  bool
-	HasOutput bool
-	Body      map[string]any
-}
-
-func VerifyTraceIO(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (bool, bool, error) {
-	verification, err := VerifyTrace(ctx, cfg, turn, timeout, interval)
-	return verification.HasInput, verification.HasOutput, err
-}
-
-func VerifyTrace(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (TraceVerification, error) {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		traceBody, err := FetchTrace(ctx, cfg, turn.TraceID)
-		if err != nil {
-			lastErr = err
-		} else {
-			hasInput, hasOutput := traceMatches(traceBody, turn.Profile().TranscriptName, agenttrace.ExportText(turn.InputText()), agenttrace.ExportText(turn.OutputText()))
-			if hasInput && hasOutput {
-				return TraceVerification{HasInput: true, HasOutput: true, Body: traceBody}, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return TraceVerification{}, lastErr
-			}
-			return TraceVerification{}, nil
-		}
-		select {
-		case <-ctx.Done():
-			return TraceVerification{}, ctx.Err()
-		case <-time.After(maxDuration(interval, 100*time.Millisecond)):
-		}
-	}
-}
-
-func traceMatches(traceBody map[string]any, transcriptName, input, output string) (bool, bool) {
-	hasInput := stringValue(traceBody["input"]) == input
-	hasOutput := stringValue(traceBody["output"]) == output
-	for _, raw := range sliceValue(traceBody["observations"]) {
-		observation := mapValue(raw)
-		if stringValue(observation["name"]) != transcriptName {
-			continue
-		}
-		hasInput = hasInput || stringValue(observation["input"]) == input
-		hasOutput = hasOutput || stringValue(observation["output"]) == output
-	}
-	return hasInput, hasOutput
-}
-
-func maxDuration(a, b time.Duration) time.Duration {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func jsonString(value any) string {

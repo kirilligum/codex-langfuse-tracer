@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "22222222222222222222222222222222",
   "session_id": "sess-web",
   "turn_id": "turn-web",
-  "input": "Search current docs",
-  "output": "The rollout records only web search action metadata.",
   "model": "gpt-5.5",
   "cwd": "/tmp/web",
   "metadata": {
@@ -73,16 +71,6 @@
         "status": "completed",
         "tool_name": "web_search",
         "type": "web_search_end"
-      }
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T12:10:02Z user\nSearch current docs\n\n## 2026-05-01T12:10:03Z tool.web_search\nInput:\n{\n  \"action\": {\n    \"query\": \"current docs\",\n    \"results\": 2\n  },\n  \"query\": \"current docs\"\n}\n\nOutput:\n{\n  \"query\": \"current docs\",\n  \"results\": 2\n}\n\n## 2026-05-01T12:10:04Z assistant.final\nThe rollout records only web search action metadata.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "turn-web"
       }
     }
   ]

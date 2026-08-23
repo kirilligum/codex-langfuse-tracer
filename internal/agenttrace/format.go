@@ -61,22 +61,6 @@ func CommandOutput(payload map[string]any) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func CommandTerminalText(payload map[string]any) string {
-	parts := []string{"Command:\n" + FormatCommand(payload["command"])}
-	if output := CommandOutput(payload); output != "" {
-		parts = append(parts, "Output:\n"+output)
-	}
-	status := StringValue(payload["status"])
-	exitCode := payload["exit_code"]
-	if status != "" || exitCode != nil {
-		if status == "" {
-			status = "unknown"
-		}
-		parts = append(parts, "Status: "+status+" exit_code="+StringValue(exitCode))
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 func PatchOutput(payload map[string]any) string {
 	var parts []string
 	if stdout := StringValue(payload["stdout"]); stdout != "" {
@@ -96,17 +80,6 @@ func PatchOutput(payload map[string]any) string {
 		} else if content := StringValue(entry["content"]); content != "" {
 			parts = append(parts, "```text\n"+content+"\n```")
 		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func ToolTerminalText(input, output string) string {
-	var parts []string
-	if input != "" {
-		parts = append(parts, "Input:\n"+input)
-	}
-	if output != "" {
-		parts = append(parts, "Output:\n"+output)
 	}
 	return strings.Join(parts, "\n\n")
 }

@@ -5,7 +5,6 @@ type ProviderProfile struct {
 	TraceName            string
 	AgentName            string
 	TranscriptName       string
-	TerminalName         string
 	AgentSpanPrefix      string
 	TranscriptSpanPrefix string
 	ObservationPrefix    string
@@ -19,7 +18,6 @@ var providerProfiles = map[string]ProviderProfile{
 		TraceName:            "codex.turn.transcript",
 		AgentName:            "codex.agent",
 		TranscriptName:       "codex.transcript",
-		TerminalName:         "codex.terminal",
 		AgentSpanPrefix:      "codex-agent",
 		TranscriptSpanPrefix: "codex-transcript",
 		ObservationPrefix:    "codex-observation",
@@ -31,7 +29,6 @@ var providerProfiles = map[string]ProviderProfile{
 		TraceName:            "claude.turn.transcript",
 		AgentName:            "claude.agent",
 		TranscriptName:       "claude.transcript",
-		TerminalName:         "claude.terminal",
 		AgentSpanPrefix:      "claude-agent",
 		TranscriptSpanPrefix: "claude-transcript",
 		ObservationPrefix:    "claude-observation",

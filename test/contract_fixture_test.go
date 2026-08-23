@@ -95,8 +95,8 @@ func validateGoldenFixtures(t *testing.T) {
 		if err := json.Unmarshal(goldenRaw, &golden); err != nil {
 			t.Fatalf("fixture %s golden invalid JSON: %v", fixture.ID, err)
 		}
-		if golden.SchemaVersion != 1 {
-			t.Fatalf("fixture %s schema_version = %d, want 1", fixture.ID, golden.SchemaVersion)
+		if golden.SchemaVersion != 2 {
+			t.Fatalf("fixture %s schema_version = %d, want 2", fixture.ID, golden.SchemaVersion)
 		}
 	}
 
@@ -104,7 +104,6 @@ func validateGoldenFixtures(t *testing.T) {
 		"completed_turn",
 		"incomplete_turn",
 		"trace_preview",
-		"terminal_stream",
 		"commentary",
 		"visible_reasoning_summary",
 		"hidden_reasoning_exclusion",

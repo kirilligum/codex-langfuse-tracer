@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,9 +54,8 @@ func TestEvalWatchExportLatency(t *testing.T) {
 		}
 	}
 
-	logicalLatencies := make([]time.Duration, 0, 20)
 	batchesByTrace := map[string]int{}
-	state := exportstate.State{Version: 2, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
 	if err := exportstate.Save(statePath, state); err != nil {
 		t.Fatal(err)
 	}
@@ -67,15 +65,8 @@ func TestEvalWatchExportLatency(t *testing.T) {
 		Root:             root,
 		StatePath:        statePath,
 		Now:              now,
-		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ string) (int, error) {
 			batchesByTrace[turn.TraceID]++
-			if !turn.Completed {
-				endNS, parseErr := strconv.ParseInt(turn.Observations[len(turn.Observations)-1].EndTimeUnixNS, 10, 64)
-				if parseErr != nil {
-					t.Fatalf("parse observation end: %v", parseErr)
-				}
-				logicalLatencies = append(logicalLatencies, now.Sub(time.Unix(0, endNS)))
-			}
 			return 200, nil
 		},
 		ExportScores: func(context.Context, agenttrace.Turn, string) error { return nil },
@@ -83,24 +74,16 @@ func TestEvalWatchExportLatency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exported != 21 {
-		t.Fatalf("exported = %d, want 21", exported)
+	if exported != 1 {
+		t.Fatalf("exported = %d, want 1 completed turn", exported)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("scan latency = %s, want <= 5s", elapsed)
-	}
-	if len(logicalLatencies) != 20 {
-		t.Fatalf("logical latency samples = %d, want 20", len(logicalLatencies))
-	}
-	sort.Slice(logicalLatencies, func(i, j int) bool { return logicalLatencies[i] < logicalLatencies[j] })
-	p95 := logicalLatencies[18]
-	if p95 > 10*time.Second {
-		t.Fatalf("logical p95 eligibility latency = %s, want <= 10s", p95)
 	}
 	for traceID, batches := range batchesByTrace {
 		if batches > 1 {
 			t.Fatalf("trace %s emitted %d batches in one scan", traceID, batches)
 		}
 	}
-	t.Logf("logical_p95=%s max_scan_wall=%s candidates=100 progressive=20", p95, time.Since(start))
+	t.Logf("max_scan_wall=%s candidates=100 completed_only=true", time.Since(start))
 }

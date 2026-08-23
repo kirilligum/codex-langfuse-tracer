@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "d72d958865e91ae4616f1d78c6267699",
   "session_id": "claude-live-metadata",
   "turn_id": "claude-live-user",
-  "input": "Reply exactly: clt-live-fixture",
-  "output": "clt-live-fixture",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-live-metadata",
   "metadata": {
@@ -68,16 +66,6 @@
       "type": "generation",
       "input": "Reply exactly: clt-live-fixture",
       "output": "clt-live-fixture"
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T19:47:21.579Z user\nReply exactly: clt-live-fixture\n\n## 2026-05-04T19:47:22.662Z assistant.final\nclt-live-fixture",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "claude-live-user"
-      }
     }
   ]
 }

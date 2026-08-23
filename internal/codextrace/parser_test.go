@@ -78,6 +78,56 @@ func TestResponseMessageContentShapes(t *testing.T) {
 	}
 }
 
+func TestTaskCompleteDoesNotDuplicateFullResponseItemFinal(t *testing.T) {
+	t.Parallel()
+
+	turn := parseCodexSourceText(t, strings.Join([]string{
+		`{"timestamp":"2026-05-01T12:21:00Z","type":"session_meta","payload":{"id":"sess-prefix","model":"gpt-5.4","cwd":"/tmp/prefix"}}`,
+		`{"timestamp":"2026-05-01T12:21:01Z","type":"turn_context","payload":{"turn_id":"turn-prefix","trace_id":"44444444444444444444444444444444"}}`,
+		`{"timestamp":"2026-05-01T12:21:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Use the full response."}]}}`,
+		`{"timestamp":"2026-05-01T12:21:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Full response.\n\nAdditional detail."}]}}`,
+		`{"timestamp":"2026-05-01T12:21:04Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Full response."}}`,
+		"",
+	}, "\n"))
+
+	if got, want := turn.OutputText(), "Full response.\n\nAdditional detail."; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+	if len(turn.AssistantTexts) != 1 {
+		t.Fatalf("assistant texts = %#v, want one canonical response", turn.AssistantTexts)
+	}
+}
+
+func TestTaskCompleteDoesNotSupplyTurnOutput(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join([]string{
+		`{"timestamp":"2026-05-01T12:22:00Z","type":"session_meta","payload":{"id":"sess-task-only","model":"gpt-5.4"}}`,
+		`{"timestamp":"2026-05-01T12:22:01Z","type":"turn_context","payload":{"turn_id":"turn-task-only","trace_id":"55555555555555555555555555555555"}}`,
+		`{"timestamp":"2026-05-01T12:22:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Use response items only."}]}}`,
+		`{"timestamp":"2026-05-01T12:22:03Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Legacy completion text."}}`,
+		"",
+	}, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := ParseTurns(path)
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+	turn := turns[0]
+
+	if !turn.Completed {
+		t.Fatal("turn is not marked complete")
+	}
+	if got := turn.OutputText(); got != "" {
+		t.Fatalf("output = %q, want empty without response_item final", got)
+	}
+}
+
 func TestRepeatedTurnContextPreservesAccumulatedTurn(t *testing.T) {
 	t.Parallel()
 
@@ -85,11 +135,11 @@ func TestRepeatedTurnContextPreservesAccumulatedTurn(t *testing.T) {
 	raw := []byte(strings.Join([]string{
 		`{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-repeat","model":"gpt-5.5","cwd":"/tmp/repeat"}}`,
 		`{"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-repeat","cwd":"/tmp/repeat","model":"gpt-5.5"}}`,
-		`{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Implement the plan"}}`,
+		`{"timestamp":"2026-05-01T10:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Implement the plan"}]}}`,
 		`{"timestamp":"2026-05-01T10:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Reading files."}}`,
 		`{"timestamp":"2026-05-01T10:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}}`,
 		`{"timestamp":"2026-05-01T10:00:05Z","type":"turn_context","payload":{"turn_id":"turn-repeat","cwd":"/tmp/repeat","model":"gpt-5.5"}}`,
-		`{"timestamp":"2026-05-01T10:00:06Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Done"}}`,
+		`{"timestamp":"2026-05-01T10:00:06Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}}`,
 		`{"timestamp":"2026-05-01T10:00:07Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done"}}`,
 		"",
 	}, "\n"))

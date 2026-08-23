@@ -18,7 +18,7 @@ func TestEvalOTLPPayloadSizeAndLatency(t *testing.T) {
 	start := time.Now()
 	exporter := &memoryExporter{}
 	turn := completeTurn(t)
-	if err := EmitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := EmitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	if len(exporter.Snapshots()) == 0 {

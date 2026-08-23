@@ -183,8 +183,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
 			ResolveWorkspace:    langfuse.ResolveWorkspace,
-			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, firstObservationIndex int, final bool, environment string) (int, error) {
-				return langfuse.ExportSpans(ctx, cfg, turn, firstObservationIndex, final, environment, userID, opts.ServiceName)
+			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
+				return langfuse.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 			},
 			ExportScores: func(ctx context.Context, turn agenttrace.Turn, environment string) error {
 				return langfuse.CreateDeterministicScores(ctx, cfg, turn, environment)
@@ -226,7 +226,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !opts.JSON && !opts.Quiet {
 		fmt.Fprintf(stdout, "session_file=%s\n", sessionPath)
 	}
-	projectID := ""
+	projectID, err := langfuse.FetchProjectID(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 1
+	}
 	for _, turn := range exportable {
 		resolvedTurn, environment, err := langfuse.ResolveWorkspace(ctx, turn)
 		if err != nil {
@@ -237,7 +241,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if !opts.JSON && !opts.Quiet {
 			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
 		}
-		status, err := langfuse.ExportSpans(ctx, cfg, turn, 0, true, environment, userID, opts.ServiceName)
+		status, err := langfuse.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
@@ -264,7 +268,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			}
 			result.VerifiedInput = verification.HasInput
 			result.VerifiedOutput = verification.HasOutput
-			result.TraceURL = langfuse.TraceURLFromBody(cfg, turn.TraceID, verification.Body)
 			if !opts.JSON && !opts.Quiet {
 				fmt.Fprintf(stdout, "verified trace=%s input=%v output=%v\n", turn.TraceID, verification.HasInput, verification.HasOutput)
 			}
@@ -273,12 +276,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
-		if result.TraceURL == "" {
-			if projectID == "" {
-				projectID, _ = langfuse.FetchProjectID(ctx, cfg)
-			}
-			result.TraceURL = langfuse.BuildTraceURL(cfg, projectID, turn.TraceID)
-		}
+		result.TraceURL = langfuse.BuildTraceURL(cfg, projectID, turn.TraceID)
 		if opts.JSON {
 			if err := writeJSONLine(stdout, result); err != nil {
 				fmt.Fprintf(stderr, "ERROR: %v\n", err)

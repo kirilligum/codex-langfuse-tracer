@@ -15,7 +15,7 @@ import (
 )
 
 type ResolveWorkspaceFunc func(context.Context, agenttrace.Turn) (agenttrace.Turn, string, error)
-type ExportSpansFunc func(context.Context, agenttrace.Turn, int, bool, string) (int, error)
+type ExportSpansFunc func(context.Context, agenttrace.Turn, string) (int, error)
 type ExportScoresFunc func(context.Context, agenttrace.Turn, string) error
 
 type ScanOptions struct {
@@ -32,51 +32,12 @@ type ScanOptions struct {
 	InitialLookbackSecs int
 }
 
-type progressivePlan struct {
-	FirstObservationIndex int
-	ExportSpans           bool
-	Final                 bool
-	ExportScores          bool
-}
-
-func planTurn(turn agenttrace.Turn, progress exportstate.TurnProgress) (progressivePlan, error) {
-	if progress.ExportedObservationCount < 0 || progress.ExportedObservationCount > len(turn.Observations) {
-		return progressivePlan{}, fmt.Errorf("exported observation count %d outside [0,%d]", progress.ExportedObservationCount, len(turn.Observations))
-	}
-	if turn.TraceID == "" || turn.InputText() == "" {
-		return progressivePlan{}, nil
-	}
-	if !turn.Completed {
-		if progress.FinalSpansExported {
-			return progressivePlan{}, fmt.Errorf("incomplete turn has final span checkpoint")
-		}
-		if progress.ExportedObservationCount < len(turn.Observations) {
-			return progressivePlan{FirstObservationIndex: progress.ExportedObservationCount, ExportSpans: true}, nil
-		}
-		return progressivePlan{}, nil
-	}
-	if turn.OutputText() == "" {
-		return progressivePlan{}, nil
-	}
-	if progress.FinalSpansExported {
-		if progress.ExportedObservationCount != len(turn.Observations) {
-			return progressivePlan{}, fmt.Errorf("final span checkpoint has observation count %d, parsed %d", progress.ExportedObservationCount, len(turn.Observations))
-		}
-		return progressivePlan{ExportScores: true}, nil
-	}
-	return progressivePlan{
-		FirstObservationIndex: progress.ExportedObservationCount,
-		ExportSpans:           true,
-		Final:                 true,
-	}, nil
-}
-
 func InitializeState(statePath string, now time.Time, stdout io.Writer, quiet bool) (exportstate.State, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
 	state := exportstate.State{
-		Version:         2,
+		Version:         exportstate.Version,
 		ScanWatermarkNS: now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano(),
 	}
 	if err := exportstate.Save(statePath, state); err != nil {
@@ -154,19 +115,16 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 }
 
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
-	progress := state.ProgressFor(turn.TraceID)
-	plan, err := planTurn(turn, progress)
-	if err != nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to plan trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
-		return state, 0, true, nil
-	}
-	if !plan.ExportSpans && !plan.ExportScores {
+	traceID := turn.TraceID
+	environment := state.PendingScoreEnvironment(traceID)
+	needsSpans := environment == ""
+	if needsSpans && !isExportable(turn) {
 		return state, 0, false, nil
 	}
-	environment := progress.Environment
-	if plan.ExportSpans {
+
+	if needsSpans {
 		if opts.ResolveWorkspace == nil {
-			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", turn.TraceID, sourcePath)
+			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", traceID, sourcePath)
 			return state, 0, true, nil
 		}
 		resolvedTurn, resolvedEnvironment, err := opts.ResolveWorkspace(ctx, turn)
@@ -174,79 +132,66 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 			return state, 0, false, err
 		}
 		turn = resolvedTurn
+		environment = resolvedEnvironment
 		if environment == "" {
-			environment = resolvedEnvironment
-			state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
-				currentProgress := current.ProgressFor(turn.TraceID)
-				currentProgress.Environment = environment
-				current.SetProgress(turn.TraceID, currentProgress)
-			})
-			if err != nil {
+			return state, 0, false, fmt.Errorf("workspace resolver returned empty environment for trace %s", traceID)
+		}
+		if *attemptedExport {
+			if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
 				return state, 0, false, err
 			}
 		}
-	}
-	if environment == "" {
-		return state, 0, false, fmt.Errorf("turn progress %s requires environment", turn.TraceID)
-	}
-	if *attemptedExport {
-		if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
-			return state, 0, false, err
-		}
-	}
-	*attemptedExport = true
+		*attemptedExport = true
 
-	stdout := writerOrDiscard(opts.Stdout)
-	stderr := writerOrDiscard(opts.Stderr)
-	emitted := 0
-	if plan.ExportSpans {
 		if opts.ExportSpans == nil {
-			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s path=%s: missing span export callback\n", turn.TraceID, sourcePath)
+			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceID, sourcePath)
 			return state, 0, true, nil
 		}
-		status, err := opts.ExportSpans(ctx, turn, plan.FirstObservationIndex, plan.Final, environment)
+		status, err := opts.ExportSpans(ctx, turn, environment)
 		if err != nil {
-			fmt.Fprintf(stderr, "ERROR: failed to export trace=%s observations=%d:%d final=%t path=%s: %v\n", turn.TraceID, plan.FirstObservationIndex, len(turn.Observations), plan.Final, sourcePath, err)
+			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
 			return state, 0, true, nil
 		}
 		state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
-			progress := current.ProgressFor(turn.TraceID)
-			progress.ExportedObservationCount = len(turn.Observations)
-			if plan.Final {
-				progress.FinalSpansExported = true
-			}
-			current.SetProgress(turn.TraceID, progress)
+			current.SetPendingScore(traceID, environment)
 		})
 		if err != nil {
 			return state, 0, false, err
 		}
-		emitted = 1
 		if !opts.Quiet {
-			fmt.Fprintf(stdout, "exported trace=%s observations=%d:%d final=%t status=%d path=%s\n", turn.TraceID, plan.FirstObservationIndex, len(turn.Observations), plan.Final, status, sourcePath)
-		}
-		if !plan.Final {
-			return state, emitted, false, nil
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "exported trace=%s status=%d path=%s\n", traceID, status, sourcePath)
 		}
 	}
 
 	if opts.ExportScores == nil {
-		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: missing score export callback\n", turn.TraceID, sourcePath)
-		return state, emitted, true, nil
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to score trace=%s path=%s: missing score export callback\n", traceID, sourcePath)
+		return state, boolToInt(needsSpans), true, nil
 	}
 	if err := opts.ExportScores(ctx, turn, environment); err != nil {
-		fmt.Fprintf(stderr, "ERROR: failed to score trace=%s path=%s: %v\n", turn.TraceID, sourcePath, err)
-		return state, emitted, true, nil
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to score trace=%s path=%s: %v\n", traceID, sourcePath, err)
+		return state, boolToInt(needsSpans), true, nil
 	}
-	state, err = mutateState(opts.StatePath, state, func(current *exportstate.State) {
-		current.AddProcessed(turn.TraceID)
+	state, err := mutateState(opts.StatePath, state, func(current *exportstate.State) {
+		current.AddProcessed(traceID)
 	})
 	if err != nil {
-		return state, emitted, false, err
+		return state, boolToInt(needsSpans), false, err
 	}
 	if !opts.Quiet {
-		fmt.Fprintf(stdout, "scored trace=%s path=%s\n", turn.TraceID, sourcePath)
+		fmt.Fprintf(writerOrDiscard(opts.Stdout), "scored trace=%s path=%s\n", traceID, sourcePath)
 	}
-	return state, emitted, false, nil
+	return state, boolToInt(needsSpans), false, nil
+}
+
+func isExportable(turn agenttrace.Turn) bool {
+	return turn.Completed && turn.TraceID != "" && turn.InputText() != "" && turn.OutputText() != ""
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, attemptedExport *bool) (exportstate.State, int, error) {
@@ -354,7 +299,6 @@ func WatchSessions(ctx context.Context, opts ScanOptions) error {
 				current = *latest
 			}
 		}
-		var err error
 		current, _, err = ScanOnce(ctx, opts, current)
 		if err != nil {
 			return err

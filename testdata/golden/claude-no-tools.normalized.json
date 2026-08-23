@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "5c17093722db9a16d8a358773f3de1ef",
   "session_id": "claude-no-tools",
   "turn_id": "claude-no-tools-user",
-  "input": "Summarize this project in one sentence.",
-  "output": "The project exports coding-agent sessions to Langfuse.",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-no-tools",
   "metadata": {
@@ -66,16 +64,6 @@
       "type": "generation",
       "input": "Summarize this project in one sentence.",
       "output": "The project exports coding-agent sessions to Langfuse."
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:02:00Z user\nSummarize this project in one sentence.\n\n## 2026-05-04T12:02:01Z assistant.final\nThe project exports coding-agent sessions to Langfuse.",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "claude-no-tools-user"
-      }
     }
   ]
 }

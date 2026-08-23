@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "11111111111111111111111111111111",
   "session_id": "sess-reasoning",
   "turn_id": "turn-reasoning",
-  "input": "Export only visible reasoning",
-  "output": "Visible answer only.",
   "model": "gpt-5.5",
   "cwd": "/tmp/reasoning",
   "metadata": {
@@ -69,16 +67,6 @@
       "output": "Visible plan only.",
       "metadata": {
         "response_item_type": "reasoning"
-      }
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T11:50:02Z user\nExport only visible reasoning\n\n## 2026-05-01T11:50:03Z assistant.reasoning\nVisible plan only.\n\n## 2026-05-01T11:50:04Z assistant.final\nVisible answer only.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "turn-reasoning"
       }
     }
   ]

@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "33333333333333333333333333333333",
   "session_id": "sess-content",
   "turn_id": "turn-content",
-  "input": "Use response item content as input.",
-  "output": "Response item content is exported.",
   "model": "gpt-5.4",
   "cwd": "/tmp/content",
   "metadata": {
@@ -61,16 +59,6 @@
       "type": "generation",
       "input": "Use response item content as input.",
       "output": "Response item content is exported."
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T12:20:04Z assistant.final\nResponse item content is exported.",
-      "metadata": {
-        "event_count": 1,
-        "turn_id": "turn-content"
-      }
     }
   ]
 }

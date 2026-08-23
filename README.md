@@ -2,9 +2,9 @@
 
 [![Codex Langfuse Tracer showcase](https://img.youtube.com/vi/Y6XycKR0Z0I/hqdefault.jpg)](https://youtu.be/Y6XycKR0Z0I)
 
-Export progressive Codex CLI traces and completed Claude Code turns to Langfuse.
+Export completed Codex CLI turns and completed Claude Code turns to Langfuse.
 
-This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends clean Langfuse traces with completed progress observations, prompts, final answers, visible terminal activity, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
+This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends one clean Langfuse batch for each completed turn with the prompt, final answer, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
 
 It is intentionally not a wrapper around `codex`. Codex runs normally; a `systemd --user` service exports completed observations and finalizes completed turns in the background.
 
@@ -127,14 +127,14 @@ chmod 600 ~/.codex/config.toml
 
 ### 3. Install
 
-Version 1 state is intentionally incompatible and is not migrated. When upgrading a machine that has version 1 state, stop the existing watcher and perform this one-time destructive reset before installing:
+Older watcher state is intentionally incompatible and is not migrated. When upgrading a machine with an older state file, stop the existing watcher and perform this one-time destructive reset before installing:
 
 ```sh
 systemctl --user stop codex-langfuse-watch.service
 rm -- ~/.codex/langfuse-export-state.json
 ```
 
-Removing the file discards processed IDs, queued requests, the scan watermark, and partial progress. There is no compatibility state, backup path, or migration command.
+Removing the file discards processed IDs, queued requests, the scan watermark, and pending score retries. There is no compatibility state, backup path, or migration command.
 
 ```sh
 ./install.sh
@@ -157,7 +157,7 @@ Installed files:
 ~/.codex/langfuse-export-state.json
 ```
 
-The version 2 state file records processed trace IDs and unfinished-turn progress so normal watcher runs do not resend successful observation batches. The installer starts the watcher, which creates fresh version 2 state when no state file exists; recently modified session files can then be exported again.
+The version 3 state file records processed trace IDs, score retries, and queued hook requests so normal watcher runs do not resend successful observation batches. The installer starts the watcher, which creates fresh version 3 state when no state file exists; recently modified session files can then be exported again.
 
 If you want the user service to run even when you are logged out, enable lingering for your Linux user:
 
@@ -191,7 +191,6 @@ Expected trace shape:
 
 - root observation: `codex.agent`
 - main generation: `codex.transcript`
-- visible terminal stream: `codex.terminal`
 - tool calls: `codex.tool.*`
 
 Claude Code support can be checked with an explicit sanitized transcript path:
@@ -236,13 +235,13 @@ There is one automatic export path:
 
 1. `codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`.
 2. The exporter polls `~/.codex/sessions/` for `rollout-*.jsonl` every five seconds by default.
-3. For unfinished Codex turns, the first completed observation makes the trace visible during the next five-second polling cycle. Later scans send only completed observations after the persisted prefix.
-4. Completion sends the remaining observations plus `codex.agent`, `codex.transcript`, and `codex.terminal`, then creates deterministic trace-level scores.
-5. Progress and completion are saved in `~/.codex/langfuse-export-state.json`.
+3. The watcher considers only completed turns with non-empty canonical input and output from Codex `response_item` messages.
+4. One export sends `codex.agent`, `codex.transcript`, and all child observations in a single batch, then creates deterministic trace-level scores.
+5. Processed traces, score retries, and queue requests are saved in `~/.codex/langfuse-export-state.json`.
 
-Progressive export does not stream tokens or partial assistant text. It exports only completed observations already present in the rollout, such as a finished command, patch, MCP call, or visible commentary record. Completion-derived trace output, transcript, terminal aggregation, token usage, insight metadata, and tags are added only after Codex records the turn as complete.
+Incomplete turns remain local until Codex records completion. It does not stream tokens or partial assistant text, and it does not export partial tool observations.
 
-The version 2 state document uses `turn_progress[trace_id]` with `exported_observation_count`, `final_spans_exported`, and `environment`. The environment is saved before the first network attempt. A successful partial batch advances the observation count. A successful final span batch sets the final flag before score submission. The trace moves to `processed_trace_ids` only after scores succeed, and its `turn_progress` entry is then removed.
+The version 3 state document uses `processed_trace_ids`, `pending_scores[trace_id]` for a successful span export awaiting scores, and `queue`. A successful span batch stores its resolved environment before score submission. A score failure retries scores with that environment and does not re-export the trace. Successful scores move the trace to `processed_trace_ids` and remove its pending entry.
 
 Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
 
@@ -274,9 +273,8 @@ If your `~/.codex/config.toml` has a native `[otel]` section and Langfuse shows 
 
 The exporter sends these observations when Codex records the data locally:
 
-- `codex.agent`: root agent observation with trace-table input and output.
-- `codex.transcript`: generation observation with the user prompt, final assistant answer, model name, and token usage.
-- `codex.terminal`: ordered visible CLI event stream for the turn.
+- `codex.agent`: logical root observation with canonical input and output.
+- `codex.transcript`: generation observation with the same canonical input and output, model name, and token usage.
 - `codex.message.commentary`: assistant progress updates shown in the CLI.
 - `codex.reasoning.summary`: visible reasoning summaries when Codex records a non-empty summary.
 - `codex.tool.command`: shell command input and terminal output.
@@ -290,15 +288,14 @@ Tool observations use Langfuse's `tool` observation type. The transcript uses `g
 Claude Code support emits:
 
 - trace name: `claude.turn.transcript`
-- `claude.agent`: root agent observation with trace-table input and output.
-- `claude.transcript`: generation observation with the prompt, final answer, model name, and token usage when Claude records it.
-- `claude.terminal`: ordered visible transcript stream for the turn.
+- `claude.agent`: logical root observation with canonical input and output.
+- `claude.transcript`: generation observation with the same canonical input and output, model name, and token usage when Claude records it.
 - `claude.tool.command`: Bash tool input, output, status, and command metadata.
 - `claude.tool.file_change`: file-writing tool metadata when Claude records structured path fields.
 - `claude.tool.mcp`: MCP invocation and result when Claude records structured MCP tool names.
 - `claude.tool.generic`: bounded metadata and redacted input/output for other Claude tools.
 
-Claude thinking blocks are omitted, including redacted or encrypted thinking-like blocks. Visible assistant text, final answers, tool input, tool output, terminal stream, and metadata strings use the shared redaction and truncation path.
+Claude thinking blocks are omitted, including redacted or encrypted thinking-like blocks. Visible assistant text, final answers, tool input, tool output, and metadata strings use the shared redaction and truncation path.
 
 `<provider>.tool.file_change` metadata includes:
 
@@ -335,7 +332,7 @@ The root trace carries compact provider insight metadata for table scanning. Cod
 
 Workspace metadata includes the exact `cwd` and, when `cwd` is inside an attached Git worktree, the export-time branch as `git_branch`. The exporter maps the worktree-root folder and export-time branch to `langfuse.environment` in the form `repository-folder--branch-<hash>`. Repository and branch text is normalized to lowercase Langfuse-safe characters, the value is capped at 40 characters, and every Git environment ends with the first six lowercase hexadecimal SHA-256 characters of the raw repository folder, a NUL separator, and raw branch. A detached HEAD uses `detached`; its `git_branch` metadata remains omitted. Non-Git, missing, unreadable, or timed-out working directories use `default`.
 
-Every exported span sets `langfuse.user.id` to the trimmed, non-empty Linux runtime hostname captured once when the export process starts. This is machine identity, not a human account or workspace path. The same persisted Environment is used for progressive spans, final spans, and deterministic scores even if the checked-out branch changes before a retry.
+Every exported span sets `langfuse.user.id` to the trimmed, non-empty Linux runtime hostname captured once when the export process starts. This is machine identity, not a human account or workspace path. The same persisted Environment is used for the span export and deterministic scores even if the checked-out branch changes before a score retry.
 
 Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
 
@@ -522,7 +519,9 @@ The exporter does not emit:
 - inferred "model context" observations
 - local cost calculations or `cost_details`
 
-`codex.terminal` is an ordered stream of terminal-relevant events Codex records locally. It is not a full terminal recording.
+Input and output are stored on the root and generation observations using Langfuse v4 observation fields: `langfuse.observation.input` and `langfuse.observation.output`. Empty observation input/output fields are omitted. Deprecated trace-level input/output fields are not emitted.
+
+Verification reads Langfuse's `/api/public/v2/observations` endpoint, selects the single logical root observation, and compares its raw input/output values with the sanitized turn. It does not read deprecated trace objects or v1 observation rows.
 
 ## Troubleshooting
 
@@ -615,7 +614,7 @@ source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecon
 Add a new coding agent by extending the existing path:
 
 1. Add a parser package named `internal/<provider>trace` that reads that agent's local transcript or log format and returns `[]agenttrace.Turn`.
-2. Keep provider-specific logic in that parser only. Shared redaction, terminal assembly, token usage, trace IDs, insight rollups, trace tags, and Langfuse projection stay in `internal/agenttrace`, `internal/tracecontract`, and `internal/langfuse`.
+2. Keep provider-specific logic in that parser only. Shared redaction, token usage, trace IDs, insight rollups, trace tags, and Langfuse projection stay in `internal/agenttrace`, `internal/tracecontract`, and `internal/langfuse`.
 3. Add the provider constant in `internal/agenttrace/model.go` and profile names in `internal/agenttrace/profile.go`, including trace name, observation names, metadata prefix, and insight metadata key.
 4. Register the parser once in `internal/providers/providers.go`. `cmd/codex-langfuse-exporter`, `internal/watch`, and contract tests must call the provider registry instead of importing the provider parser directly.
 5. Add sanitized fixtures under `testdata/sources/<provider>/*.jsonl`, add entries to `testdata/manifest.json`, and add normalized expectations under `testdata/golden`.
@@ -635,4 +634,4 @@ If Langfuse MCP was added only for this setup, remove the optional `[mcp_servers
 
 ## Social Summary
 
-Codex Langfuse Tracer is a small Go exporter that watches local Codex CLI rollout files and progressively turns coding-agent activity into clean Langfuse traces: completed subcalls first, then prompts, final answers, terminal activity, token usage, and verification metadata at completion. Install once per workstation; Codex keeps running normally.
+Codex Langfuse Tracer is a small Go exporter that watches local Codex CLI rollout files and turns completed coding-agent turns into clean Langfuse traces with canonical observation input/output, tool activity, token usage, and verification metadata. Install once per workstation; Codex keeps running normally.

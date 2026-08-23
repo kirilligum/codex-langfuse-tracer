@@ -56,7 +56,7 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 	// TEST-703
 
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := Save(path, State{Version: 2, ScanWatermarkNS: 10}); err != nil {
+	if err := Save(path, State{Version: Version, ScanWatermarkNS: 10}); err != nil {
 		t.Fatal(err)
 	}
 	stale, err := Load(path)
@@ -72,9 +72,9 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 99, Environment: "stale--main-a1b2c3"})
+	stale.SetPendingScore("trace-progress", "stale--main-a1b2c3")
 	updated, err := Update(path, func(current *State) error {
-		current.SetProgress("trace-progress", TurnProgress{ExportedObservationCount: 1, Environment: "repository--main-b2c3d4"})
+		current.SetPendingScore("trace-progress", "repository--main-b2c3d4")
 		return nil
 	})
 	if err != nil {
@@ -83,17 +83,14 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 	if len(updated.Queue) != 1 || updated.Queue[0].SourcePath != request.SourcePath {
 		t.Fatalf("atomic update lost queue: %+v", updated)
 	}
-	if got := updated.ProgressFor("trace-progress").ExportedObservationCount; got != 1 {
-		t.Fatalf("progress count = %d, want 1", got)
-	}
-	if got := updated.ProgressFor("trace-progress").Environment; got != "repository--main-b2c3d4" {
-		t.Fatalf("progress environment = %q", got)
+	if got := updated.PendingScoreEnvironment("trace-progress"); got != "repository--main-b2c3d4" {
+		t.Fatalf("pending score environment = %q", got)
 	}
 	loaded, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Queue) != 1 || loaded.ProgressFor("trace-progress").ExportedObservationCount != 1 {
+	if len(loaded.Queue) != 1 || loaded.PendingScoreEnvironment("trace-progress") != "repository--main-b2c3d4" {
 		t.Fatalf("persisted state = %+v", loaded)
 	}
 }

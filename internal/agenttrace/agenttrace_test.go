@@ -17,7 +17,6 @@ func TestAgentTraceSharedOwnership(t *testing.T) {
 		AssistantTexts: []string{"done"},
 		Completed:      true,
 	}
-	AddTerminalEntry(&turn, turn.StartTS, "user", turn.InputText())
 	AddObservation(&turn, "codex.message.commentary", turn.EndTS, "", "done", map[string]any{"phase": "commentary"}, "span", nil)
 
 	if len(ExportableTurns([]Turn{turn})) != 1 {
@@ -31,9 +30,6 @@ func TestAgentTraceSharedOwnership(t *testing.T) {
 	}
 	if exported := ExportText(turn.InputText()); exported == turn.InputText() {
 		t.Fatalf("redaction not applied to exported input: %q", exported)
-	}
-	if TerminalObservation(turn) == nil {
-		t.Fatal("terminal observation missing")
 	}
 	if BuildInsightRollup(turn).ToolCount != 0 {
 		t.Fatal("non-tool span counted as tool")

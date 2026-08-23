@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "cccccccccccccccccccccccccccccccc",
   "session_id": "sess-multi",
   "turn_id": "turn-done",
-  "input": "Export only this completed turn",
-  "output": "Only the completed turn is exportable.",
   "model": "gpt-5.5",
   "cwd": "/tmp/multi",
   "metadata": {
@@ -61,16 +59,6 @@
       "type": "generation",
       "input": "Export only this completed turn",
       "output": "Only the completed turn is exportable."
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T11:10:05Z user\nExport only this completed turn\n\n## 2026-05-01T11:10:06Z assistant.final\nOnly the completed turn is exportable.",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "turn-done"
-      }
     }
   ]
 }

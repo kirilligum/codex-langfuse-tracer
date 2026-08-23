@@ -16,7 +16,7 @@ func TestNoDuplicateAgentTraceLogic(t *testing.T) {
 	requiredAgentTraceFiles := []string{
 		filepath.Join(repoRoot, "internal", "agenttrace", "model.go"),
 		filepath.Join(repoRoot, "internal", "agenttrace", "privacy.go"),
-		filepath.Join(repoRoot, "internal", "agenttrace", "terminal.go"),
+		filepath.Join(repoRoot, "internal", "agenttrace", "observation.go"),
 		filepath.Join(repoRoot, "internal", "agenttrace", "insight.go"),
 	}
 	for _, path := range requiredAgentTraceFiles {
@@ -32,9 +32,7 @@ func TestNoDuplicateAgentTraceLogic(t *testing.T) {
 		{name: "type Turn struct", want: filepath.Join("internal", "agenttrace", "model.go")},
 		{name: "func ExportText", want: filepath.Join("internal", "agenttrace", "privacy.go")},
 		{name: "func StableTraceID", want: filepath.Join("internal", "agenttrace", "model.go")},
-		{name: "func AddTerminalEntry", want: filepath.Join("internal", "agenttrace", "terminal.go")},
-		{name: "func AddObservation", want: filepath.Join("internal", "agenttrace", "terminal.go")},
-		{name: "func TerminalObservation", want: filepath.Join("internal", "agenttrace", "terminal.go")},
+		{name: "func AddObservation", want: filepath.Join("internal", "agenttrace", "observation.go")},
 		{name: "func BuildInsightRollup", want: filepath.Join("internal", "agenttrace", "insight.go")},
 		{name: "func FormatCommand", want: filepath.Join("internal", "agenttrace", "format.go")},
 		{name: "func ObservationBounds", want: filepath.Join("internal", "agenttrace", "time.go")},
@@ -78,12 +76,48 @@ func TestEvalAgentTraceOwnershipSurface(t *testing.T) {
 			"func ExportText",
 			"func StableTraceID",
 			"func StableSpanID",
-			"func TerminalObservation",
 			"func BuildInsightRollup",
 		} {
 			if strings.Contains(text, forbidden) {
 				t.Fatalf("%s still owns shared helper %q", path, forbidden)
 			}
+		}
+	}
+}
+
+func TestCanonicalLangfuseObservationArchitecture(t *testing.T) {
+	t.Parallel()
+
+	productionFiles := []string{
+		filepath.Join("..", "internal", "langfuse", "api.go"),
+		filepath.Join("..", "internal", "langfuse", "export.go"),
+		filepath.Join("..", "internal", "watch", "watch.go"),
+		filepath.Join("..", "cmd", "codex-langfuse-exporter", "main.go"),
+	}
+	for _, path := range productionFiles {
+		text := readText(t, path)
+		for _, forbidden := range []string{
+			"langfuse.trace.input",
+			"langfuse.trace.output",
+			"/api/public/traces",
+			"/api/public/observations",
+			"firstObservationIndex",
+			"TurnProgress",
+			"FinalSpansExported",
+			"ExportedObservationCount",
+			"futureAgentParentContext",
+			"TerminalObservation",
+			"AddTerminalEntry",
+		} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s retains non-canonical projection path %q", path, forbidden)
+			}
+		}
+	}
+	api := readText(t, filepath.Join("..", "internal", "langfuse", "api.go"))
+	for _, required := range []string{"/api/public/v2/observations", "isRootObservation", "type Observation struct"} {
+		if !strings.Contains(api, required) {
+			t.Fatalf("api.go missing canonical observation client marker %q", required)
 		}
 	}
 }

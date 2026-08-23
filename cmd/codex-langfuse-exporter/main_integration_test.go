@@ -302,8 +302,10 @@ func TestManualExportCLIVerificationFailure(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/api/public/ingestion":
 			writeTestIngestionSuccess(t, w, r)
-		case "/api/public/traces/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
-			_, _ = w.Write([]byte(`{"input":"","output":"","observations":[]}`))
+		case "/api/public/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
+		case "/api/public/v2/observations":
+			_, _ = w.Write([]byte(`{"data":[{"id":"root","traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","isRootObservation":true,"input":"","output":""}],"meta":{}}`))
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}

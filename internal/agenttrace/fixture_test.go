@@ -11,10 +11,6 @@ func completeFixtureTurn() Turn {
 		UserMessages:   []string{"Summarize the repo and run checks"},
 		AssistantTexts: []string{"Checks passed."},
 		Completed:      true,
-		TerminalEntries: []TerminalEntry{
-			{Timestamp: "2026-05-01T10:00:01Z", Label: "user", Text: "Summarize the repo and run checks"},
-			{Timestamp: "2026-05-01T10:00:09Z", Label: "assistant.final", Text: "Checks passed."},
-		},
 		Observations: []Observation{
 			{
 				Name:   ToolObservationName(ProviderCodex, ToolFamilyCommand),

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,12 +21,12 @@ func TestSpanShapeAndIDs(t *testing.T) {
 
 	turn := completeTurn(t)
 	exporter := &memoryExporter{}
-	if err := EmitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := EmitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	spans := exporter.Snapshots()
-	if len(spans) != len(turn.Observations)+3 {
-		t.Fatalf("span count = %d, want %d", len(spans), len(turn.Observations)+3)
+	if len(spans) != len(turn.Observations)+2 {
+		t.Fatalf("span count = %d, want %d", len(spans), len(turn.Observations)+2)
 	}
 
 	agent := spans.ByName("codex.agent")
@@ -41,9 +42,6 @@ func TestSpanShapeAndIDs(t *testing.T) {
 	if agent.Attributes["langfuse.observation.type"] != "agent" {
 		t.Fatalf("agent type attr = %q", agent.Attributes["langfuse.observation.type"])
 	}
-	if agent.Attributes["langfuse.trace.input"] != agenttrace.ExportText(turn.InputText()) {
-		t.Fatalf("trace input attr = %q", agent.Attributes["langfuse.trace.input"])
-	}
 
 	transcript := spans.ByName("codex.transcript")
 	if transcript.ParentSpanID != agent.SpanID {
@@ -53,84 +51,48 @@ func TestSpanShapeAndIDs(t *testing.T) {
 		t.Fatalf("transcript type attr = %q", transcript.Attributes["langfuse.observation.type"])
 	}
 
-	terminal := spans.ByName("codex.terminal")
-	if terminal.ParentSpanID != agent.SpanID {
-		t.Fatalf("terminal parent = %q want %q", terminal.ParentSpanID, agent.SpanID)
+}
+
+func TestCanonicalObservationIO(t *testing.T) {
+	t.Parallel()
+
+	turn := completeTurn(t)
+	turn.Observations = append(turn.Observations, agenttrace.Observation{Name: "codex.empty", Type: "tool"})
+	spans := emitTurnSpans(t, turn)
+	wantInput := strconv.Quote(agenttrace.ExportText(turn.InputText()))
+	wantOutput := strconv.Quote(agenttrace.ExportText(turn.OutputText()))
+	for _, name := range []string{"codex.agent", "codex.transcript"} {
+		span := spans.ByName(name)
+		if span.Attributes["langfuse.observation.input"] != wantInput || span.Attributes["langfuse.observation.output"] != wantOutput {
+			t.Fatalf("%s canonical I/O = input %q output %q, want %q/%q", name, span.Attributes["langfuse.observation.input"], span.Attributes["langfuse.observation.output"], wantInput, wantOutput)
+		}
+	}
+	for _, span := range spans {
+		if _, ok := span.Attributes["langfuse.trace.input"]; ok {
+			t.Fatalf("%s retained legacy trace input", span.Name)
+		}
+		if _, ok := span.Attributes["langfuse.trace.output"]; ok {
+			t.Fatalf("%s retained legacy trace output", span.Name)
+		}
+	}
+	empty := spans.ByName("codex.empty")
+	if _, ok := empty.Attributes["langfuse.observation.input"]; ok {
+		t.Fatalf("empty observation retained input attribute: %#v", empty.Attributes)
+	}
+	if _, ok := empty.Attributes["langfuse.observation.output"]; ok {
+		t.Fatalf("empty observation retained output attribute: %#v", empty.Attributes)
 	}
 }
 
 // TEST-603
-func TestProgressiveSpanAttributes(t *testing.T) {
+func TestIncompleteTurnRejectedBySpanProjection(t *testing.T) {
 	t.Parallel()
 
 	turn := completeTurn(t)
 	turn.Completed = false
-	turn.AssistantTexts = nil
-	turn.TokenUsage = nil
-	turn.Observations = append([]agenttrace.Observation(nil), turn.Observations[:1]...)
-	turn.Observations[0].Output = "partial output contains sk-lf-partial-secret"
-	exporter := &memoryExporter{}
-	if err := emitSpans(context.Background(), turn, 0, false, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("emitSpans partial: %v", err)
+	if err := emitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, &memoryExporter{}); err == nil {
+		t.Fatal("incomplete turn was accepted by span projection")
 	}
-	spans := exporter.Snapshots()
-	if len(spans) != 1 {
-		t.Fatalf("partial span count = %d, want 1: %#v", len(spans), spanNames(spans))
-	}
-	span := spans[0]
-	if got, want := span.ParentSpanID, agenttrace.StableSpanID(turn.Profile().AgentSpanPrefix, turn.TraceID, turn.TurnID, ""); got != want {
-		t.Fatalf("partial parent = %q, want %q", got, want)
-	}
-	for _, key := range []string{
-		"langfuse.trace.name",
-		"langfuse.trace.metadata.provider",
-		"langfuse.trace.metadata.codex_session_id",
-		"langfuse.trace.metadata.codex_turn_id",
-		"langfuse.session.id",
-		"langfuse.environment",
-		"langfuse.version",
-		"langfuse.release",
-		"langfuse.observation.type",
-		"langfuse.observation.input",
-		"langfuse.observation.output",
-		"langfuse.observation.metadata",
-		"langfuse.observation.metadata.session_id",
-		"langfuse.observation.metadata.turn_id",
-		"langfuse.user.id",
-	} {
-		if _, ok := span.Attributes[key]; !ok {
-			t.Fatalf("partial span missing stable attribute %s: %#v", key, span.Attributes)
-		}
-	}
-	for _, key := range []string{
-		"langfuse.trace.input",
-		"langfuse.trace.output",
-		"langfuse.trace.tags",
-		"langfuse.trace.metadata.codex_transcript_exported",
-		"langfuse.observation.metadata.cwd",
-		"langfuse.observation.metadata.git_branch",
-		"langfuse.observation.usage_details",
-	} {
-		if _, ok := span.Attributes[key]; ok {
-			t.Fatalf("partial span has final-only attribute %s: %#v", key, span.Attributes)
-		}
-	}
-	for key := range span.Attributes {
-		if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
-			t.Fatalf("partial span has final insight attribute %s", key)
-		}
-	}
-	if strings.Contains(strings.Join(attributeValues(span.Attributes), "\n"), "sk-lf-partial-secret") {
-		t.Fatalf("partial span leaked secret sentinel: %#v", span.Attributes)
-	}
-}
-
-func attributeValues(attributes map[string]string) []string {
-	values := make([]string, 0, len(attributes))
-	for _, value := range attributes {
-		values = append(values, value)
-	}
-	return values
 }
 
 // TEST-505
@@ -148,21 +110,17 @@ func TestProviderProjectionNames(t *testing.T) {
 		AssistantTexts: []string{"Done"},
 		Model:          "claude-haiku-4-5-20251001",
 		Completed:      true,
-		TerminalEntries: []agenttrace.TerminalEntry{
-			{Timestamp: "2026-05-04T12:00:00Z", Label: "user", Text: "Run pwd"},
-			{Timestamp: "2026-05-04T12:00:01Z", Label: "assistant.final", Text: "Done"},
-		},
 		Observations: []agenttrace.Observation{
 			{Name: agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), Type: "tool", Input: "pwd", Output: "/tmp", Metadata: map[string]any{"status": "success", "failure_type": "none"}},
 		},
 	}
 	spans := emitTurnSpans(t, turn)
-	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), "claude.terminal"} {
+	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand)} {
 		if span := spans.ByName(name); span.Name == "" {
 			t.Fatalf("missing provider span %s in %#v", name, spanNames(spans))
 		}
 	}
-	for _, name := range []string{"codex.agent", "codex.transcript", "codex.terminal"} {
+	for _, name := range []string{"codex.agent", "codex.transcript"} {
 		if span := spans.ByName(name); span.Name != "" {
 			t.Fatalf("unexpected codex span %s in Claude projection", name)
 		}
@@ -278,25 +236,11 @@ func TestWorkspaceIdentityProjection(t *testing.T) {
 	const hostname = "devbox-01"
 
 	exporter := &memoryExporter{}
-	if err := EmitSpans(context.Background(), turn, 0, true, environment, hostname, buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := EmitSpans(context.Background(), turn, environment, hostname, buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans final: %v", err)
 	}
 	assertProjectedIdentity(t, exporter.Snapshots(), environment, hostname, turn.CWD, turn.GitBranch)
 
-	partial := turn
-	partial.Completed = false
-	partial.AssistantTexts = nil
-	partial.TokenUsage = nil
-	partial.Observations = append([]agenttrace.Observation(nil), turn.Observations[:1]...)
-	exporter = &memoryExporter{}
-	if err := EmitSpans(context.Background(), partial, 0, false, environment, hostname, buildinfo.DefaultServiceName, exporter); err != nil {
-		t.Fatalf("EmitSpans partial: %v", err)
-	}
-	partialSpans := exporter.Snapshots()
-	if len(partialSpans) != 1 {
-		t.Fatalf("partial spans = %d, want 1", len(partialSpans))
-	}
-	assertProjectedIdentity(t, partialSpans, environment, hostname, "", "")
 }
 
 func assertProjectedIdentity(t *testing.T, spans spanSnapshots, environment, hostname, cwd, branch string) {
@@ -494,7 +438,7 @@ func emitCompleteTurnSpans(t *testing.T) spanSnapshots {
 func emitTurnSpans(t *testing.T, turn agenttrace.Turn) spanSnapshots {
 	t.Helper()
 	exporter := &memoryExporter{}
-	if err := emitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := emitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("emitSpans: %v", err)
 	}
 	return exporter.Snapshots()

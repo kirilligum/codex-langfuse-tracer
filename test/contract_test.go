@@ -83,7 +83,7 @@ func compareTraceContract(t *testing.T, golden, actual tracecontract.Trace) {
 	if golden.SchemaVersion != actual.SchemaVersion || golden.Name != actual.Name || golden.Provider != actual.Provider || golden.TraceID != actual.TraceID || golden.SessionID != actual.SessionID || golden.TurnID != actual.TurnID {
 		t.Fatalf("identity mismatch\ngolden=%+v\nactual=%+v", golden, actual)
 	}
-	if golden.Input != actual.Input || golden.Output != actual.Output || golden.Model != actual.Model || golden.CWD != actual.CWD {
+	if golden.Model != actual.Model || golden.CWD != actual.CWD {
 		t.Fatalf("preview mismatch\ngolden=%+v\nactual=%+v", golden, actual)
 	}
 	if canonicalJSON(golden.TokenUsage) != canonicalJSON(actual.TokenUsage) {

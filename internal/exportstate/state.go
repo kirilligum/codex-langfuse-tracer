@@ -9,18 +9,14 @@ import (
 	"time"
 )
 
-type State struct {
-	Version           int                     `json:"version"`
-	ScanWatermarkNS   int64                   `json:"scan_watermark_ns"`
-	ProcessedTraceIDs []string                `json:"processed_trace_ids"`
-	TurnProgress      map[string]TurnProgress `json:"turn_progress,omitempty"`
-	Queue             []QueueRequest          `json:"queue,omitempty"`
-}
+const Version = 3
 
-type TurnProgress struct {
-	ExportedObservationCount int    `json:"exported_observation_count"`
-	FinalSpansExported       bool   `json:"final_spans_exported"`
-	Environment              string `json:"environment"`
+type State struct {
+	Version           int               `json:"version"`
+	ScanWatermarkNS   int64             `json:"scan_watermark_ns"`
+	ProcessedTraceIDs []string          `json:"processed_trace_ids"`
+	PendingScores     map[string]string `json:"pending_scores,omitempty"`
+	Queue             []QueueRequest    `json:"queue,omitempty"`
 }
 
 type QueueRequest struct {
@@ -43,21 +39,18 @@ func Load(path string) (*State, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, err
 	}
-	if state.Version != 2 {
+	if state.Version != Version {
 		return nil, fmt.Errorf("unsupported watch state version in %s", path)
-	}
-	if err := state.validate(); err != nil {
-		return nil, err
 	}
 	state.normalize()
 	return &state, nil
 }
 
 func Save(path string, state State) error {
-	state.Version = 2
-	if err := state.validate(); err != nil {
-		return err
+	if state.Version != 0 && state.Version != Version {
+		return fmt.Errorf("unsupported watch state version in %s", path)
 	}
+	state.Version = Version
 	state.normalize()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -86,7 +79,7 @@ func Update(path string, mutate func(*State) error) (State, error) {
 		return State{}, err
 	}
 	if state == nil {
-		state = &State{Version: 2}
+		state = &State{Version: Version}
 	}
 	if err := mutate(state); err != nil {
 		return State{}, err
@@ -109,18 +102,18 @@ func (s State) HasProcessed(traceID string) bool {
 func (s *State) AddProcessed(traceID string) {
 	s.ProcessedTraceIDs = append(s.ProcessedTraceIDs, traceID)
 	s.ProcessedTraceIDs = uniqueSorted(s.ProcessedTraceIDs)
-	delete(s.TurnProgress, traceID)
+	delete(s.PendingScores, traceID)
 }
 
-func (s State) ProgressFor(traceID string) TurnProgress {
-	return s.TurnProgress[traceID]
+func (s State) PendingScoreEnvironment(traceID string) string {
+	return s.PendingScores[traceID]
 }
 
-func (s *State) SetProgress(traceID string, progress TurnProgress) {
-	if s.TurnProgress == nil {
-		s.TurnProgress = map[string]TurnProgress{}
+func (s *State) SetPendingScore(traceID, environment string) {
+	if s.PendingScores == nil {
+		s.PendingScores = map[string]string{}
 	}
-	s.TurnProgress[traceID] = progress
+	s.PendingScores[traceID] = environment
 }
 
 func Enqueue(path string, request QueueRequest) error {
@@ -161,23 +154,17 @@ func (s *State) RemoveQueued(request QueueRequest) {
 }
 
 func (s *State) normalize() {
+	s.Version = Version
 	s.ProcessedTraceIDs = uniqueSorted(s.ProcessedTraceIDs)
-	if s.TurnProgress == nil {
-		s.TurnProgress = map[string]TurnProgress{}
+	if s.PendingScores == nil {
+		s.PendingScores = map[string]string{}
 	}
-	for _, traceID := range s.ProcessedTraceIDs {
-		delete(s.TurnProgress, traceID)
-	}
-	s.Queue = uniqueQueue(s.Queue)
-}
-
-func (s State) validate() error {
-	for traceID, progress := range s.TurnProgress {
-		if progress.Environment == "" {
-			return fmt.Errorf("turn progress %s requires environment", traceID)
+	for traceID := range s.PendingScores {
+		if traceID == "" || s.HasProcessed(traceID) || s.PendingScores[traceID] == "" {
+			delete(s.PendingScores, traceID)
 		}
 	}
-	return nil
+	s.Queue = uniqueQueue(s.Queue)
 }
 
 func uniqueQueue(values []QueueRequest) []QueueRequest {

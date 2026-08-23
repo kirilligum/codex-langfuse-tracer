@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "session_id": "sess-repeated-context",
   "turn_id": "turn-repeat",
-  "input": "Implement the plan",
-  "output": "Done after repeated context.",
   "model": "gpt-5.5",
   "cwd": "/tmp/repeated-context",
   "metadata": {
@@ -74,16 +72,6 @@
       "output": "Reading files.",
       "metadata": {
         "phase": "commentary"
-      }
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T12:00:02Z user\nImplement the plan\n\n## 2026-05-01T12:00:03Z assistant.commentary\nReading files.\n\n## 2026-05-01T12:00:06Z assistant.final\nDone after repeated context.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "turn-repeat"
       }
     }
   ]

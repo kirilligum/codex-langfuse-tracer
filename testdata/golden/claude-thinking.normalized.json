@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "67befd676d6d2ad15dc5c646320a5ad7",
   "session_id": "claude-thinking",
   "turn_id": "claude-thinking-user",
-  "input": "Answer without exposing reasoning.",
-  "output": "Final answer only.",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-thinking",
   "metadata": {
@@ -66,16 +64,6 @@
       "type": "generation",
       "input": "Answer without exposing reasoning.",
       "output": "Final answer only."
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:06:00Z user\nAnswer without exposing reasoning.\n\n## 2026-05-04T12:06:01Z assistant.final\nFinal answer only.",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "claude-thinking-user"
-      }
     }
   ]
 }

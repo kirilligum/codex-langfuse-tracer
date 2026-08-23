@@ -117,26 +117,15 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 
 func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
 	switch agenttrace.StringValue(payload["type"]) {
-	case "user_message":
-		agenttrace.AppendUnique(&turn.UserMessages, payload["message"])
-		agenttrace.AddTerminalEntry(turn, timestamp, "user", agenttrace.StringValue(payload["message"]))
 	case "agent_message":
 		if agenttrace.StringValue(payload["phase"]) == "final_answer" {
-			message := agenttrace.StringValue(payload["message"])
-			agenttrace.AppendUnique(&turn.AssistantTexts, message)
-			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.final", message)
-			if timestamp != "" {
-				turn.EndTS = timestamp
-			}
+			// Final output is sourced exclusively from the response_item stream.
+			// This event is only a completion-side notification.
 		} else {
 			message := agenttrace.StringValue(payload["message"])
-			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.commentary", message)
 			agenttrace.AddObservation(turn, "codex.message.commentary", timestamp, "", message, map[string]any{"phase": agenttrace.StringValue(payload["phase"])}, "span", nil)
 		}
 	case "task_complete":
-		message := agenttrace.StringValue(payload["last_agent_message"])
-		agenttrace.AppendUnique(&turn.AssistantTexts, message)
-		agenttrace.AddTerminalEntry(turn, timestamp, "assistant.final", message)
 		if timestamp != "" {
 			turn.EndTS = timestamp
 		}
@@ -154,7 +143,6 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 			metadata[key] = value
 		}
 		metadata["tool_name"] = "exec_command"
-		agenttrace.AddTerminalEntry(turn, timestamp, "tool.command", agenttrace.CommandTerminalText(payload))
 		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyCommand), timestamp, agenttrace.FormatCommand(payload["command"]), output, metadata, "tool", payload["duration"])
 	case "patch_apply_end":
 		callID := agenttrace.StringValue(payload["call_id"])
@@ -175,7 +163,6 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 		}
 		metadata["tool_name"] = "apply_patch"
 		output := agenttrace.PatchOutput(payload)
-		agenttrace.AddTerminalEntry(turn, timestamp, "tool.file_change", agenttrace.ToolTerminalText(patchInput, output))
 		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyFileChange), timestamp, patchInput, output, metadata, "tool", nil)
 	case "mcp_tool_call_end":
 		callID := agenttrace.StringValue(payload["call_id"])
@@ -189,7 +176,6 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 			metadata[key] = value
 		}
 		metadata["tool_name"] = "mcp"
-		agenttrace.AddTerminalEntry(turn, timestamp, "tool.mcp", agenttrace.ToolTerminalText(input, output))
 		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP), timestamp, input, output, metadata, "tool", payload["duration"])
 	case "web_search_end":
 		callID := agenttrace.StringValue(payload["call_id"])
@@ -200,7 +186,6 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 		output := agenttrace.StableJSON(payload["action"])
 		metadata := agenttrace.MetadataWithoutLargeFields(payload, map[string]bool{"query": true, "action": true})
 		metadata["tool_name"] = "web_search"
-		agenttrace.AddTerminalEntry(turn, timestamp, "tool.web_search", agenttrace.ToolTerminalText(input, output))
 		agenttrace.AddObservation(turn, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyWebSearch), timestamp, input, output, metadata, "tool", nil)
 	case "token_count":
 		info := agenttrace.MapValue(payload["info"])
@@ -211,8 +196,6 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 		if len(usage) > 0 {
 			turn.TokenUsage = parseTokenUsage(usage)
 		}
-	case "context_compacted":
-		agenttrace.AddTerminalEntry(turn, timestamp, "system", "Context compacted")
 	}
 }
 
@@ -221,10 +204,14 @@ func parseResponseItem(turn *agenttrace.Turn, payload map[string]any, timestamp 
 	case "message":
 		switch agenttrace.StringValue(payload["role"]) {
 		case "user":
-			agenttrace.AppendUnique(&turn.UserMessages, textFromContent(payload["content"], "input_text"))
+			if message := textFromContent(payload["content"], "input_text"); message != "" {
+				turn.UserMessages = []string{message}
+			}
 		case "assistant":
 			if agenttrace.StringValue(payload["phase"]) == "final_answer" {
-				agenttrace.AppendUnique(&turn.AssistantTexts, textFromContent(payload["content"], "output_text"))
+				if message := textFromContent(payload["content"], "output_text"); message != "" {
+					turn.AssistantTexts = []string{message}
+				}
 				if timestamp != "" {
 					turn.EndTS = timestamp
 				}
@@ -233,7 +220,6 @@ func parseResponseItem(turn *agenttrace.Turn, payload map[string]any, timestamp 
 	case "reasoning":
 		summary := agenttrace.ReasoningSummaryText(payload["summary"])
 		if summary != "" {
-			agenttrace.AddTerminalEntry(turn, timestamp, "assistant.reasoning", summary)
 			agenttrace.AddObservation(turn, "codex.reasoning.summary", timestamp, "", summary, map[string]any{"response_item_type": "reasoning"}, "span", nil)
 		}
 	case "function_call", "custom_tool_call", "tool_search_call":
@@ -270,7 +256,6 @@ func parseResponseItem(turn *agenttrace.Turn, payload map[string]any, timestamp 
 		}
 		input := agenttrace.StableJSON(inputSource)
 		output := agenttrace.StableJSON(outputSource)
-		agenttrace.AddTerminalEntry(turn, timestamp, strings.TrimPrefix(observationName, "codex."), agenttrace.ToolTerminalText(input, output))
 		agenttrace.AddObservation(turn, observationName, timestamp, input, output, map[string]any{
 			"call_id":            callID,
 			"response_item_type": agenttrace.StringValue(payload["type"]),

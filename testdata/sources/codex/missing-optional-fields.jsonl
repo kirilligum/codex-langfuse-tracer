@@ -1,4 +1,5 @@
 {"timestamp":"2026-05-01T11:30:00Z","type":"session_meta","payload":{"id":"sess-missing"}}
 {"timestamp":"2026-05-01T11:30:01Z","type":"turn_context","payload":{"turn_id":"turn-missing","trace_id":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}}
-{"timestamp":"2026-05-01T11:30:02Z","type":"event_msg","payload":{"type":"user_message","message":"Handle missing optional fields"}}
-{"timestamp":"2026-05-01T11:30:03Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Missing optional fields do not block export."}}
+{"timestamp":"2026-05-01T11:30:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Handle missing optional fields"}]}}
+{"timestamp":"2026-05-01T11:30:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Missing optional fields do not block export."}]}}
+{"timestamp":"2026-05-01T11:30:04Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Missing optional fields do not block export."}}

@@ -24,7 +24,7 @@ func TestFromTurnNormalizesTrace(t *testing.T) {
 	}
 
 	trace := FromTurn(exportable[0])
-	if trace.SchemaVersion != 1 || trace.Provider != agenttrace.ProviderCodex || trace.TraceID != "1e087e4ea8aa8d8e29e604d2cd8704d9" {
+	if trace.SchemaVersion != 2 || trace.Provider != agenttrace.ProviderCodex || trace.TraceID != "1e087e4ea8aa8d8e29e604d2cd8704d9" {
 		t.Fatalf("bad trace identity: %+v", trace)
 	}
 	if trace.TokenUsage["input"] != 80 || trace.TokenUsage["input_cached_tokens"] != 20 || trace.TokenUsage["output"] != 30 || trace.TokenUsage["output_reasoning_tokens"] != 10 {

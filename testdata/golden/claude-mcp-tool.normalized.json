@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "d59f07fc337cc38fa983a7cd572d6069",
   "session_id": "claude-mcp-tool",
   "turn_id": "claude-mcp-user",
-  "input": "List GitHub issues.",
-  "output": "No open issues were returned.",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-mcp-tool",
   "metadata": {
@@ -81,16 +79,6 @@
         "mcp_tool": "issues_list",
         "status": "success",
         "tool_name": "mcp__github__issues_list"
-      }
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:08:00Z user\nList GitHub issues.\n\n## 2026-05-04T12:08:02Z tool.mcp\nInput:\n{\n  \"state\": \"open\"\n}\n\nOutput:\n[]\n\n## 2026-05-04T12:08:03Z assistant.final\nNo open issues were returned.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "claude-mcp-user"
       }
     }
   ]

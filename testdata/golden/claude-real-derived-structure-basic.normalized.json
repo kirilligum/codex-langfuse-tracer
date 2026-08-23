@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "d2da393ebfa4b4301e7472d59b86f35d",
   "session_id": "claude-real-basic",
   "turn_id": "00000000-0000-4000-8000-000000000001",
-  "input": "Reply exactly: claude-langfuse-smoke-test",
-  "output": "claude-langfuse-smoke-test",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-basic",
   "metadata": {
@@ -66,16 +64,6 @@
       "type": "generation",
       "input": "Reply exactly: claude-langfuse-smoke-test",
       "output": "claude-langfuse-smoke-test"
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:00:00.000Z user\nReply exactly: claude-langfuse-smoke-test\n\n## 2026-05-04T12:00:01.000Z assistant.final\nclaude-langfuse-smoke-test",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "00000000-0000-4000-8000-000000000001"
-      }
     }
   ]
 }

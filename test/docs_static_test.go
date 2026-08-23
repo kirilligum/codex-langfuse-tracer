@@ -32,36 +32,36 @@ func TestDocsAndRuntimeDoNotReferencePythonExporter(t *testing.T) {
 }
 
 // TEST-605
-func TestDocsProgressiveCodexVisibility(t *testing.T) {
+func TestDocsCompletedCodexVisibility(t *testing.T) {
 	t.Parallel()
 
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	agentNotes := readRepoDoc(t, "AGENTS.md")
 	for _, required := range []string{
-		"unfinished Codex turns",
-		"first completed observation",
-		"five-second polling cycle",
-		"`turn_progress`",
-		"`exported_observation_count`",
-		"`final_spans_exported`",
+		"Incomplete turns remain local until Codex records completion",
+		"one clean Langfuse batch",
+		"`processed_trace_ids`",
+		"`pending_scores[trace_id]`",
+		"Langfuse v4 observation fields",
+		"Deprecated trace-level input/output fields are not emitted",
 		"at-least-once",
 		"does not stream tokens or partial assistant text",
 		"currently configured Langfuse target",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing progressive contract %q", required)
+			t.Fatalf("README missing completed-turn contract %q", required)
 		}
 	}
 	for _, required := range []string{
-		"TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan",
-		"TestVersion2State|TestStateUpdatePreservesQueue",
-		"TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes",
-		"TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs",
+		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment",
+		"TestVersion3State|TestStateUpdatePreservesQueue",
+		"TestOTLPCompletedTurnSingleBatch|TestCanonicalObservationIO",
+		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs",
 		"TestEvalWatchExportLatency",
 	} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing progressive command fragment %q", required)
+			t.Fatalf("TESTING missing completed-turn command fragment %q", required)
 		}
 	}
 	for _, forbiddenAlternative := range []string{
@@ -87,7 +87,8 @@ func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 		"codex-langfuse-exporter",
 		"codex.agent",
 		"codex.transcript",
-		"codex.terminal",
+		"langfuse.observation.input",
+		"langfuse.observation.output",
 		"codex.tool.file_change",
 		"systemd --user",
 		"go test ./...",
@@ -149,7 +150,7 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 		"`langfuse.user.id`",
 		"Linux runtime hostname",
 		"Identity fields are not configurable",
-		"version 2",
+		"version 3",
 		"systemctl --user stop codex-langfuse-watch.service",
 		"rm -- ~/.codex/langfuse-export-state.json",
 		"It is the only required service-start step",
@@ -162,7 +163,7 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 	removeIndex := strings.Index(readme, "rm -- ~/.codex/langfuse-export-state.json")
 	installIndex := strings.Index(readme, "./install.sh")
 	if stopIndex >= removeIndex || removeIndex >= installIndex {
-		t.Fatal("README must document the version 1 cutover as stop, remove state, then install")
+		t.Fatal("README must document the state cutover as stop, remove state, then install")
 	}
 	if strings.Contains(readme, "systemctl --user start codex-langfuse-watch.service") {
 		t.Fatal("README must use install.sh as the only service-start path")
@@ -175,7 +176,7 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 		"TestDocsWorkspaceIdentity",
 		"TestWorkspaceIdentity",
 		"TestManualWorkspaceIdentity",
-		"TestWatchEnvironmentSnapshot|TestWatchEnvironmentRetry",
+		"TestWatchEnvironmentPersistsOnlyAfterSuccessfulSpanExport",
 		"LIVE_LANGFUSE_IDENTITY_TRACE_ID",
 		"LIVE_LANGFUSE_HOSTNAME",
 		"LIVE_LANGFUSE_ENVIRONMENT",
@@ -422,7 +423,6 @@ func TestDocsClaudeSupportContract(t *testing.T) {
 		"claude.turn.transcript",
 		"claude.agent",
 		"claude.transcript",
-		"claude.terminal",
 		"claude.tool.command",
 		"claude.tool.file_change",
 		"claude.tool.mcp",

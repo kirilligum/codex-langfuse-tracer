@@ -46,21 +46,21 @@ go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'Test
 go test ./internal/watch -count=1
 ```
 
-Progressive unfinished-turn contracts:
+Completed-turn and canonical observation contracts:
 
 ```sh
-go test ./internal/codextrace ./internal/watch -run 'TestIncompleteObservationPrefixStability|TestProgressiveSuffixPlan' -count=1
-go test ./internal/exportstate -run 'TestVersion2State|TestStateUpdatePreservesQueue' -count=1
-go test ./internal/langfuse -run 'TestOTLPProgressiveThenFinal|TestProgressiveSpanAttributes' -count=1
-go test ./internal/watch -run 'TestWatchProgressiveLifecycle|TestWatchProgressiveFailureRetry|TestWatchLogs' -count=1
+go test ./internal/codextrace ./internal/watch -run 'TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment' -count=1
+go test ./internal/exportstate -run 'TestVersion3State|TestStateUpdatePreservesQueue' -count=1
+go test ./internal/langfuse -run 'TestOTLPCompletedTurnSingleBatch|TestCanonicalObservationIO' -count=1
+go test ./internal/watch -run 'TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs' -count=1
 go test ./internal/watch -run TestEvalWatchExportLatency -count=1 -v
-go test ./test -run TestDocsProgressiveCodexVisibility -count=1
+go test ./test -run TestDocsCompletedCodexVisibility -count=1
 ```
 
-Live child-before-parent verification against the configured loopback Langfuse project:
+Live completed-trace verification against the configured loopback Langfuse project:
 
 ```sh
-LIVE_LANGFUSE_PROGRESSIVE_PROBE=1 go test ./internal/langfuse -run TestLiveProgressiveChildBeforeParent -count=1 -v
+LIVE_LANGFUSE_COMPLETED_TRACE_PROBE=1 go test ./internal/langfuse -run TestLiveCompletedTraceShape -count=1 -v
 ```
 
 Provider CLI checks:
@@ -119,16 +119,16 @@ go test ./internal/langfuse -run 'TestModelPricingCatalogCoversOpenAIAndAnthropi
 Workspace identity checks:
 
 ```sh
-go test ./internal/langfuse -run '^(TestWorkspaceIdentity|TestWorkspaceIdentityProjection|TestOTLPProgressiveThenFinal)$' -count=1
+go test ./internal/langfuse -run '^(TestWorkspaceIdentity|TestWorkspaceIdentityProjection|TestOTLPCompletedTurnSingleBatch)$' -count=1
 go test ./cmd/codex-langfuse-exporter -run '^TestManualWorkspaceIdentity$' -count=1
-go test ./internal/watch -run '^(TestWatchEnvironmentSnapshot|TestWatchEnvironmentRetry)$' -count=1
+go test ./internal/watch -run '^TestWatchEnvironmentPersistsOnlyAfterSuccessfulSpanExport$' -count=1
 go test ./test -run '^TestDocsWorkspaceIdentity$' -count=1
 ```
 
-After an explicitly authorized deployment and the destructive version 1 reset documented in `README.md`, verify that startup created only version 2 state:
+After an explicitly authorized deployment and the destructive older-state reset documented in `README.md`, verify that startup created only version 3 state:
 
 ```sh
-jq -e '.version == 2' ~/.codex/langfuse-export-state.json
+jq -e '.version == 3' ~/.codex/langfuse-export-state.json
 ```
 
 To compare one authorized live trace with locally observed identity values:
@@ -166,7 +166,7 @@ CHECK-001 is the live Claude Code smoke check. Use the cheapest Claude model ava
 2. Run `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` against the created transcript.
 3. Run `LIVE_LANGFUSE_CLAUDE_TRACE_ID="<trace-id>" go test ./internal/langfuse -run TestLiveClaudeParityTrace -count=1` for the trace produced by the same validation session.
 4. Let `codex-langfuse-watch.service` drain the queued hook request.
-5. In Langfuse, confirm `claude.turn.transcript`, `claude.agent`, `claude.transcript`, `claude.terminal`, and any expected canonical tool observations such as `claude.tool.command`, `claude.tool.file_change`, `claude.tool.mcp`, or `claude.tool.generic` appear.
+5. In Langfuse, confirm `claude.turn.transcript`, `claude.agent`, `claude.transcript`, and any expected canonical tool observations such as `claude.tool.command`, `claude.tool.file_change`, `claude.tool.mcp`, or `claude.tool.generic` appear.
 6. Record the Claude Code version, model alias, trace IDs, and whether manual export and hook-triggered export both verified in Langfuse.
 
 ## Production Gate

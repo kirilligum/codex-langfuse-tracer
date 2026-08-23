@@ -96,9 +96,9 @@ func validateMCPObservationMetadata(t *testing.T) {
 
 	missing := parseCodexSourceText(t, `{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-missing"}}
 {"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-missing"}}
-{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"Use MCP"}}
+{"timestamp":"2026-05-01T10:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Use MCP"}]}}
 {"timestamp":"2026-05-01T10:00:03Z","type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"mcp-missing","invocation":{},"result":{"ok":true}}}
-{"timestamp":"2026-05-01T10:00:04Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Done"}}
+{"timestamp":"2026-05-01T10:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}}
 {"timestamp":"2026-05-01T10:00:05Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done"}}
 `)
 	missingMCP := requireObservation(t, missing, agenttrace.ToolObservationName(agenttrace.ProviderCodex, agenttrace.ToolFamilyMCP))

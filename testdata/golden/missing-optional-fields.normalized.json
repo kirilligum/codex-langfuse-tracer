@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "session_id": "sess-missing",
   "turn_id": "turn-missing",
-  "input": "Handle missing optional fields",
-  "output": "Missing optional fields do not block export.",
   "metadata": {
     "build_command_count": 0,
     "changed_extensions": [],
@@ -59,16 +57,6 @@
       "type": "generation",
       "input": "Handle missing optional fields",
       "output": "Missing optional fields do not block export."
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T11:30:02Z user\nHandle missing optional fields\n\n## 2026-05-01T11:30:03Z assistant.final\nMissing optional fields do not block export.",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "turn-missing"
-      }
     }
   ]
 }

@@ -9,8 +9,6 @@ type Trace struct {
 	TraceID       string         `json:"trace_id,omitempty"`
 	SessionID     string         `json:"session_id,omitempty"`
 	TurnID        string         `json:"turn_id,omitempty"`
-	Input         string         `json:"input,omitempty"`
-	Output        string         `json:"output,omitempty"`
 	Model         string         `json:"model,omitempty"`
 	CWD           string         `json:"cwd,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
@@ -34,14 +32,12 @@ func FromTurn(turn agenttrace.Turn) Trace {
 	rollup := agenttrace.BuildInsightRollup(turn)
 	profile := turn.Profile()
 	trace := Trace{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Name:          profile.TraceName,
 		Provider:      profile.Provider,
 		TraceID:       turn.TraceID,
 		SessionID:     turn.SessionID,
 		TurnID:        turn.TurnID,
-		Input:         agenttrace.ExportText(turn.InputText()),
-		Output:        agenttrace.ExportText(turn.OutputText()),
 		Model:         turn.Model,
 		CWD:           turn.CWD,
 		Metadata:      rollup.Metadata(),
@@ -59,9 +55,6 @@ func FromTurn(turn agenttrace.Turn) Trace {
 	}
 	for _, observation := range turn.Observations {
 		trace.Observations = append(trace.Observations, normalizeObservation(observation))
-	}
-	if terminal := agenttrace.TerminalObservation(turn); terminal != nil {
-		trace.Observations = append(trace.Observations, normalizeObservation(*terminal))
 	}
 	return trace
 }

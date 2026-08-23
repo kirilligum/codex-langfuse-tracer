@@ -31,10 +31,10 @@ func TestFullAcceptance(t *testing.T) {
 		t.Fatalf("wrong binary name: %s", buildinfo.InstalledBinaryName)
 	}
 	contract := contractFromFixture(t, "complete-tools")
-	if contract.SchemaVersion != 1 || contract.Name != buildinfo.TraceName {
+	if contract.SchemaVersion != 2 || contract.Name != buildinfo.TraceName {
 		t.Fatalf("bad contract identity: %+v", contract)
 	}
-	if contract.Input == "" || contract.Output == "" || strings.Contains(contract.Output, "sk-lf-live-secret") {
+	if len(contract.Observations) < 2 || contract.Observations[0].Input == "" || contract.Observations[0].Output == "" || strings.Contains(contract.Observations[0].Output, "sk-lf-live-secret") {
 		t.Fatalf("bad contract input/output: %+v", contract)
 	}
 	if len(contract.Observations) < 8 {
@@ -199,8 +199,8 @@ func TestFullClaudeAcceptance(t *testing.T) {
 	if contract.Provider != agenttrace.ProviderClaude || contract.Name != "claude.turn.transcript" {
 		t.Fatalf("bad Claude contract identity: %+v", contract)
 	}
-	if contract.Input != "Run printf hello." || contract.Output != "hello" {
-		t.Fatalf("bad Claude IO: %+v", contract)
+	if len(contract.Observations) < 2 || contract.Observations[0].Input != "Run printf hello." || contract.Observations[0].Output != "hello" {
+		t.Fatalf("bad Claude IO: %+v", contract.Observations)
 	}
 	foundCommand := false
 	for _, observation := range contract.Observations {
@@ -218,7 +218,7 @@ func TestFullClaudeAcceptance(t *testing.T) {
 		t.Fatalf("missing Claude command observation: %#v", contract.Observations)
 	}
 	spans := emitAcceptanceSpans(t, turn)
-	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand), "claude.terminal"} {
+	for _, name := range []string{"claude.agent", "claude.transcript", agenttrace.ToolObservationName(agenttrace.ProviderClaude, agenttrace.ToolFamilyCommand)} {
 		if spans.byName(name).name == "" {
 			t.Fatalf("missing Claude span %s", name)
 		}
@@ -252,7 +252,7 @@ func TestFullClaudeAcceptance(t *testing.T) {
 		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
 			return turn, "default", nil
 		},
-		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ int, _ bool, _ string) (int, error) {
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ string) (int, error) {
 			exported = append(exported, turn)
 			return 201, nil
 		},
@@ -353,7 +353,7 @@ func (e *acceptanceExporter) Shutdown(context.Context) error {
 func emitAcceptanceSpans(t *testing.T, turn agenttrace.Turn) acceptanceSpans {
 	t.Helper()
 	exporter := &acceptanceExporter{}
-	if err := langfuse.EmitSpans(context.Background(), turn, 0, true, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := langfuse.EmitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	exporter.mu.Lock()

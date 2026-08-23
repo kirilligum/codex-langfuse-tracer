@@ -258,8 +258,8 @@ make verify
    ```
 
 5. Require `missing=0` and `failed=0` from every producer. Offline producers remain an explicit pending recovery item until they return and reconcile.
-6. Start a new Codex turn and confirm progressive child observations appear at the canonical endpoint before completion.
-7. Complete the turn and confirm the final agent, transcript, terminal, scores, input, and output.
+6. Start and complete a new Codex turn, then confirm one canonical batch at the endpoint containing the logical root, generation, and tool observations.
+7. Confirm the root and generation observations contain the expected input/output and that no synthetic terminal aggregate appears.
 8. If Claude automatic export is enabled, execute `CHECK-001` from `TESTING.md`.
 
 ### Phase 5: Release only with complete evidence
@@ -319,4 +319,4 @@ Resume only after the blocking contract is documented in this plan and covered b
 
 ## Success definition
 
-This work is complete only when another operator can start on a supported machine, run the single existing gateway promotion command, reconcile every online producer with the one exporter mode, observe zero missing and zero failed traces, pass both repositories' release gates, and verify a new progressive trace through `https://codex-langfuse-tracer.prls.co`. Documentation, code, tests, commits, releases, deployments, and the credential-rotation action must all agree with that state.
+This work is complete only when another operator can start on a supported machine, run the single existing gateway promotion command, reconcile every online producer with the one exporter mode, observe zero missing and zero failed traces, pass both repositories' release gates, and verify a new completed trace through `https://codex-langfuse-tracer.prls.co`. Documentation, code, tests, commits, releases, deployments, and the credential-rotation action must all agree with that state.

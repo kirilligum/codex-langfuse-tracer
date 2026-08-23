@@ -118,7 +118,6 @@ func handleUserRecord(turns *[]agenttrace.Turn, current **agenttrace.Turn, pendi
 		}
 		text := agenttrace.StringValue(part["text"])
 		agenttrace.AppendUnique(&(*current).UserMessages, text)
-		agenttrace.AddTerminalEntry(*current, record.Timestamp, "user", text)
 	}
 }
 
@@ -145,10 +144,8 @@ func handleAssistantRecord(turns *[]agenttrace.Turn, current **agenttrace.Turn, 
 		case "text":
 			text := agenttrace.StringValue(part["text"])
 			if record.Message.StopReason == "tool_use" {
-				agenttrace.AddTerminalEntry(*current, record.Timestamp, "assistant.commentary", text)
 			} else {
 				agenttrace.AppendUnique(&(*current).AssistantTexts, text)
-				agenttrace.AddTerminalEntry(*current, record.Timestamp, "assistant.final", text)
 			}
 		case "tool_use":
 			tool := pendingTool{
@@ -232,7 +229,6 @@ func addToolResult(turn *agenttrace.Turn, pending map[string]pendingTool, part m
 			metadata[key] = value
 		}
 	}
-	agenttrace.AddTerminalEntry(turn, timestamp, strings.TrimPrefix(name, "claude."), agenttrace.ToolTerminalText(input, output))
 	agenttrace.AddObservation(turn, name, timestamp, input, output, metadata, "tool", nil)
 }
 

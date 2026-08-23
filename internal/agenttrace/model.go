@@ -7,21 +7,20 @@ import (
 )
 
 type Turn struct {
-	Provider        string
-	SessionID       string
-	TurnID          string
-	TraceID         string
-	StartTS         string
-	EndTS           string
-	CWD             string
-	GitBranch       string
-	Model           string
-	UserMessages    []string
-	AssistantTexts  []string
-	TokenUsage      *TokenUsage
-	Completed       bool
-	TerminalEntries []TerminalEntry
-	Observations    []Observation
+	Provider       string
+	SessionID      string
+	TurnID         string
+	TraceID        string
+	StartTS        string
+	EndTS          string
+	CWD            string
+	GitBranch      string
+	Model          string
+	UserMessages   []string
+	AssistantTexts []string
+	TokenUsage     *TokenUsage
+	Completed      bool
+	Observations   []Observation
 }
 
 const (
@@ -102,12 +101,6 @@ func (u TokenUsage) LangfuseUsageDetails() map[string]int {
 		return nil
 	}
 	return usage
-}
-
-type TerminalEntry struct {
-	Timestamp string
-	Label     string
-	Text      string
 }
 
 type Observation struct {

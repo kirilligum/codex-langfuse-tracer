@@ -8,7 +8,7 @@ import (
 )
 
 // TEST-006
-func TestRedactionTruncationAndTerminal(t *testing.T) {
+func TestRedactionAndTruncation(t *testing.T) {
 	t.Parallel()
 
 	redacted := ExportText("Basic dGVzdGRhdGF0ZXN0ZGF0YXRlc3RkYXRh sk-lf-live-secret pk-lf-public ghp_live_secret api_key = abcdefghijklmnop")
@@ -27,17 +27,6 @@ func TestRedactionTruncationAndTerminal(t *testing.T) {
 		t.Fatalf("missing truncation suffix")
 	}
 
-	turn := completeFixtureTurn()
-	terminal := TerminalObservation(turn)
-	if terminal == nil {
-		t.Fatal("terminal observation missing")
-	}
-	if terminal.Metadata["event_count"] != len(turn.TerminalEntries) {
-		t.Fatalf("terminal event_count = %#v entries=%d", terminal.Metadata["event_count"], len(turn.TerminalEntries))
-	}
-	if strings.Contains(terminal.Output, "## output\n## output") {
-		t.Fatalf("terminal output duplicated section: %s", terminal.Output)
-	}
 }
 
 // EVAL-003

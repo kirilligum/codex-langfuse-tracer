@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "codex.turn.transcript",
   "provider": "codex",
   "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "session_id": "sess-no-tools",
   "turn_id": "turn-no-tools",
-  "input": "Explain the project status",
-  "output": "The project status is stable.",
   "model": "gpt-5.5",
   "cwd": "/tmp/no-tools",
   "metadata": {
@@ -61,16 +59,6 @@
       "type": "generation",
       "input": "Explain the project status",
       "output": "The project status is stable."
-    },
-    {
-      "name": "codex.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-01T11:00:02Z user\nExplain the project status\n\n## 2026-05-01T11:00:03Z assistant.final\nThe project status is stable.",
-      "metadata": {
-        "event_count": 2,
-        "turn_id": "turn-no-tools"
-      }
     }
   ]
 }

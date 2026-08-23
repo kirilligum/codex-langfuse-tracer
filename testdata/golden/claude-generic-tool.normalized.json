@@ -1,12 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "claude.turn.transcript",
   "provider": "claude",
   "trace_id": "d8b5ef10182454c6e00972f5487fa324",
   "session_id": "claude-generic-tool",
   "turn_id": "claude-generic-user",
-  "input": "Read package metadata.",
-  "output": "The module path is github.com/kirilligum/codex-langfuse-tracer.",
   "model": "claude-haiku-4-5-20251001",
   "cwd": "/tmp/claude-generic-tool",
   "metadata": {
@@ -78,16 +76,6 @@
         "is_error": false,
         "status": "success",
         "tool_name": "Read"
-      }
-    },
-    {
-      "name": "claude.terminal",
-      "type": "span",
-      "input": "",
-      "output": "## 2026-05-04T12:04:00Z user\nRead package metadata.\n\n## 2026-05-04T12:04:02Z tool.generic\nInput:\n{\n  \"file_path\": \"go.mod\"\n}\n\nOutput:\nmodule github.com/kirilligum/codex-langfuse-tracer\n\n## 2026-05-04T12:04:03Z assistant.final\nThe module path is github.com/kirilligum/codex-langfuse-tracer.",
-      "metadata": {
-        "event_count": 3,
-        "turn_id": "claude-generic-user"
       }
     }
   ]
