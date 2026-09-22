@@ -198,7 +198,9 @@ Expected trace shape:
 - main generation: `codex.transcript`
 - tool calls: `codex.tool.*`
 
-Claude Code support can be checked with an explicit sanitized transcript path:
+Manual Claude export is an explicit send. It does not read the watcher queue or processed state and can repeat a trace the hook already queued. Do not manually export the transcript used by an automatic hook check. For manual validation, use a different session with no queued automatic export. If you cannot establish that separation, skip the manual live check.
+
+Claude Code manual export uses an explicit transcript path:
 
 ```sh
 ~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>
@@ -251,6 +253,8 @@ The version 3 state document uses `processed_trace_ids`, `pending_scores[trace_i
 Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
 
 During catch-up after an outage, the watcher waits one configured poll interval between turn export attempts so the Langfuse ingestion and score queues receive bounded load.
+
+When `span_export_succeeded ... checkpoint=pending` appears, the export callback returned successfully and the watcher has not yet recorded its pending-score checkpoint. The existing `exported` line appears only after that checkpoint operation succeeds. If `span_checkpoint_unconfirmed` appears, the checkpoint operation returned an error after a successful export callback, so a later retry may repeat the send. These lines distinguish local steps; they do not prove complete or lasting remote visibility. They contain trace IDs, status, and fixed labels only.
 
 The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
 
@@ -424,7 +428,17 @@ After `install.sh` restarts `codex-langfuse-watch.service`, future watcher expor
 
 ## Manual Export
 
-The watcher is the normal production path. Manual export sends the selected turn to the configured Langfuse project; it does not check whether the trace was already sent. Repeating an export can create duplicate observations. Use manual export only when you have established that the selected trace is missing, or for a deliberately new trace.
+The watcher is the normal production path. Manual export does not read or update watcher state and does not check whether the trace was already sent. A manual send and a queued watcher send can both export the same turn.
+
+`--latest`, `--session-id`, and `--path` select a source. Unless `--turn-id` is supplied, the command exports every completed exportable turn in that source. It does not select only missing or unprocessed turns. Repeating an export can create duplicate observations.
+
+To restrict an intentional send to one turn in a known session:
+
+```sh
+~/.codex/bin/codex-langfuse-exporter --session-id <SESSION_ID> --turn-id <TURN_ID>
+```
+
+`--turn-id` restricts the local input only. It does not query Langfuse, deduplicate, or mark the watcher state. A turn that looks missing may still be waiting in the watcher queue or be discovered by the watcher. Before a manual send, establish that no automatic path is scheduled to send that turn. Do not edit watcher state to force an export.
 
 Export the latest local Codex session:
 

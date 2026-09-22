@@ -94,10 +94,11 @@ func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
 	scoreCalls := 0
 	resolverCalls := 0
 	scoreFailed := true
+	var stdout bytes.Buffer
 	opts := ScanOptions{
 		Root:      root,
 		StatePath: statePath,
-		Quiet:     true,
+		Stdout:    &stdout,
 		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
 			resolverCalls++
 			return turn, environment, nil
@@ -128,14 +129,21 @@ func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
 	if exported != 1 || spanCalls != 1 || scoreCalls != 1 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != environment {
 		t.Fatalf("failed score checkpoint = exported:%d spans:%d scores:%d state:%+v", exported, spanCalls, scoreCalls, state)
 	}
+	if !strings.Contains(stdout.String(), "span_export_succeeded trace="+traceID+" status=202 checkpoint=pending") {
+		t.Fatalf("initial successful span export was not diagnosed: %s", stdout.String())
+	}
 
 	scoreFailed = false
+	stdout.Reset()
 	state, exported, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if exported != 0 || spanCalls != 1 || scoreCalls != 2 || resolverCalls != 1 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
 		t.Fatalf("score retry re-exported or changed environment: exported:%d spans:%d scores:%d resolver:%d state:%+v", exported, spanCalls, scoreCalls, resolverCalls, state)
+	}
+	if strings.Contains(stdout.String(), "span_export_succeeded") {
+		t.Fatalf("score-only retry logged a span send: %s", stdout.String())
 	}
 }
 
@@ -545,9 +553,13 @@ func TestWatchLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(stdout.Bytes(), []byte("exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=201 path=")) ||
+	successLog := stdout.String()
+	spanSuccess := strings.Index(successLog, "span_export_succeeded trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=201 checkpoint=pending")
+	exported := strings.Index(successLog, "exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=201 path=")
+	scored := strings.Index(successLog, "scored trace=1e087e4ea8aa8d8e29e604d2cd8704d9 path=")
+	if spanSuccess < 0 || exported < 0 || scored < 0 || spanSuccess >= exported || exported >= scored ||
 		!bytes.Contains(stdout.Bytes(), []byte("scored trace=1e087e4ea8aa8d8e29e604d2cd8704d9 path=")) {
-		t.Fatalf("success log missing: %s", stdout.String())
+		t.Fatalf("success log order is wrong: %s", successLog)
 	}
 
 	state = exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
@@ -567,10 +579,134 @@ func TestWatchLogs(t *testing.T) {
 	if !bytes.Contains(stderr.Bytes(), []byte("ERROR: failed to export trace=1e087e4ea8aa8d8e29e604d2cd8704d9")) {
 		t.Fatalf("failure log missing: %s", stderr.String())
 	}
+	if strings.Contains(stdout.String()+stderr.String(), "span_export_succeeded") || strings.Contains(stdout.String()+stderr.String(), "span_checkpoint_unconfirmed") {
+		t.Fatalf("failed span callback emitted a success/checkpoint diagnostic: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
 	logs := stdout.String() + stderr.String()
 	for _, secretContent := range []string{"Summarize the repo", "Checks passed", "sk-lf-live-secret"} {
 		if strings.Contains(logs, secretContent) {
 			t.Fatalf("watch logs leaked %q: %s", secretContent, logs)
+		}
+	}
+
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	_, _, err = ScanOnce(context.Background(), ScanOptions{
+		Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Stdout: &stdout, Stderr: &stderr, Quiet: true,
+		ExportSpans:  func(context.Context, agenttrace.Turn, string) (int, error) { return 201, nil },
+		ExportScores: successfulScores,
+	}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || strings.Contains(stderr.String(), "span_export_succeeded") {
+		t.Fatalf("quiet success emitted a success diagnostic: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// TEST-706
+func TestWatchSpanCheckpointFailureLogs(t *testing.T) {
+	t.Parallel()
+
+	for _, quiet := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "quiet"}[quiet], func(t *testing.T) {
+			t.Parallel()
+			root, statePath, rolloutPath := watchFixture(t)
+			now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+			setMTime(t, rolloutPath, now.Add(-time.Second))
+			initial := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-time.Minute).UnixNano(), ProcessedTraceIDs: []string{"previous-trace"}}
+			if err := exportstate.Save(context.Background(), statePath, initial); err != nil {
+				t.Fatal(err)
+			}
+			initialBytes, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			var stdout, stderr bytes.Buffer
+			spanCalls, scoreCalls := 0, 0
+			_, _, scanErr := ScanOnce(ctx, ScanOptions{
+				Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Quiet: quiet, Stdout: &stdout, Stderr: &stderr,
+				ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+					spanCalls++
+					cancel()
+					return 202, nil
+				},
+				ExportScores: func(context.Context, agenttrace.Turn, string) error {
+					scoreCalls++
+					return nil
+				},
+			}, initial)
+			cancel()
+			if !errors.Is(scanErr, context.Canceled) {
+				t.Fatalf("ScanOnce error = %v, want context canceled", scanErr)
+			}
+			if spanCalls != 1 || scoreCalls != 0 {
+				t.Fatalf("callbacks = spans:%d scores:%d, want spans:1 scores:0", spanCalls, scoreCalls)
+			}
+			traceID := completeTraceID(t, rolloutPath)
+			expectedError := "ERROR: span_checkpoint_unconfirmed trace=" + traceID + " export_result=success replay_possible=true"
+			if strings.Count(stderr.String(), expectedError) != 1 {
+				t.Fatalf("checkpoint diagnostic = %q, want exactly one %q", stderr.String(), expectedError)
+			}
+			if strings.Contains(stdout.String(), "exported trace=") || strings.Contains(stdout.String(), "scored trace=") {
+				t.Fatalf("checkpoint failure logged a completed checkpoint: %q", stdout.String())
+			}
+			if got := strings.Count(stdout.String(), "span_export_succeeded trace="+traceID+" status=202 checkpoint=pending"); got != map[bool]int{false: 1, true: 0}[quiet] {
+				t.Fatalf("span success diagnostic count = %d in quiet=%v; log=%q", got, quiet, stdout.String())
+			}
+			for _, private := range []string{"Summarize the repo", "Checks passed", "sk-lf-live-secret"} {
+				if strings.Contains(stdout.String()+stderr.String(), private) {
+					t.Fatalf("checkpoint diagnostics contain private content %q", private)
+				}
+			}
+			afterBytes, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(afterBytes, initialBytes) {
+				t.Fatalf("checkpoint error mutated durable state: before=%s after=%s", initialBytes, afterBytes)
+			}
+		})
+	}
+}
+
+type watchEventLogWriter chan string
+
+func (writer watchEventLogWriter) Write(data []byte) (int, error) {
+	line := strings.TrimSpace(string(bytes.Clone(data)))
+	writer <- line
+	return len(data), nil
+}
+
+func waitForWatchEvent(t *testing.T, lines <-chan string, prefix string) string {
+	t.Helper()
+	timer := time.NewTimer(6 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case line := <-lines:
+			if strings.HasPrefix(line, prefix) {
+				return line
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for watch event %q", prefix)
+		}
+	}
+}
+
+func drainWatchEvents(lines <-chan string) []string {
+	var result []string
+	for {
+		select {
+		case line := <-lines:
+			result = append(result, line)
+		default:
+			return result
 		}
 	}
 }

@@ -60,6 +60,17 @@ These cover killed lock owners, partial writes, serialized subprocess writers, s
 
 The focused regression names are `TestStateLockRecoversAfterKilledOwner`, `TestStateLockDoesNotStealLiveOwner`, `TestStateUpdatesSerializeAcrossProcesses`, `TestStateInterruptedWritePreservesCommittedJSON`, `TestStateCommitSurvivesKillBeforeUnlock`, `TestStateLoadOrCreatePreservesEnqueueInEitherOrder`, `TestStateInvalidJSONIsNeverReset`, `TestStateWriteErrorsPreserveCommittedFile`, `TestStateLockCancellationAndCallbackFailureRelease`, `TestWatchWaitsForStateWithoutRestarting`, `TestWatchRetriesPendingCheckpointOnly`, `TestWatchRetriesQueueRemovalAfterCheckpoint`, `TestWatchLockBackoffLogThrottleAndShutdown`, `TestClaudeHookLockTimeoutIsNotAcknowledged`, and `TestCLISignalCancelsStateWait`.
 
+Delivery ambiguity and checkpoint diagnostics use local mock receivers and temporary version 3 state:
+
+```sh
+go test ./internal/watch -run '^(TestWatchSpanCheckpointFailureLogs|TestWatchRetriesAfterLostAcknowledgement|TestWatchRestartAfterSpanSuccessBeforeCheckpoint)$' -count=1 -timeout=120s -v
+go test ./internal/watch -run '^(TestWatchRetriesAfterLostAcknowledgement|TestWatchRestartAfterSpanSuccessBeforeCheckpoint)$' -count=5 -timeout=120s -v
+go test -race ./internal/watch -run '^(TestWatchRetriesAfterLostAcknowledgement|TestWatchRestartAfterSpanSuccessBeforeCheckpoint)$' -count=1 -timeout=120s
+go test ./internal/langfuse -run '^(TestValidateClaudeObservationRows|TestClaudeSmokeTraceRejectsDuplicatePaginatedIDs)$' -count=1
+```
+
+The callback-success line occurs before the watcher checkpoint; the checkpoint-unconfirmed test injects cancellation before the state write. The lost-ack test records an OTLP request before canceling its response. The Unix subprocess test kills a child after its export-success log and before the checkpoint. These tests establish retry behavior at their controlled boundaries; they do not certify Langfuse durability, all SDK batches, exactly-once delivery, or absence of historical duplicates.
+
 Completed-turn and canonical observation contracts:
 
 ```sh
@@ -67,6 +78,7 @@ go test ./internal/codextrace ./internal/watch -run 'TestIncompleteTurnWaitsForC
 go test ./internal/exportstate -run 'TestVersion3State|TestStateUpdatePreservesQueue' -count=1
 go test ./internal/langfuse -run 'TestOTLPCompletedTurnSingleBatch|TestCanonicalObservationIO' -count=1
 go test ./internal/watch -run 'TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs' -count=1
+go test ./internal/watch -run '^TestWatchSpanCheckpointFailureLogs$' -count=1 -v
 go test ./internal/watch -run TestEvalWatchExportLatency -count=1 -v
 go test ./test -run TestDocsCompletedCodexVisibility -count=1
 ```
@@ -176,14 +188,28 @@ Every new fixture should cover a clear behavior category, avoid real secrets, an
 
 ## Manual Checks
 
-CHECK-001 is the live Claude Code smoke check. Use the cheapest Claude model available in the installed CLI, for example `haiku`.
+CHECK-001 validates the automatic Claude hook-to-watcher path. Use the cheapest Claude model available in the installed CLI, for example `haiku`. Do not manually export this transcript.
 
-1. Run a small Claude Code print-mode prompt that persists a transcript and triggers the configured Stop hook, for example `claude --model haiku -p "Reply exactly: clt-live-fixture"`.
-2. Run `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` against the created transcript.
-3. Run `LIVE_LANGFUSE_CLAUDE_TRACE_ID="<trace-id>" go test ./internal/langfuse -run TestLiveClaudeParityTrace -count=1` for the trace produced by the same validation session.
-4. Let `codex-langfuse-watch.service` drain the queued hook request.
-5. In Langfuse, confirm `claude.turn.transcript`, `claude.agent`, `claude.transcript`, and any expected canonical tool observations such as `claude.tool.command`, `claude.tool.file_change`, `claude.tool.mcp`, or `claude.tool.generic` appear.
-6. Record the Claude Code version, model alias, trace IDs, and whether manual export and hook-triggered export both verified in Langfuse.
+1. Record a start time. Run a small Claude Code print-mode prompt that persists a transcript and triggers the already user-configured Stop hook, for example `claude --model haiku -p "Reply exactly: clt-live-fixture"`.
+2. Let `codex-langfuse-watch.service` drain the queued hook request. From the local watcher log, record the `trace` value on the successful `scored` line for this run; this line follows span export and score callbacks. Do not publish raw journal output or transcript contents. If there is no success line, diagnose the hook, queue, and watcher failure; manual export does not make CHECK-001 pass.
+3. Check the basic trace shape in the same configured Langfuse project:
+
+   ```sh
+   LIVE_LANGFUSE_CLAUDE_SMOKE_TRACE_ID="<trace-id>" go test ./internal/langfuse -run '^TestLiveClaudeSmokeTrace$' -count=1 -v
+   ```
+
+   This read-only check waits for the root and transcript, reads all observation pages, checks unique IDs and exactly one `claude.agent` root and `claude.transcript` generation, and requires non-empty root input/output. Current returned rows do not prove that historical duplicates never existed or that the backend never merged them.
+4. Record Claude Code version, model alias, run time, trace ID, and the smoke result without private transcript or journal contents.
+
+Full tool parity is a separate optional live check. Use another automatically exported session with a benign command observation, a file change contained in a temporary directory, and an already configured read-only MCP tool. Do not install tools or alter Claude settings just for this check. Only when all three tool families are present, run:
+
+```sh
+LIVE_LANGFUSE_CLAUDE_TRACE_ID="<full-parity-trace-id>" go test ./internal/langfuse -run '^TestLiveClaudeParityTrace$' -count=1 -v
+```
+
+The full parity check also requires tags, usage, and model pricing. A reply-only smoke trace cannot pass it. If a safe MCP tool or another requirement is unavailable, record full parity as unperformed and keep the basic smoke result separate.
+
+Manual CLI validation is a separate optional check using a different transcript/session that was not queued by the Stop hook. Do not use the CHECK-001 session for manual export or manual parity. If hook-free input cannot be established with the user's configuration, mark manual validation unperformed. The tracer does not edit Claude settings.
 
 ## Production Gate
 

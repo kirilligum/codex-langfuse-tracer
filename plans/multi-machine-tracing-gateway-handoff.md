@@ -10,7 +10,7 @@
 
 This document is the canonical handoff for making one public Langfuse hostname serve traces from every coding-agent workstation while allowing an operator to move the public gateway to another machine. It records the verified runtime state, decisions, ownership boundaries, intended command-line experience, implementation sequence, acceptance evidence, and known gaps. It is standards-informed lifecycle documentation, not a claim of ISO/IEEE or safety-critical compliance.
 
-**2026-09-22 RCA update:** the [reported repeat-export incident](duplicate-observations-rca-20260922.md) was the historical watcher checkpoint/lock restart loop. The lock recovery correction is in installed revision `2b8b915`, and the user confirmed the duplicate rows are no longer visible. The remaining acceptance/checkpoint ambiguity has a separate [delivery reliability plan](export-delivery-reliability-plan.md). The earlier proposal for a shared observation classifier and manual preflight is not the incident remedy and is not approved for implementation.
+**2026-09-22 RCA update:** the [reported repeat-export incident](duplicate-observations-rca-20260922.md) was the historical watcher checkpoint/lock restart loop. The lock recovery correction is in installed revision `2b8b915` inspected during that RCA, and the user confirmed the duplicate rows are no longer visible. The separate [delivery diagnostics implementation plan](export-delivery-reliability-plan.md) covers operational instructions, watcher diagnostics, and isolated failure tests while retaining at-least-once delivery. Those changes are planned, not deployed. Reconciliation remains independent and unimplemented; its older design requires a refresh to the current observation API before implementing writes. The earlier shared-classifier and manual-preflight proposal is outside this follow-up.
 
 ## Outcome
 
@@ -131,7 +131,7 @@ Success requires `missing=0` and `failed=0`. Exact wording becomes a tested publ
 
 ### ADR-MM-006: Accept current at-least-once semantics
 
-Reconciliation performs a remote existence read before export. A watcher can still win the race between lookup and export, and an ambiguous remote acknowledgement can still cause a duplicate retry. This is consistent with the repository's documented at-least-once guarantee. Do not add a distributed lock, leader election, pending-batch protocol, or remote transaction coordinator for this unlikely race.
+Reconciliation performs a remote existence read before export. A watcher can still win the race between lookup and export, and an ambiguous remote acknowledgement can still cause a duplicate retry. This is consistent with the repository's documented at-least-once guarantee. Deterministic IDs and a preflight read do not establish receiver deduplication. The diagnostics follow-up retains this policy and does not add a distributed lock, leader election, pending-batch protocol, or remote transaction coordinator. Strict duplicate prevention would require a separate delivery contract; no frequency estimate for these races has been established.
 
 ### ADR-MM-007: Do not hand off an active coding process
 

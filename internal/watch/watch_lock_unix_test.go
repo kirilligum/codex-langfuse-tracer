@@ -113,6 +113,7 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	busyWriter := &watchLockLogWriter{lines: make(chan string, 16)}
+	stdoutLines := watchEventLogWriter(make(chan string, 32))
 	locked := make(chan *os.File, 1)
 	var spanCount, scoreCount atomic.Int32
 	type result struct {
@@ -123,7 +124,7 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 	resultCh := make(chan result, 1)
 	go func() {
 		state, exported, err := ScanOnce(context.Background(), ScanOptions{
-			Root: root, StatePath: statePath, Stderr: busyWriter, Now: now,
+			Root: root, StatePath: statePath, Stdout: stdoutLines, Stderr: busyWriter, Now: now,
 			ResolveWorkspace: testWorkspace,
 			ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
 				spanCount.Add(1)
@@ -144,6 +145,13 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 		t.Fatal("span export did not reach the state checkpoint contention barrier")
 	}
 	waitForWatchLockLog(t, busyWriter.lines, "ERROR: export state lock busy")
+	spanSuccess := waitForWatchEvent(t, stdoutLines, "span_export_succeeded trace=")
+	if !strings.Contains(spanSuccess, " status=202 checkpoint=pending") {
+		t.Fatalf("span export diagnostic = %q", spanSuccess)
+	}
+	if got := drainWatchEvents(stdoutLines); len(got) != 0 {
+		t.Fatalf("checkpoint pending unexpectedly emitted completion logs: %v", got)
+	}
 	if spanCount.Load() != 1 || scoreCount.Load() != 0 {
 		t.Fatalf("callbacks while checkpoint waits: spans=%d scores=%d", spanCount.Load(), scoreCount.Load())
 	}
@@ -164,6 +172,17 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 	persisted, err := exportstate.Load(statePath)
 	if err != nil || persisted == nil || !persisted.HasProcessed(traceID) {
 		t.Fatalf("persisted state=%+v err=%v", persisted, err)
+	}
+	logLines := append([]string{spanSuccess}, drainWatchEvents(stdoutLines)...)
+	joined := strings.Join(logLines, "\n")
+	if strings.Count(joined, "span_export_succeeded") != 1 {
+		t.Fatalf("checkpoint contention emitted multiple export-success diagnostics: %v", logLines)
+	}
+	spanIndex := strings.Index(joined, "span_export_succeeded")
+	exportedIndex := strings.Index(joined, "exported trace="+traceID)
+	scoredIndex := strings.Index(joined, "scored trace="+traceID)
+	if exportedIndex < 0 || scoredIndex < 0 || spanIndex >= exportedIndex || exportedIndex >= scoredIndex {
+		t.Fatalf("success logs out of order after checkpoint recovery: %v", logLines)
 	}
 }
 

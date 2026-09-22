@@ -41,11 +41,16 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 	for _, required := range []string{
 		"Incomplete turns remain local until Codex records completion",
 		"one clean Langfuse batch",
+		"every completed exportable turn",
+		"`--turn-id` restricts the local input only",
+		"does not read or update watcher state",
 		"`processed_trace_ids`",
 		"`pending_scores[trace_id]`",
 		"Langfuse v4 observation fields",
 		"Deprecated trace-level input/output fields are not emitted",
 		"at-least-once",
+		"span_export_succeeded ... checkpoint=pending",
+		"span_checkpoint_unconfirmed",
 		"does not stream tokens or partial assistant text",
 		"currently configured Langfuse target",
 	} {
@@ -58,6 +63,7 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 		"TestVersion3State|TestStateUpdatePreservesQueue",
 		"TestOTLPCompletedTurnSingleBatch|TestCanonicalObservationIO",
 		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs",
+		"TestWatchSpanCheckpointFailureLogs",
 		"TestEvalWatchExportLatency",
 	} {
 		if !strings.Contains(testingDoc, required) {
@@ -140,7 +146,7 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 		"--json",
 		"trace_url",
 		"deterministic trace-level Langfuse scores",
-		"They do not make extra LLM calls",
+		"The scores do not make extra LLM calls.",
 		"`langfuse.environment`",
 		"`repository-folder--branch-<hash>`",
 		"first six lowercase hexadecimal SHA-256",
@@ -482,6 +488,11 @@ func TestDocsClaudeSupportContract(t *testing.T) {
 		"go test ./internal/claudetrace -count=1",
 		"go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'TestClaudeHookEnqueuesStopOnly|TestExportStateQueueDedupe|TestWatchDrainsClaudeQueue|TestWatchReloadsClaudeQueueFromHookState' -count=1",
 		"go test ./cmd/codex-langfuse-exporter -run 'TestCLIProviderSelection|TestManualProviderExportCLIIntegration' -count=1",
+		"TestLiveClaudeSmokeTrace",
+		"LIVE_LANGFUSE_CLAUDE_SMOKE_TRACE_ID",
+		"Full tool parity is a separate optional live check",
+		"A reply-only smoke trace cannot pass it",
+		"Do not manually export this transcript",
 		"CHECK-001",
 	} {
 		if !strings.Contains(testingDoc, required) {

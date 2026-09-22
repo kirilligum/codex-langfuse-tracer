@@ -154,10 +154,14 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
 			return state, 0, true, nil
 		}
+		if !opts.Quiet {
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceID, status)
+		}
 		state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
 			current.SetPendingScore(traceID, environment)
 		})
 		if err != nil {
+			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceID)
 			return state, 0, false, err
 		}
 		if !opts.Quiet {

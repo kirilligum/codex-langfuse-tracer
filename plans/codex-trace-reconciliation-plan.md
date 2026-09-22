@@ -8,7 +8,7 @@
 - Date: 2026-08-15
 - Document ID: CLT-RECONCILE-PLAN-001
 
-> **Deferred (2026-09-22):** this reconciliation design predates the duplicate-observation RCA. Do not implement its remote-absence and retry assumptions until the [export delivery reliability plan](export-delivery-reliability-plan.md) defines the delivery contract. The incident-specific stale-lock defect is already fixed; see the [RCA](duplicate-observations-rca-20260922.md).
+> **Design refresh required (2026-09-22):** reconciliation remains unimplemented. This plan's `FetchTrace`/HTTP-404 assumptions predate the current v2 observation reader and must be refreshed before its write path is implemented. Specify complete reads, visibility delay, error handling, and partial-trace behavior in that separate design; an empty observation response must not automatically authorize a resend. Retain the documented at-least-once policy. Reconciliation, including read-only inventory design, does not depend on completing the [delivery diagnostics follow-up](export-delivery-reliability-plan.md). The incident-specific stale-lock defect is already fixed; see the [RCA](duplicate-observations-rca-20260922.md).
 
 This plan defines the repository-local implementation, verification, deployment, and handoff work for one `codex-langfuse-exporter --reconcile` mode. The mode inventories completed local Codex rollout turns, compares their deterministic trace IDs with the one Langfuse backend already selected by repository configuration, exports and verifies missing traces through existing owners, and reports deterministic counts. Gateway promotion belongs to external infrastructure; machine failover orchestration, Claude automation, credential rotation, and trace-retention incident work do not block this repository deliverable.
 
@@ -40,7 +40,7 @@ This plan defines the repository-local implementation, verification, deployment,
   - Rationale: Process sorted deterministic trace IDs sequentially. The command is an operator-triggered recovery path; concurrency flags and adaptive schedulers add surface area without demonstrated need.
 - Topic: Delivery semantics
   - Verdict: DECISION
-  - Rationale: Preserve documented at-least-once behavior. An active watcher can win the lookup/export race; deterministic IDs make that race acceptable without locks, leader election, or a transaction coordinator.
+  - Rationale: Preserve documented at-least-once behavior. An active watcher can win the lookup/export race and both paths may submit the same observations. Deterministic IDs identify repeated submissions but do not guarantee receiver deduplication. Document this limitation in the refreshed design; strict duplicate prevention would require a separate delivery contract.
 - Topic: Existing but incomplete remote traces
   - Verdict: AGAINST
   - Rationale: This release fills absent traces. Repair of a trace that already returns HTTP 2xx but has incomplete observations or scores is separate work requiring a real observed case and an ADR.
