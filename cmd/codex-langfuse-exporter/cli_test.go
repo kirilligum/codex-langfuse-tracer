@@ -234,7 +234,7 @@ func TestSyncModelPricingMode(t *testing.T) {
 func TestDoctorMode(t *testing.T) {
 	home := t.TempDir()
 	statePath := filepath.Join(home, "state.json")
-	if err := exportstate.Save(statePath, exportstate.State{Version: exportstate.Version, ProcessedTraceIDs: []string{"trace-1"}}); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, exportstate.State{Version: exportstate.Version, ProcessedTraceIDs: []string{"trace-1"}}); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

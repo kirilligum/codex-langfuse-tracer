@@ -56,7 +56,7 @@ func TestEvalWatchExportLatency(t *testing.T) {
 
 	batchesByTrace := map[string]int{}
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

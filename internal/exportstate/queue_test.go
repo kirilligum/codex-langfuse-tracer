@@ -1,6 +1,7 @@
 package exportstate
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,10 +22,10 @@ func TestExportStateQueueDedupe(t *testing.T) {
 		CWD:        "/tmp/project",
 		EnqueuedAt: enqueuedAt.Format(time.RFC3339Nano),
 	}
-	if err := Enqueue(path, req); err != nil {
+	if err := Enqueue(context.Background(), path, req); err != nil {
 		t.Fatalf("Enqueue first: %v", err)
 	}
-	if err := Enqueue(path, req); err != nil {
+	if err := Enqueue(context.Background(), path, req); err != nil {
 		t.Fatalf("Enqueue duplicate: %v", err)
 	}
 	state, err := Load(path)
@@ -38,7 +39,7 @@ func TestExportStateQueueDedupe(t *testing.T) {
 		t.Fatalf("scan watermark = %d, want %d", state.ScanWatermarkNS, enqueuedAt.UnixNano())
 	}
 	state.AddProcessed(agenttrace.StableTraceID(agenttrace.ProviderClaude, "session", "turn"))
-	if err := Save(path, *state); err != nil {
+	if err := Save(context.Background(), path, *state); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	loaded, err := Load(path)
@@ -56,7 +57,7 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 	// TEST-703
 
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := Save(path, State{Version: Version, ScanWatermarkNS: 10}); err != nil {
+	if err := Save(context.Background(), path, State{Version: Version, ScanWatermarkNS: 10}); err != nil {
 		t.Fatal(err)
 	}
 	stale, err := Load(path)
@@ -68,12 +69,12 @@ func TestStateUpdatePreservesQueue(t *testing.T) {
 		SourcePath: "/tmp/queued-while-watching.jsonl",
 		EnqueuedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}
-	if err := Enqueue(path, request); err != nil {
+	if err := Enqueue(context.Background(), path, request); err != nil {
 		t.Fatal(err)
 	}
 
 	stale.SetPendingScore("trace-progress", "stale--main-a1b2c3")
-	updated, err := Update(path, func(current *State) error {
+	updated, err := Update(context.Background(), path, func(current *State) error {
 		current.SetPendingScore("trace-progress", "repository--main-b2c3d4")
 		return nil
 	})

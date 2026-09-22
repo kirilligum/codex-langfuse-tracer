@@ -1,6 +1,7 @@
 package exportstate
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ func TestVersion3State(t *testing.T) {
 		ProcessedTraceIDs: []string{"b", "a", "a"},
 		PendingScores:     map[string]string{"score-trace": "repository--feature-one-a1b2c3"},
 	}
-	if err := Save(path, state); err != nil {
+	if err := Save(context.Background(), path, state); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	got, err := Load(path)
@@ -52,7 +53,7 @@ func TestVersion3State(t *testing.T) {
 		t.Fatalf("state mode = %o, want 600", mode)
 	}
 
-	updated, err := Update(path, func(current *State) error {
+	updated, err := Update(context.Background(), path, func(current *State) error {
 		current.SetPendingScore("atomic-trace", "repository--main-b2c3d4")
 		return nil
 	})
@@ -79,7 +80,7 @@ func TestVersion3State(t *testing.T) {
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unsupported watch state version in "+path) {
 		t.Fatalf("version 4 error = %v", err)
 	}
-	if err := Save(path, State{Version: 2}); err == nil || !strings.Contains(err.Error(), "unsupported watch state version in "+path) {
+	if err := Save(context.Background(), path, State{Version: 2}); err == nil || !strings.Contains(err.Error(), "unsupported watch state version in "+path) {
 		t.Fatalf("version 2 save error = %v", err)
 	}
 }

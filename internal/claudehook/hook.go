@@ -1,6 +1,7 @@
 package claudehook
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ type Input struct {
 	HookEventName  string `json:"hook_event_name"`
 }
 
-func Handle(input io.Reader, statePath string, now time.Time) (bool, error) {
+func Handle(ctx context.Context, input io.Reader, statePath string, now time.Time) (bool, error) {
 	var hook Input
 	if err := json.NewDecoder(input).Decode(&hook); err != nil {
 		return false, fmt.Errorf("invalid Claude hook JSON: %w", err)
@@ -34,11 +35,14 @@ func Handle(input io.Reader, statePath string, now time.Time) (bool, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	return true, exportstate.Enqueue(statePath, exportstate.QueueRequest{
+	if err := exportstate.Enqueue(ctx, statePath, exportstate.QueueRequest{
 		Provider:   agenttrace.ProviderClaude,
 		SourcePath: hook.TranscriptPath,
 		SessionID:  hook.SessionID,
 		CWD:        hook.CWD,
 		EnqueuedAt: now.UTC().Format(time.RFC3339Nano),
-	})
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }

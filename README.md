@@ -127,7 +127,7 @@ chmod 600 ~/.codex/config.toml
 
 ### 3. Install
 
-Older watcher state is intentionally incompatible and is not migrated. When upgrading a machine with an older state file, stop the existing watcher and perform this one-time destructive reset before installing:
+State files from releases before schema version 3 are incompatible. Only when upgrading from one of those older schemas, stop the watcher and perform this destructive reset before installing:
 
 ```sh
 systemctl --user stop codex-langfuse-watch.service
@@ -136,11 +136,15 @@ rm -- ~/.codex/langfuse-export-state.json
 
 Removing the file discards processed IDs, queued requests, the scan watermark, and pending score retries. There is no compatibility state, backup path, or migration command.
 
+This reset does **not** apply to the version 3 lock-protocol upgrade. Keep the version 3 state JSON and its `.lock` sidecar; they contain processed IDs, queued hook requests, pending score retries, and the scan watermark. The update changes locking only and preserves the state schema.
+
+For the first update from the older `O_EXCL` lock protocol, pause new Claude `Stop` hook invocations and any other independently launched state writers. Let in-flight writers finish, and stop any manually launched legacy watchers. The installer synchronously stops its loaded systemd watcher after its staged build and Langfuse pricing preflight pass, then promotes the staged binary and unit. It cannot pause Claude hooks or find independent exporters for you. Resume those producers after the installer succeeds so every writer uses the new lock protocol. Do not delete or rename the `.lock` sidecar during normal installation, restart, or uninstall; keeping one inode prevents concurrent processes from splitting across different locks.
+
 ```sh
 ./install.sh
 ```
 
-The installer builds the Go binary, syncs Langfuse model pricing from the configured project, installs the user service, reloads systemd, enables the service, and restarts it. It is the only required service-start step. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance. If model pricing sync fails, the installer stops before installing the `codex-langfuse-watch.service` unit.
+The installer builds into a temporary directory beside the installed binary and syncs Langfuse model pricing with that staged binary before changing the installed executable or stopping the watcher. If systemd reports an existing watcher, it stops and waits for it before atomically promoting the staged binary; then it installs the unit, reloads systemd, enables the service, and restarts it. A pricing or stop failure leaves the old executable in place. A failure during promotion reports the service's current state and directs you to rerun the installer. The installer is the only required service-start step. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance.
 
 Useful preflight checks after setting equivalent shell variables:
 
@@ -155,9 +159,10 @@ Installed files:
 ~/.codex/bin/codex-langfuse-exporter
 ~/.config/systemd/user/codex-langfuse-watch.service
 ~/.codex/langfuse-export-state.json
+~/.codex/langfuse-export-state.json.lock
 ```
 
-The version 3 state file records processed trace IDs, score retries, and queued hook requests so normal watcher runs do not resend successful observation batches. The installer starts the watcher, which creates fresh version 3 state when no state file exists; recently modified session files can then be exported again.
+The version 3 state file records processed trace IDs, score retries, and queued hook requests so normal watcher runs do not resend successful observation batches. The watcher creates initial state only when the file is absent; otherwise it preserves valid state. The lock sidecar is a persistent, empty advisory-lock file and is not evidence of a stale lock. A fresh install with no state starts at the configured initial lookback watermark; a lock-only upgrade retains the existing watermark and checkpoints.
 
 If you want the user service to run even when you are logged out, enable lingering for your Linux user:
 
@@ -556,6 +561,8 @@ Common failure modes:
 - Codex reports that the `langfuse` MCP server closed during `initialize`: `langfuse-mcp==0.10.0` still uses the MCP Python SDK v1 API, so launch it with the tested `mcp>=1.28,<2` constraint shown in `examples/codex-config.toml`. An unconstrained `uvx langfuse-mcp` can resolve the incompatible MCP SDK v2.
 - `./install.sh` fails with `connect: connection refused`: Langfuse is not running at `LANGFUSE_HOST`, or the host URL points at the wrong machine or port.
 - `./install.sh` fails with `Langfuse model list /api/public/models failed with HTTP 401`: the configured public/secret key pair is not valid for the Langfuse instance at `LANGFUSE_HOST`. Seed the same `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, or create/copy a project key pair from the Langfuse UI and update `~/.codex/config.toml`.
+- The journal shows `ERROR: export state lock busy path=... waited=2s retry_in=...`: the watcher is waiting for a state transaction and retries that same checkpoint in place. It logs at most once per minute while the lock remains busy. Check for another exporter using the same state path and inspect fresh logs for a recovery message; do not delete the sidecar to clear contention. `--doctor` may continue to show the recent error during its existing 15-minute journal window after recovery.
+- `--claude-hook` exits nonzero with an export state lock error: the request was not acknowledged or queued. Once contention clears, retry the existing hook invocation or explicitly export its transcript with `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>`.
 - `systemctl --user status codex-langfuse-watch.service` says the unit is not found after `./install.sh`: the installer likely failed before the service install step. Fix the Langfuse reachability or authentication error and rerun `./install.sh`.
 - Browser sign-in redirects to `localhost`: the Langfuse server's `NEXTAUTH_URL` is still set to `http://localhost:3000`. Set it to the actual browser URL, such as a Tailscale URL, and recreate the `langfuse-web` container.
 - A browser on Windows cannot reach a Tailscale IP that works from WSL: Tailscale may be running only inside WSL. Run Tailscale on the Windows host too, or open the browser inside the same WSL network environment.
@@ -629,6 +636,8 @@ Do not add provider wrapper execution, a second fixture manifest, a second Langf
 ```sh
 ./uninstall.sh
 ```
+
+Uninstall removes the state JSON but leaves the empty `.lock` sidecar. Leaving it in place preserves the lock inode for any process already using the state path; there is no routine sidecar cleanup step.
 
 If Langfuse MCP was added only for this setup, remove the optional `[mcp_servers.langfuse]` block from `~/.codex/config.toml`.
 

@@ -343,11 +343,11 @@ func TestRunWatchCanceled(t *testing.T) {
 		"--state-file", statePath,
 		"--poll-interval-seconds", "0.001",
 	}, &stdout, &stderr)
-	if code == 0 {
-		t.Fatalf("watch run succeeded with canceled context stdout=%s stderr=%s", stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("watch cancellation returned %d, want clean stop stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("context canceled")) {
-		t.Fatalf("missing canceled error stderr=%s", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("clean watcher cancellation logged an error: %s", stderr.String())
 	}
 }
 

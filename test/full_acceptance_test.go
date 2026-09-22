@@ -232,7 +232,7 @@ func TestFullClaudeAcceptance(t *testing.T) {
 	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
 	copyAcceptanceFile(t, filepath.Join("..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
 	hookJSON := `{"session_id":"claude-no-tools","transcript_path":"` + transcriptPath + `","cwd":"` + root + `","hook_event_name":"Stop"}`
-	if enqueued, err := claudehook.Handle(strings.NewReader(hookJSON), statePath, fixedAcceptanceTime()); err != nil || !enqueued {
+	if enqueued, err := claudehook.Handle(context.Background(), strings.NewReader(hookJSON), statePath, fixedAcceptanceTime()); err != nil || !enqueued {
 		t.Fatalf("Claude hook enqueued=%v err=%v", enqueued, err)
 	}
 	state, err := exportstate.Load(statePath)

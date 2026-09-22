@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
@@ -140,7 +142,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if opts.ClaudeHook {
-		enqueued, err := claudehook.Handle(stdin, opts.StateFile, time.Now())
+		enqueued, err := claudehook.Handle(ctx, stdin, opts.StateFile, time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
@@ -191,6 +193,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			},
 		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return 0
+			}
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}
@@ -478,5 +483,8 @@ func seconds(value float64) time.Duration {
 }
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	exitCode := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(exitCode)
 }

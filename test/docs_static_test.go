@@ -153,7 +153,9 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 		"version 3",
 		"systemctl --user stop codex-langfuse-watch.service",
 		"rm -- ~/.codex/langfuse-export-state.json",
-		"It is the only required service-start step",
+		"This reset does **not** apply to the version 3 lock-protocol upgrade.",
+		"Keep the version 3 state JSON and its `.lock` sidecar",
+		"The installer is the only required service-start step",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
@@ -163,7 +165,7 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 	removeIndex := strings.Index(readme, "rm -- ~/.codex/langfuse-export-state.json")
 	installIndex := strings.Index(readme, "./install.sh")
 	if stopIndex >= removeIndex || removeIndex >= installIndex {
-		t.Fatal("README must document the state cutover as stop, remove state, then install")
+		t.Fatal("README must document the pre-version-3 state reset as stop, remove state, then install")
 	}
 	if strings.Contains(readme, "systemctl --user start codex-langfuse-watch.service") {
 		t.Fatal("README must use install.sh as the only service-start path")
@@ -206,6 +208,49 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 			if strings.Contains(document.text, forbidden) {
 				t.Fatalf("%s retains legacy identity surface %q", document.name, forbidden)
 			}
+		}
+	}
+}
+
+func TestDocsExportStateLockUpgrade(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoDoc(t, "README.md")
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	plan := readRepoDoc(t, filepath.Join("plans", "export-state-lock-recovery-plan.md"))
+	for _, required := range []string{
+		"older `O_EXCL` lock protocol",
+		"pause new Claude `Stop` hook invocations",
+		"The installer synchronously stops its loaded systemd watcher",
+		"persistent, empty advisory-lock file",
+		"Do not delete or rename the `.lock` sidecar",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"TestStateLockRecoversAfterKilledOwner",
+		"TestStateInterruptedWritePreservesCommittedJSON",
+		"TestStateWriteErrorsPreserveCommittedFile",
+		"TestWatchRetriesPendingCheckpointOnly",
+		"TestClaudeHookLockTimeoutIsNotAcknowledged",
+		"TestCLISignalCancelsStateWait",
+		"TestInstallReportsPostStopFailureState",
+		"go test -race ./internal/exportstate ./internal/claudehook ./internal/watch",
+	} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"Legacy and new writers cannot safely coexist.",
+		"TestStateLoadOrCreatePreservesEnqueueInEitherOrder",
+		"TestWatchRetriesQueueRemovalAfterCheckpoint",
+		"forced-kill tests against disposable state",
+	} {
+		if !strings.Contains(plan, required) {
+			t.Fatalf("lock recovery plan missing %q", required)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package claudehook
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ func TestClaudeHookEnqueuesStopOnly(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	stop := `{"session_id":"claude-session","transcript_path":"/tmp/claude.jsonl","cwd":"/tmp/project","hook_event_name":"Stop"}`
-	enqueued, err := Handle(bytes.NewBufferString(stop), statePath, now)
+	enqueued, err := Handle(context.Background(), bytes.NewBufferString(stop), statePath, now)
 	if err != nil {
 		t.Fatalf("Handle Stop: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestClaudeHookEnqueuesStopOnly(t *testing.T) {
 	}
 
 	notification := `{"session_id":"claude-session","transcript_path":"/tmp/claude.jsonl","cwd":"/tmp/project","hook_event_name":"Notification"}`
-	enqueued, err = Handle(bytes.NewBufferString(notification), statePath, now)
+	enqueued, err = Handle(context.Background(), bytes.NewBufferString(notification), statePath, now)
 	if err != nil {
 		t.Fatalf("Handle Notification: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestClaudeHookEnqueuesStopOnly(t *testing.T) {
 func TestClaudeHookRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
-	_, err := Handle(bytes.NewBufferString(`{"hook_event_name":"Stop"}`), filepath.Join(t.TempDir(), "state.json"), time.Now())
+	_, err := Handle(context.Background(), bytes.NewBufferString(`{"hook_event_name":"Stop"}`), filepath.Join(t.TempDir(), "state.json"), time.Now())
 	if err == nil || !strings.Contains(err.Error(), "transcript_path") {
 		t.Fatalf("missing transcript error = %v", err)
 	}

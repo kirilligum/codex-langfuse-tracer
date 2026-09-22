@@ -24,7 +24,7 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	parsed, err := codextrace.ParseTurns(rolloutPath)
@@ -86,7 +86,7 @@ func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	const environment = "repository--feature-one-a1b2c3"
@@ -147,7 +147,7 @@ func TestWatchEnvironmentPersistsOnlyAfterSuccessfulSpanExport(t *testing.T) {
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	const environment = "repository--feature-one-a1b2c3"
@@ -187,7 +187,7 @@ func TestWatchScanSemantics(t *testing.T) {
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "codex", "corrupt-rollout.jsonl"), corrupt)
 	setMTime(t, corrupt, old)
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
@@ -259,9 +259,12 @@ func TestInitializeStateAndWatchCancel(t *testing.T) {
 	statePath := filepath.Join(root, "state.json")
 	now := time.Date(2026, 5, 1, 10, 30, 0, 0, time.UTC)
 	var stdout bytes.Buffer
-	state, err := InitializeState(statePath, now, &stdout, false)
+	state, created, err := InitializeState(context.Background(), statePath, now, &stdout, false)
 	if err != nil {
 		t.Fatalf("InitializeState: %v", err)
+	}
+	if !created {
+		t.Fatal("InitializeState did not report creating a missing state file")
 	}
 	wantWatermark := now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano()
 	if state.Version != exportstate.Version || state.ScanWatermarkNS != wantWatermark {
@@ -292,7 +295,7 @@ func TestWatchDrainsClaudeQueue(t *testing.T) {
 		EnqueuedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}},
 	}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	exportedTraceIDs := []string{}
@@ -321,7 +324,7 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	statePath := filepath.Join(root, "langfuse-export-state.json")
 	transcriptPath := filepath.Join(root, "claude-no-tools.jsonl")
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)
-	if err := exportstate.Save(statePath, exportstate.State{Version: exportstate.Version, ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano()}); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, exportstate.State{Version: exportstate.Version, ScanWatermarkNS: time.Date(2026, 5, 4, 11, 59, 0, 0, time.UTC).UnixNano()}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -329,20 +332,32 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	defer cancel()
 	exported := make(chan string, 1)
 	errCh := make(chan error, 1)
+	watchReady := make(chan struct{}, 1)
+	spanCalls := 0
+	scoreCalls := 0
 	go func() {
 		errCh <- WatchSessions(ctx, ScanOptions{
-			Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, PollIntervalSeconds: 0.01, Quiet: true,
+			Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, PollIntervalSeconds: 0.01, Stdout: watcherReadyWriter(watchReady),
 			ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ string) (int, error) {
+				spanCalls++
 				exported <- turn.TraceID
-				cancel()
 				return 202, nil
 			},
-			ExportScores: successfulScores,
+			ExportScores: func(context.Context, agenttrace.Turn, string) error {
+				scoreCalls++
+				return nil
+			},
 		})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-	if err := exportstate.Enqueue(statePath, exportstate.QueueRequest{
+	select {
+	case <-watchReady:
+	case err := <-errCh:
+		t.Fatalf("WatchSessions exited before startup: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchSessions did not finish startup")
+	}
+	if err := exportstate.Enqueue(context.Background(), statePath, exportstate.QueueRequest{
 		Provider: agenttrace.ProviderClaude, SourcePath: transcriptPath, SessionID: "claude-no-tools",
 		CWD: root, EnqueuedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}); err != nil {
@@ -356,8 +371,32 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("WatchSessions did not reload and drain queued Claude request")
 	}
+	deadline := time.NewTimer(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		loaded, err := exportstate.Load(statePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.HasProcessed(traceID) && len(loaded.Queue) == 0 {
+			break
+		}
+		select {
+		case err := <-errCh:
+			t.Fatalf("WatchSessions exited before queue commit: %v", err)
+		case <-deadline.C:
+			t.Fatalf("queued request did not commit: %+v", loaded)
+		case <-ticker.C:
+		}
+	}
+	cancel()
 	if err := <-errCh; !errors.Is(err, context.Canceled) {
 		t.Fatalf("WatchSessions error = %v", err)
+	}
+	if spanCalls != 1 || scoreCalls != 1 {
+		t.Fatalf("span calls=%d score calls=%d, want one each", spanCalls, scoreCalls)
 	}
 	loaded, err := exportstate.Load(statePath)
 	if err != nil {
@@ -368,11 +407,120 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	}
 }
 
+type watcherReadyWriter chan struct{}
+
+func (writer watcherReadyWriter) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte("watching ")) {
+		select {
+		case writer <- struct{}{}:
+		default:
+		}
+	}
+	return len(data), nil
+}
+
 func TestWaitBetweenExportsHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := waitBetweenExports(ctx, 60); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitBetweenExports error = %v, want context canceled", err)
+	}
+}
+
+func TestWatchLockBackoffLogThrottleAndShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	previous := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: 123, ProcessedTraceIDs: []string{"kept"}}
+	var stderr, stdout bytes.Buffer
+	fakeNow := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	var delays []time.Duration
+	policy := stateLockRetryPolicy{
+		initialDelay: time.Second,
+		maximumDelay: 30 * time.Second,
+		logInterval:  time.Minute,
+		now:          func() time.Time { return fakeNow },
+		wait: func(ctx context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			fakeNow = fakeNow.Add(delay)
+			if len(delays) == 7 {
+				cancel()
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	operationCalls := 0
+	got, err := retryStateOperationWithPolicy(ctx, ScanOptions{StatePath: "/tmp/state.json", Stdout: &stdout, Stderr: &stderr}, previous, func() (exportstate.State, error) {
+		operationCalls++
+		return exportstate.State{}, &exportstate.LockBusyError{Path: "/tmp/state.json.lock", Waited: 2 * time.Second}
+	}, policy)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("retry result error = %v, want context canceled", err)
+	}
+	if operationCalls != 7 {
+		t.Fatalf("operation calls = %d, want 7", operationCalls)
+	}
+	wantDelays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
+	if len(delays) != len(wantDelays) {
+		t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+	}
+	for index := range wantDelays {
+		if delays[index] != wantDelays[index] {
+			t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+		}
+	}
+	if got.ScanWatermarkNS != previous.ScanWatermarkNS || !got.HasProcessed("kept") {
+		t.Fatalf("canceled retry changed prior state: %+v", got)
+	}
+	if count := strings.Count(stderr.String(), "ERROR: export state lock busy"); count != 2 {
+		t.Fatalf("contention log count = %d, want first timeout and one after 60 seconds: %s", count, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("canceled retry reported recovery: %s", stdout.String())
+	}
+
+	fakeNow = time.Date(2026, 9, 21, 13, 0, 0, 0, time.UTC)
+	delays = nil
+	stderr.Reset()
+	stdout.Reset()
+	policy.wait = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		fakeNow = fakeNow.Add(delay)
+		return nil
+	}
+	recoveryCalls := 0
+	got, err = retryStateOperationWithPolicy(context.Background(), ScanOptions{StatePath: "/tmp/state.json", Stdout: &stdout, Stderr: &stderr}, previous, func() (exportstate.State, error) {
+		recoveryCalls++
+		if recoveryCalls < 3 {
+			return exportstate.State{}, &exportstate.LockBusyError{Path: "/tmp/state.json.lock", Waited: 2 * time.Second}
+		}
+		return exportstate.State{Version: exportstate.Version, ScanWatermarkNS: 456}, nil
+	}, policy)
+	if err != nil || got.ScanWatermarkNS != 456 || recoveryCalls != 3 {
+		t.Fatalf("successful recovery state=%+v calls=%d err=%v", got, recoveryCalls, err)
+	}
+	if len(delays) != 2 || delays[0] != time.Second || delays[1] != 2*time.Second {
+		t.Fatalf("successful recovery delays = %v, want [1s 2s]", delays)
+	}
+	if !strings.Contains(stdout.String(), "export state lock recovered path=/tmp/state.json waited=3s") {
+		t.Fatalf("recovery log = %q", stdout.String())
+	}
+	secondOperationCalls := 0
+	secondDelays := make([]time.Duration, 0, 1)
+	policy.wait = func(_ context.Context, delay time.Duration) error {
+		secondDelays = append(secondDelays, delay)
+		fakeNow = fakeNow.Add(delay)
+		return nil
+	}
+	_, err = retryStateOperationWithPolicy(context.Background(), ScanOptions{StatePath: "/tmp/state.json", Quiet: true}, got, func() (exportstate.State, error) {
+		secondOperationCalls++
+		if secondOperationCalls == 1 {
+			return exportstate.State{}, &exportstate.LockBusyError{Path: "/tmp/state.json.lock", Waited: 2 * time.Second}
+		}
+		return got, nil
+	}, policy)
+	if err != nil || len(secondDelays) != 1 || secondDelays[0] != time.Second {
+		t.Fatalf("retry delay did not reset after recovery: delays=%v err=%v", secondDelays, err)
 	}
 }
 
@@ -385,7 +533,7 @@ func TestWatchLogs(t *testing.T) {
 	now := time.Date(2026, 5, 1, 10, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-30*time.Second))
 	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -403,7 +551,7 @@ func TestWatchLogs(t *testing.T) {
 	}
 
 	state = exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-2 * time.Minute).UnixNano()}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -439,7 +587,7 @@ func TestEvalHookQueueDrainLatency(t *testing.T) {
 		Provider: agenttrace.ProviderClaude, SourcePath: transcriptPath, SessionID: "claude-no-tools",
 		EnqueuedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}}}
-	if err := exportstate.Save(statePath, state); err != nil {
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

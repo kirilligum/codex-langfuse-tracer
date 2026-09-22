@@ -46,6 +46,18 @@ go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'Test
 go test ./internal/watch -count=1
 ```
 
+Export state lock recovery and upgrade transaction checks:
+
+```sh
+go test ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
+go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
+go test ./test -run 'TestInstallUninstallScripts|TestInstallReportsPostStopFailureState|TestDocsWorkspaceIdentity|TestDocsExportStateLockUpgrade' -count=1
+```
+
+These cover killed lock owners, partial writes, serialized subprocess writers, startup and checkpoint retries, hook non-acknowledgement, SIGTERM cancellation, staged installer promotion, and version 3 state preservation. They establish process-crash recovery on the tested local filesystem; they do not certify power-loss durability or mixed legacy/new writer operation.
+
+The focused regression names are `TestStateLockRecoversAfterKilledOwner`, `TestStateLockDoesNotStealLiveOwner`, `TestStateUpdatesSerializeAcrossProcesses`, `TestStateInterruptedWritePreservesCommittedJSON`, `TestStateCommitSurvivesKillBeforeUnlock`, `TestStateLoadOrCreatePreservesEnqueueInEitherOrder`, `TestStateInvalidJSONIsNeverReset`, `TestStateWriteErrorsPreserveCommittedFile`, `TestStateLockCancellationAndCallbackFailureRelease`, `TestWatchWaitsForStateWithoutRestarting`, `TestWatchRetriesPendingCheckpointOnly`, `TestWatchRetriesQueueRemovalAfterCheckpoint`, `TestWatchLockBackoffLogThrottleAndShutdown`, `TestClaudeHookLockTimeoutIsNotAcknowledged`, and `TestCLISignalCancelsStateWait`.
+
 Completed-turn and canonical observation contracts:
 
 ```sh
@@ -125,7 +137,7 @@ go test ./internal/watch -run '^TestWatchEnvironmentPersistsOnlyAfterSuccessfulS
 go test ./test -run '^TestDocsWorkspaceIdentity$' -count=1
 ```
 
-After an explicitly authorized deployment and the destructive older-state reset documented in `README.md`, verify that startup created only version 3 state:
+After deployment, confirm version 3 state is present and preserved through the lock-only update. Do not perform the older-schema destructive reset for a version 3 lock-protocol upgrade:
 
 ```sh
 jq -e '.version == 3' ~/.codex/langfuse-export-state.json

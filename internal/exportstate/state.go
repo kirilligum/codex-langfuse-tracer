@@ -1,7 +1,9 @@
 package exportstate
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,11 +35,11 @@ func Load(path string) (*State, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read export state %s: %w", path, err)
 	}
 	var state State
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode export state %s: %w", path, err)
 	}
 	if state.Version != Version {
 		return nil, fmt.Errorf("unsupported watch state version in %s", path)
@@ -46,33 +48,57 @@ func Load(path string) (*State, error) {
 	return &state, nil
 }
 
-func Save(path string, state State) error {
+func saveLocked(path string, state State) error {
+	return writeStateFile(path, state, writeStateTemp, os.Rename)
+}
+
+func writeStateTemp(path string, raw []byte, mode os.FileMode) (err error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if err := file.Chmod(mode); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	n, writeErr := file.Write(raw)
+	if writeErr == nil && n != len(raw) {
+		writeErr = fmt.Errorf("short write to export state temporary file: wrote %d of %d bytes", n, len(raw))
+	}
+	return errors.Join(writeErr, file.Close())
+}
+
+func writeStateFile(path string, state State, writeTemp func(string, []byte, os.FileMode) error, rename func(string, string) error) error {
 	if state.Version != 0 && state.Version != Version {
 		return fmt.Errorf("unsupported watch state version in %s", path)
 	}
 	state.Version = Version
 	state.normalize()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	tmpPath := filepath.Join(filepath.Dir(path), filepath.Base(path)+".tmp")
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
-		return err
+	if err := writeTemp(tmpPath, raw, 0o600); err != nil {
+		return fmt.Errorf("write export state temporary file %s: %w", tmpPath, err)
 	}
-	return os.Rename(tmpPath, path)
+	if err := rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace export state %s: %w", path, err)
+	}
+	return nil
 }
 
-func Update(path string, mutate func(*State) error) (State, error) {
-	unlock, err := lock(path)
+func Update(ctx context.Context, path string, mutate func(*State) error) (result State, err error) {
+	file, err := acquireLock(ctx, path)
 	if err != nil {
 		return State{}, err
 	}
-	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return State{}, errors.Join(err, file.Close())
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 
 	state, err := Load(path)
 	if err != nil {
@@ -82,12 +108,53 @@ func Update(path string, mutate func(*State) error) (State, error) {
 		state = &State{Version: Version}
 	}
 	if err := mutate(state); err != nil {
-		return State{}, err
+		return State{}, fmt.Errorf("update export state %s: %w", path, err)
 	}
-	if err := Save(path, *state); err != nil {
+	if err := saveLocked(path, *state); err != nil {
 		return State{}, err
 	}
 	return *state, nil
+}
+
+func LoadOrCreate(ctx context.Context, path string, initial State) (result State, created bool, err error) {
+	if initial.Version != 0 && initial.Version != Version {
+		return State{}, false, fmt.Errorf("unsupported watch state version in %s", path)
+	}
+	file, err := acquireLock(ctx, path)
+	if err != nil {
+		return State{}, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return State{}, false, errors.Join(err, file.Close())
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+
+	state, err := Load(path)
+	if err != nil {
+		return State{}, false, err
+	}
+	if state != nil {
+		return *state, false, nil
+	}
+	if err := saveLocked(path, initial); err != nil {
+		return State{}, false, err
+	}
+	initial.Version = Version
+	initial.normalize()
+	return initial, true, nil
+}
+
+func Save(ctx context.Context, path string, state State) error {
+	if state.Version != 0 && state.Version != Version {
+		return fmt.Errorf("unsupported watch state version in %s", path)
+	}
+	_, err := Update(ctx, path, func(current *State) error {
+		*current = state
+		return nil
+	})
+	return err
 }
 
 func (s State) HasProcessed(traceID string) bool {
@@ -116,7 +183,7 @@ func (s *State) SetPendingScore(traceID, environment string) {
 	s.PendingScores[traceID] = environment
 }
 
-func Enqueue(path string, request QueueRequest) error {
+func Enqueue(ctx context.Context, path string, request QueueRequest) error {
 	if request.Provider == "" || request.SourcePath == "" {
 		return fmt.Errorf("queue request requires provider and source_path")
 	}
@@ -127,7 +194,7 @@ func Enqueue(path string, request QueueRequest) error {
 	if err != nil {
 		return fmt.Errorf("queue request has invalid enqueued_at: %w", err)
 	}
-	_, err = Update(path, func(state *State) error {
+	_, err = Update(ctx, path, func(state *State) error {
 		if state.ScanWatermarkNS == 0 {
 			state.ScanWatermarkNS = enqueuedAt.UnixNano()
 		}
@@ -188,22 +255,6 @@ func uniqueQueue(values []QueueRequest) []QueueRequest {
 		return result[i].EnqueuedAt < result[j].EnqueuedAt
 	})
 	return result
-}
-
-func lock(path string) (func(), error) {
-	lockPath := path + ".lock"
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_ = file.Close()
-			return func() { _ = os.Remove(lockPath) }, nil
-		}
-		if !os.IsExist(err) || time.Now().After(deadline) {
-			return nil, err
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 func uniqueSorted(values []string) []string {
