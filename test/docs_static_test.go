@@ -65,6 +65,8 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs",
 		"TestWatchSpanCheckpointFailureLogs",
 		"TestEvalWatchExportLatency",
+		"LIVE_LANGFUSE_CODEX_SMOKE_TRACE_ID",
+		"TestLiveCodexSmokeTrace",
 	} {
 		if !strings.Contains(testingDoc, required) {
 			t.Fatalf("TESTING missing completed-turn command fragment %q", required)

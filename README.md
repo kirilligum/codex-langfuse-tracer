@@ -187,7 +187,7 @@ Run the built-in diagnostics:
 Run a tiny Codex turn:
 
 ```sh
-codex exec --model gpt-5.4-mini -c model_reasoning_effort=low --sandbox read-only --skip-git-repo-check "Reply exactly: langfuse-smoke-test"
+codex exec -c model_reasoning_effort=low --sandbox read-only --skip-git-repo-check "Reply exactly: langfuse-smoke-test"
 ```
 
 Open Langfuse, go to Tracing, and search for `langfuse-smoke-test` or `codex.turn.transcript`.

@@ -107,6 +107,43 @@ func TestValidateClaudeObservationRows(t *testing.T) {
 	}
 }
 
+func TestValidateCodexObservationRows(t *testing.T) {
+	t.Parallel()
+
+	root := Observation{ID: "root-1", TraceID: "trace-1", IsRootObservation: true, Name: "codex.agent", Input: `"user input"`, Output: `"assistant output"`}
+	transcript := Observation{ID: "generation-1", TraceID: "trace-1", Name: "codex.transcript"}
+	tool := Observation{ID: "tool-1", TraceID: "trace-1", Name: "codex.tool.command"}
+	for _, test := range []struct {
+		name         string
+		observations []Observation
+		wantRoots    int
+		wantTrans    int
+		wantErr      string
+	}{
+		{name: "valid trace", observations: []Observation{root, transcript, tool}, wantRoots: 1, wantTrans: 1},
+		{name: "duplicate observation ID", observations: []Observation{root, transcript, transcript}, wantErr: "repeated observation ID"},
+		{name: "duplicate roots", observations: []Observation{root, {ID: "root-2", TraceID: "trace-1", IsRootObservation: true, Name: "codex.agent", Input: `"input"`, Output: `"output"`}, transcript}, wantRoots: 2, wantTrans: 1},
+		{name: "duplicate transcripts", observations: []Observation{root, transcript, {ID: "generation-2", TraceID: "trace-1", Name: "codex.transcript"}}, wantRoots: 1, wantTrans: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			roots, transcripts, err := validateCodexObservationRows("trace-1", test.observations)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("validation error = %v, want substring %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateCodexObservationRows: %v", err)
+			}
+			if roots != test.wantRoots || transcripts != test.wantTrans {
+				t.Fatalf("counts = roots:%d transcripts:%d, want roots:%d transcripts:%d", roots, transcripts, test.wantRoots, test.wantTrans)
+			}
+		})
+	}
+}
+
 // TEST-535
 func TestClaudeSmokeTraceRejectsDuplicatePaginatedIDs(t *testing.T) {
 	t.Parallel()
@@ -236,12 +273,12 @@ func TestObservationClientPassesV2Filter(t *testing.T) {
 }
 
 func TestObservationClientHTTPFailures(t *testing.T) {
-	t.Parallel()
-
+	// httptest.Server.Close calls CloseIdleConnections on http.DefaultTransport.
+	// Keep these subtests serial so one mock server cannot interrupt another
+	// subtest's request through the shared default HTTP client.
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError} {
 		status := status
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(status)
 			}))

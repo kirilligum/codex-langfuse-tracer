@@ -3,7 +3,7 @@
 - Project: `codex-langfuse-tracer`
 - Date: 2026-09-22
 - Source baseline inspected: `c6a086e001e9a42a73e047fae8cc9fbbf17ce2ba`
-- Status: P0 through P4 implementation and local gates complete; authorized P5 publication and deployment in progress
+- Status: P0 through P5 complete. Published runtime revision is deployed; a separate host-wide OOM availability risk is recorded below.
 - Intended executor: a coding model such as GPT-5.6 Luna, working one phase at a time
 - Incident record: [duplicate observations RCA](duplicate-observations-rca-20260922.md)
 - Operational owner: [multi-machine tracing handoff](multi-machine-tracing-gateway-handoff.md)
@@ -261,17 +261,28 @@ On supported Linux, all three new assertion names must be listed and the kill te
 
 ### P5. Deployment, when included in the execution request
 
-Creating this plan does not deploy it. If the later execution request includes deployment, continue here; otherwise report “implemented locally; not deployed” after P4. Local tests do not imply live verification.
+The execution request includes deployment, so complete this phase after P4. Local tests do not imply live verification.
 
 1. Run the complete current Production Gate in `TESTING.md`. Record candidate source and prior installed/running revisions without printing secrets.
 2. Confirm version 3 state and preserve its data. Install through `install.sh`; do not remove or restore state or the persistent lock sidecar.
 3. Verify the managed user service is loaded, enabled, active, and running. Record main PID/restart count, installed build revision, and matching installed/running `/proc/<main-pid>/exe` digests. Recheck PID if it changes.
 4. Use one fresh benign canary through exactly one automatic path. Prefer corrected CHECK-001 when the Claude CLI is installed. If it is unavailable, use the documented Codex automatic canary and record Claude CHECK-001 as unperformed. Do not manually replay the canary or run a probe that exports the same trace again.
-5. Confirm new success log -> existing checkpoint-success log -> scored log, durable processed state, and expected remote shape through existing read-only verification. Record identities/counts at inspection time without claiming exactly once.
+5. Confirm new success log -> existing checkpoint-success log -> scored log, durable processed state, and expected remote shape through the provider-matched read-only smoke test (`TestLiveClaudeSmokeTrace` or `TestLiveCodexSmokeTrace`). Record identities/counts at inspection time without claiming exactly once.
 6. Keep deliberate kills, broken acknowledgements, and checkpoint faults confined to P3 tests; do not inject them into production.
 7. Update the canonical handoff with exact tested/deployed revision, service evidence, canary outcome, and limitations. Publish/merge only within the execution request's authorization.
 
 **Rollback:** preserve current version 3 state and sidecar. Reinstall a known-good revision containing the `827a66c` advisory-lock correction; the incident's `2b8b915` build is such a baseline. Never roll back to the exclusive-create lock protocol, delete progress, or restore older state that could cause replay. Reverting these additive diagnostics needs no migration. A rollback restart still has the documented acceptance/checkpoint ambiguity.
+
+### Post-deployment checks and remaining risks
+
+- Keep monitoring for `span_checkpoint_unconfirmed`; it means the remote send callback succeeded but local checkpointing failed, so retry can create duplicate observations.
+- During this rollout, kernel logs recorded two global-OOM events at 13:49 and 14:00 PDT that killed the watcher; systemd restarted it both times. At the last check the service was active/enabled with `NRestarts=2`, `--doctor` had zero recent errors, and version 3 state was intact. The kernel record does not establish which workload initiated the host-wide pressure. A contemporaneous snapshot showed swap exhausted. No unrelated service was stopped and no host memory limit was changed.
+- Before future heavy tests or claiming sustained availability, recheck global RAM/swap and tmpfs use, inspect owner-managed process/container budgets, and monitor the watcher RSS and restart counter. Do not raise or lower service limits without an evidence-backed capacity decision.
+- `span_export_succeeded`, `exported`, and `scored` describe local callback/checkpoint steps. They do not prove lasting remote visibility or exactly-once delivery.
+- Live smoke validation observes the current paginated API snapshot and five seconds of stability. It cannot establish that no historical duplicate existed or that the backend never merged rows.
+- Run Claude CHECK-001 on a host with Claude Code and its existing Stop hook before claiming live Claude hook acceptance. Keep any manual transcript check on a distinct, unqueued session.
+- Version 3 state, the persistent `.lock` sidecar, and at-least-once delivery remain part of the contract. Never reset state to clear an ambiguous delivery.
+- Reconciliation remains independent and unimplemented; refresh its stale read/visibility/error assumptions before adding a resend path.
 
 ## 5. Failure handling
 
@@ -282,20 +293,23 @@ Creating this plan does not deploy it. If the later execution request includes d
 | Diagnostics alter send/score counts | Correct implementation; logging must not affect control flow. |
 | A new requirement demands strict duplicate prevention | Report scope change. Neither preflight nor gateway admission alone establishes that contract. |
 | Manual Claude live smoke cannot be isolated from hooks | Leave optional check unperformed with reason; automatic validation remains independent. |
+| `TestObservationClientHTTPFailures` intermittently reports `http: CloseIdleConnections called` | Keep HTTP-status assertions unchanged. `httptest.Server.Close` closes idle connections on the shared default transport, so run these tiny status subtests serially; verify with repeated package runs. |
+| The configured ChatGPT account rejects a pinned `gpt-5.4-mini` canary | Use Codex's configured default model in the smoke command with low reasoning effort. Do not reuse the incomplete rejected session or manually export it. |
+| Claude CLI is unavailable on the deployment host | Mark Claude CHECK-001 unperformed. A Codex automatic canary validates the shared watcher/OTLP delivery path but does not certify Claude parsing or hooks. |
 | Older state or legacy writer found during rollout | Follow existing lock-upgrade instructions; do not improvise deletion or reclamation. |
 
 ## 6. Completion checklist
 
-- [ ] Manual session scope, `--turn-id`, and watcher independence documented accurately.
-- [ ] CHECK-001 uses automatic export only; optional manual validation uses another unqueued session.
-- [ ] Both diagnostics follow section 3, including quiet behavior and bounded content.
-- [ ] Contention retries persistence only; score retries send no spans.
-- [ ] Real lost-ack HTTP and subprocess-death tests expose the retained replay window.
-- [ ] New test names exist and execute; repeated/race runs pass on Linux.
-- [ ] Version 3 state and advisory locking unchanged.
-- [ ] Reconciliation has no artificial dependency and remains accurately marked unimplemented/outdated.
-- [ ] Full local checks pass; diff has no unintended production changes.
-- [ ] Final report separates local implementation, publication, deployment, live evidence, and limitations.
+- [x] Manual session scope, `--turn-id`, and watcher independence documented accurately.
+- [x] CHECK-001 documents the automatic export path only; optional manual validation uses another unqueued session.
+- [x] Both diagnostics follow section 3, including quiet behavior and bounded content.
+- [x] Contention retries persistence only; score retries send no spans.
+- [x] Real lost-ack HTTP and subprocess-death tests expose the retained replay window.
+- [x] New test names exist and execute; repeated/race runs pass on Linux.
+- [x] Version 3 state and advisory locking unchanged.
+- [x] Reconciliation has no artificial dependency and remains accurately marked unimplemented/outdated.
+- [x] Full local checks pass; diff has no unintended production changes.
+- [x] Final report separates local implementation, publication, deployment, live evidence, and limitations.
 
 ## 7. Evidence record and implementation prompt
 
@@ -304,11 +318,11 @@ This plan was first written as an unexecuted handoff. The table below records ch
 | Phase | Revision | Checks actually run | Result / limitations |
 | --- | --- | --- | --- |
 | P0 baseline | `c6a086e001e9a42a73e047fae8cc9fbbf17ce2ba` | Targeted export-state, watcher startup/checkpoint, and score-retry regressions; documentation/CLI regression sets | PASS. The full suite later exposed that a docs assertion used wording different from the still-valid README statement; the assertion now protects the actual sentence and its focused test passes. |
-| P1 instructions and live validator | Worktree based on `c6a086e` | Manual Codex CLI/export checks; focused docs checks; `TestValidateClaudeObservationRows`, duplicate-pagination test, and env-gated live-test compilation | PASS local. Live Claude CHECK-001 is unavailable because `claude` is not installed; env-gated live checks were skipped. |
+| P1 instructions and live validator | Worktree based on `c6a086e` | Manual Codex CLI/export checks; focused docs checks; Claude and Codex observation validators; duplicate-pagination test; env-gated tests | PASS. Claude CHECK-001 is unavailable because `claude` is not installed. The README smoke command now uses the configured Codex model rather than pinning an unsupported model. |
 | P2 diagnostics | Worktree based on `c6a086e` | Watcher log, quiet-mode, canceled-checkpoint, contention, and score-only retry regressions; focused set with `-race` | PASS. State version and retry flow unchanged. |
 | P3 failure tests | Worktree based on `c6a086e` | Real OTLP lost-acknowledgement and Unix subprocess-kill tests `-count=5`; same failure tests with `-race`; Langfuse validator/pagination regressions | PASS. Tests use loopback mocks and temporary state only. The OTLP SDK prints its expected canceled-loopback request diagnostic. |
-| P4 local handoff | Worktree based on `c6a086e` | `go test ./... -count=1`; full coverage run; both 10-second codextrace fuzz targets; race checks for exportstate, Claude hook, watcher, and CLI; Claude parser/hook/state checks; five serial watcher latency repetitions; `git diff --check` | PASS. The coverage command reported per-package results (cmd 61.8%, watcher 50.4%, Langfuse 51.2%); the repository defines no aggregate coverage threshold. |
-| P5 publication and deployment | Authorized; underway | Pre-deploy doctor: health/auth OK, target project `codex-local`, watcher active, queue 0, processed 1017, recent errors 0; version 3 state preserved | Deployment, post-install digest, canary, and remote-shape checks remain pending. |
+| P4 local handoff | Worktree based on `c6a086e` | `go test ./... -count=1`; full coverage run; both 10-second codextrace fuzz targets; race checks for exportstate, Claude hook, watcher, CLI, and Langfuse; Claude parser/hook/state checks; five serial watcher latency repetitions; `git diff --check`; `TestObservationClientHTTPFailures -count=50`; `go test ./internal/langfuse -count=10` | PASS. A first full run exposed a parallel `httptest.Server.Close`/shared-transport race in the HTTP status test. Its assertions were retained and the four mock status cases serialized; stress, full-suite, and race runs passed. Coverage is reported per package, with no aggregate threshold. |
+| P5 publication and deployment | Runtime revision `78bfafeeb27f619e4df6f9af01cb768c9dacc55c` on `origin/main` | `./install.sh`; pre/post doctor; version 3 state; installed and running executable SHA-256 `a7cb113f601832f3faf7fdcdc927c71b0e29ff8ed4deac6bdad301a2547f9e93`; build VCS revision matches `78bfafe`; Codex automatic canary followed by read-only `TestLiveCodexSmokeTrace` | PASS for publication, install, state preservation, and current remote shape: one root, one transcript, two total observations, unique IDs, stable for 5 seconds; canary trace is processed. Claude CHECK-001 is unperformed because the CLI is absent. Two host-wide OOM events killed and auto-restarted the watcher; it is currently active with `NRestarts=2`, doctor reports zero recent errors, and state is intact. The OOM trigger remains unidentified; see remaining risks. |
 
 Suggested prompt:
 

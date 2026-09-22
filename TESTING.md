@@ -116,9 +116,12 @@ Langfuse OTLP projection and trace verification:
 
 ```sh
 go test ./internal/langfuse -count=1
+LIVE_LANGFUSE_CODEX_SMOKE_TRACE_ID="<trace-id>" go test ./internal/langfuse -run '^TestLiveCodexSmokeTrace$' -count=1 -v
 ```
 
 `TestTraceVerificationClient` models the v2 API's raw serialized I/O strings, including delayed output visibility. `TestObservationTextMatchesSerializedStringOnly` verifies exactly one JSON string decoding step and rejects missing, null, structured, malformed, mismatched, and unencoded values. Literal user quotes and equivalent JSON escapes retain their meaning. The live completed-trace check uses the same comparison contract.
+
+`TestLiveCodexSmokeTrace` is a read-only live check for one already-exported Codex trace. It reads all observation pages, rejects repeated observation IDs, requires exactly one `codex.agent` root and `codex.transcript` generation, verifies non-empty serialized root input/output, and requires the row IDs/names/counts to remain stable for five seconds. A current snapshot does not establish historical uniqueness or a backend-wide exactly-once guarantee.
 
 Count metadata and Langfuse projection checks:
 
@@ -187,6 +190,10 @@ go test ./internal/codextrace -run '^$' -fuzz=FuzzExportTextRedactsSentinels -fu
 Every new fixture should cover a clear behavior category, avoid real secrets, and keep raw OTLP transport fields out of golden files.
 
 ## Manual Checks
+
+For a fresh Codex turn that the automatic watcher has already scored, run the read-only Langfuse check against its trace ID:
+
+Use the `LIVE_LANGFUSE_CODEX_SMOKE_TRACE_ID` command above with the trace ID from the watcher's `scored` log line. Do not manually export the turn. The test uses the configured project's read-only observation API and does not create or modify a trace.
 
 CHECK-001 validates the automatic Claude hook-to-watcher path. Use the cheapest Claude model available in the installed CLI, for example `haiku`. Do not manually export this transcript.
 
