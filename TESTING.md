@@ -222,6 +222,17 @@ Manual CLI validation is a separate optional check using a different transcript/
 
 Before publishing a release or public demo, run:
 
+After a Codex rollout OOM or a parser memory change, run the optional large-rollout check against the affected source and current state:
+
+```sh
+go test -c -o /tmp/codex-langfuse-watch-live.test ./internal/watch
+CODEX_LANGFUSE_LARGE_ROLLOUT_PATH="/path/to/large-rollout.jsonl" \
+CODEX_LANGFUSE_WATCH_STATE_PATH="$HOME/.codex/langfuse-export-state.json" \
+/usr/bin/time -v /tmp/codex-langfuse-watch-live.test -test.run '^TestLiveCodexLargeRolloutFilteredScan$' -test.count=1 -test.v
+```
+
+`TestLiveCodexLargeRolloutFilteredScan` requires a rollout of at least 100 MiB. It symlinks the source into a temporary Codex root, reads the supplied version 3 state into memory, and runs the normal watcher scan with local stub callbacks. It makes no Langfuse requests and writes no production state. Record the source size, test outcome, and maximum resident set reported by `/usr/bin/time`; do not include rollout content or trace IDs in reports.
+
 ```sh
 go test ./... -count=1
 go test ./... -coverpkg=./... -coverprofile=/tmp/codex-langfuse-tracer.all.cover

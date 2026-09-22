@@ -18,6 +18,8 @@ This document is the canonical handoff for making one public Langfuse hostname s
 
 **2026-09-22 15:09 PDT P6 execution update:** the implementation now reads rollout records line-by-line, filters processed trace IDs before accumulating turn observations, and leaves the watermark unchanged when parsing fails. The 2,000-turn parser and watcher regressions, malformed-input watermark test, full Go suite, parser/watcher race checks, parser fuzz run, and diff check pass. The code is not yet committed or installed. The old runtime remained active with `NRestarts=85`, unchanged from 15:03 to 15:09; available RAM was 4.6 GiB and swap remained full. This short interval is not the 60-minute post-install availability acceptance. Install the new revision without resetting state, then verify memory while it scans the same eligible large file before running a new canary.
 
+**2026-09-22 P6 large-input validation:** after installing runtime code commit `0912de5c89d93f0edc8f0b43217c2bc4fea57882`, the env-gated `TestLiveCodexLargeRolloutFilteredScan` ran the actual 117,007,638-byte source through `ScanOnce` via a temporary symlink. It used a read-only copy of version 3 production state in memory and set only that temporary state's watermark to make the source eligible; span and score callbacks were local stubs. The scan recognized 1,020 processed traces, invoked zero callbacks, completed in 1.39 seconds, and measured 41,408 KiB maximum RSS. It made no Langfuse requests and did not write production state. This validates the incident input against the new code, not an extended production observation. The new service began with `NRestarts=0`; the required 60-minute window remains pending.
+
 ## Outcome
 
 ### Inputs
