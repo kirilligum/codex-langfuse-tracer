@@ -177,6 +177,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if opts.Watch {
+		// Only the daemon needs a graceful, successful signal shutdown. Hooks
+		// retain normal signal termination even while blocked reading stdin.
+		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
 		err := watch.WatchSessions(ctx, watch.ScanOptions{
 			Root:                config.CodexHome(),
 			StatePath:           opts.StateFile,
@@ -483,8 +487,5 @@ func seconds(value float64) time.Duration {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	exitCode := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
-	stop()
-	os.Exit(exitCode)
+	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }

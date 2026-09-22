@@ -345,7 +345,7 @@ Cost tracking uses Langfuse's model and usage handling. The exporter sends `lang
 
 Langfuse calculates cost. The built-in pricing sync creates source-backed model definitions for supported Codex/OpenAI models and current Claude models: Opus 4.7, Sonnet 4.6, and Haiku 4.5. Claude Code subscription billing is separate from Anthropic API token pricing; these definitions are for Langfuse trace cost columns when Claude records compatible model and usage details.
 
-`install.sh` runs `~/.codex/bin/codex-langfuse-exporter --sync-model-pricing --quiet` before restarting `codex-langfuse-watch.service`. The same setup can be run directly:
+`install.sh` runs its staged exporter with `--sync-model-pricing --quiet` before replacing the installed executable and restarting `codex-langfuse-watch.service`. The same setup can be run directly:
 
 ```sh
 ~/.codex/bin/codex-langfuse-exporter --sync-model-pricing

@@ -89,7 +89,7 @@ These are proposed internal constants, not new CLI or configuration options.
 | Hook enqueue | One bounded acquisition budget, then a nonzero exit with the path and wait duration if still busy. |
 | Logging | Emit an actionable `ERROR:` on the first timeout, then at most once per 60 seconds for that unresolved operation. Include elapsed wait and the next retry delay. Emit one recovery message unless `--quiet` is set. Contention errors remain visible under `--quiet`. |
 | Other errors | Return promptly with the operation/path and underlying error. Do not classify all I/O failures as lock contention. |
-| Shutdown | Wire SIGINT/SIGTERM to `signal.NotifyContext` in `main`, pass it through, and release signal resources before `os.Exit`. Treat watcher context cancellation as a clean stop with exit zero and no `ERROR:` log. Keep hook cancellation unsuccessful when enqueue did not commit. |
+| Shutdown | Wire SIGINT/SIGTERM to `signal.NotifyContext` only in the CLI watch branch and release signal resources when it returns. Treat watcher context cancellation as a clean stop with exit zero and no `ERROR:` log. Hooks retain normal signal termination, including while stdin is blocked; termination cannot acknowledge an uncommitted enqueue. |
 
 Implement retry at the watcher state-operation boundary. If spans have already been accepted and `SetPendingScore` is waiting for the lock, retain that pending mutation and complete it before proceeding to scores. Do not restart `processTurn` or `ScanOnce`. Likewise, wait on the existing `AddProcessed`, queue-removal, or watermark mutation without repeating their preceding side effects. Retain the previous in-memory state until the transaction succeeds, then use the newly loaded and updated state returned by it.
 
@@ -170,7 +170,7 @@ Focused and release-gate commands:
 ```sh
 go test ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
 go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
-go test ./test -run 'TestInstallUninstallScripts|TestInstallReportsPostStopFailureState|TestEvalInstallRuntimeSurface|TestDocs' -count=1
+go test ./test -run 'TestInstallUninstallScripts|TestInstallOrderingAndFailures|TestInstallReportsPostStopFailureState|TestEvalInstallRuntimeSurface|TestDocs' -count=1
 go test ./... -count=1
 go test -p=1 ./internal/watch -run '^(TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency)$' -parallel=1 -count=5 -v
 git diff --check
@@ -208,7 +208,22 @@ These observations were collected before implementation began. Later entries and
 | Model-sync source review | `listModels` and `createModel` construct `/api/public/models` requests. No root request was found in that reviewed call path. |
 | Document checks | Existing diff whitespace check and the new-file whitespace check found no errors; all three relative document links resolve. |
 
-The initial installer failure was first handled with a narrow request classifier, then corrected after review because the sender could not be identified and the allowance could conceal a matching regression. Installer tests now use an explicit fake builder/exporter to test staging, preflight invocation, stop/promotion/restart ordering, and failure preservation without opening a network listener. The production model API and BasicAuth contract remain covered by strict `internal/langfuse` tests that reject every unexpected route. Implementation evidence and final gates are recorded below; this historical planning section is not itself a passing implementation test.
+The initial installer failure was first handled with a narrow request classifier, then with an explicit fake builder/exporter. Review identified that the latter dropped the existing real-executable integration coverage. The correction below restores that coverage while retaining separate tests for command ordering. Neither approach permits unexpected requests in a model API handler. This historical planning section is not itself a passing implementation test.
+
+## Review corrections on 2026-09-22
+
+- The global signal handler could leave a hook blocked indefinitely reading incomplete JSON, even after SIGTERM or SIGINT. The new subprocess regression failed on both signals before the fix. Signal interception now belongs only to the watch branch; hooks retain normal termination. The regression covers incomplete stdin and an enqueue prevented from committing by a live lock, including unchanged state and absence of an acknowledgement. The existing watcher graceful-shutdown regression also passes.
+- `TestInstallUninstallScripts` again invokes the real Go compiler, installer, and exporter. A TLS test server with explicit certificate trust isolates the API from plain HTTP port probes; all requests reaching the handler must satisfy method, path, BasicAuth, and model payload assertions. Fresh installation, upgrade, a real HTTP pricing failure, installed Go build identity, old executable preservation through preflight and stop, unchanged state/lock inode, and uninstall are checked. The stubbed cases remain in `TestInstallOrderingAndFailures`.
+- A successful stubbed ordering test is not equivalent to successful installer integration. Final verification must include both suites and the normal production gate before promotion.
+
+Verification of the corrected implementation:
+
+- `go test ./... -count=1` passed all packages, including the restored integration test.
+- Race checks passed for `internal/exportstate`, `internal/claudehook`, `internal/watch`, `cmd/codex-langfuse-exporter`, and `test`.
+- The coverage gate passed; `go tool cover -func` reported 78.0% aggregate statement coverage.
+- The first 10-second parser fuzz invocation exited with `context deadline exceeded` after 108,265 executions, without a failing-input artifact. The unchanged command rerun in isolation passed with 114,539 executions. The exact cause of the initial deadline error was not established; no parser assertions or fuzz inputs were removed. The redaction fuzz gate passed with 62,440 executions.
+- The Claude parser/hook/state gate passed. All five serial repetitions of both binding latency tests passed; the maximum watcher scan time was 3.225 ms against the 5-second limit.
+- Diff whitespace and installer shell syntax checks passed. The final published revision, installed digest, and runtime acceptance evidence are recorded in the [issue #13 closeout](https://github.com/kirilligum/codex-langfuse-tracer/issues/13).
 
 ## Implementation validation
 
@@ -217,11 +232,11 @@ Local code, documentation, install ordering, and process-crash recovery are impl
 | Check | Result |
 | --- | --- |
 | `go test ./... -count=1` | Passed all packages. |
-| `go test ./... -coverpkg=./... -coverprofile=/tmp/codex-langfuse-tracer.all.cover` | Passed all packages; `./...` statement coverage was 49.1%. |
+| `go test ./... -coverpkg=./... -coverprofile=/tmp/codex-langfuse-tracer.all.cover` | Passed all packages; the `test` package reported 49.1% with `coverpkg=./...`. This per-package figure is not aggregate coverage. |
 | `go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1` | Passed all four packages, including killed-owner, live-owner, and contention recovery cases. |
 | Five serial watcher/hook latency samples | `TestEvalWatchExportLatency` and `TestEvalHookQueueDrainLatency` passed all five repetitions; maximum observed watch scan time was 6.51 ms against the 5 s limit. |
 | Two 10-second `internal/codextrace` fuzz gates | `FuzzParseTurnsDoesNotPanic` and `FuzzExportTextRedactsSentinels` passed. |
-| Installer and documentation tests | Passed fresh install, existing-install ordering, staged preflight invocation, pricing and stop failure preservation, post-stop restart failure reporting, sidecar retention, and lock-upgrade documentation assertions. Installer tests use no HTTP listener; model sync/auth tests strictly reject unexpected API routes. |
+| Installer and documentation tests | At this initial verification, stubbed installer tests passed ordering and failure checks, and model unit tests checked API routes/authentication. The review correction above restores the real-executable integration gate. |
 | `git diff --check`, `bash -n install.sh uninstall.sh` | Passed. |
 
 ## Production deployment and operational acceptance

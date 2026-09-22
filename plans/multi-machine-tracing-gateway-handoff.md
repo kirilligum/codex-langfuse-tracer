@@ -48,6 +48,8 @@ The following is a dated snapshot. Re-run the evidence commands before implement
 
 ### Current runtime evidence commands
 
+The 2026-09-22 export-state recovery update uses a persistent advisory lock, retries contended watcher transactions in the same process, and preserves version 3 state. Graceful signal handling is scoped to the watcher; hooks retain normal termination while reading stdin. Installation stages and preflights the actual executable before stopping the managed watcher and promoting it. The [lock recovery plan](export-state-lock-recovery-plan.md) records the implementation, review corrections, and local gates. The [issue #13 closeout](https://github.com/kirilligum/codex-langfuse-tracer/issues/13) records the published revision, installed artifact identity, state preservation, and scoped runtime acceptance for this update. The older table above remains a dated snapshot.
+
 These commands are implemented today and do not print secret values:
 
 ```sh

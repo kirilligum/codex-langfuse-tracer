@@ -51,10 +51,12 @@ Export state lock recovery and upgrade transaction checks:
 ```sh
 go test ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
 go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
-go test ./test -run 'TestInstallUninstallScripts|TestInstallReportsPostStopFailureState|TestDocsWorkspaceIdentity|TestDocsExportStateLockUpgrade' -count=1
+go test ./test -run 'TestInstallUninstallScripts|TestInstallOrderingAndFailures|TestInstallReportsPostStopFailureState|TestDocsWorkspaceIdentity|TestDocsExportStateLockUpgrade' -count=1
 ```
 
 These cover killed lock owners, partial writes, serialized subprocess writers, startup and checkpoint retries, hook non-acknowledgement, SIGTERM cancellation, staged installer promotion, and version 3 state preservation. They establish process-crash recovery on the tested local filesystem; they do not certify power-loss durability or mixed legacy/new writer operation.
+
+`TestCLIHookSignalsTerminatePendingInputAndEnqueue` exercises SIGINT and SIGTERM in subprocesses after incomplete hook input and before a contended enqueue can commit. Hooks retain normal signal termination; the watcher alone intercepts signals for a graceful exit. `TestInstallUninstallScripts` runs the real installer, compiler, and pricing preflight against a TLS mock with explicit certificate trust and strict method, path, authentication, and model payload checks. Only systemd is stubbed. It covers fresh install, upgrade, pricing failure, promotion ordering, state preservation, and uninstall. `TestInstallOrderingAndFailures` retains fast stubbed checks of individual failure boundaries.
 
 The focused regression names are `TestStateLockRecoversAfterKilledOwner`, `TestStateLockDoesNotStealLiveOwner`, `TestStateUpdatesSerializeAcrossProcesses`, `TestStateInterruptedWritePreservesCommittedJSON`, `TestStateCommitSurvivesKillBeforeUnlock`, `TestStateLoadOrCreatePreservesEnqueueInEitherOrder`, `TestStateInvalidJSONIsNeverReset`, `TestStateWriteErrorsPreserveCommittedFile`, `TestStateLockCancellationAndCallbackFailureRelease`, `TestWatchWaitsForStateWithoutRestarting`, `TestWatchRetriesPendingCheckpointOnly`, `TestWatchRetriesQueueRemovalAfterCheckpoint`, `TestWatchLockBackoffLogThrottleAndShutdown`, `TestClaudeHookLockTimeoutIsNotAcknowledged`, and `TestCLISignalCancelsStateWait`.
 

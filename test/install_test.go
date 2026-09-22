@@ -10,11 +10,9 @@ import (
 	"testing"
 )
 
-// TEST-013
-// TEST-407
-// These tests stub the builder and staged exporter to focus on installer ordering and failure boundaries.
-// Model API authentication and pricing behavior are exercised by internal/langfuse tests.
-func TestInstallUninstallScripts(t *testing.T) {
+// Stubbed commands let this test exercise each installer failure boundary.
+// TestInstallUninstallScripts separately runs real builds and pricing preflight.
+func TestInstallOrderingAndFailures(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
@@ -333,6 +331,9 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
 if [ -n "${INSTALL_EVENT_LOG:-}" ]; then
     printf 'systemctl %s\n' "$*" >> "$INSTALL_EVENT_LOG"
+fi
+if [ -n "${SYSTEMCTL_EXPECT_OLD_BINARY:-}" ] && { [ "${2:-}" = "show" ] || [ "${2:-}" = "stop" ]; }; then
+    cmp "$SYSTEMCTL_EXPECT_OLD_BINARY" "$CODEX_HOME/bin/codex-langfuse-exporter"
 fi
 if [ "${2:-}" = "show" ]; then
     printf '%s\n' "${SYSTEMCTL_LOAD_STATE:-not-found}"
