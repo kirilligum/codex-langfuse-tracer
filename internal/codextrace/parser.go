@@ -1,8 +1,11 @@
 package codextrace
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -11,10 +14,17 @@ import (
 )
 
 func ParseTurns(path string) ([]agenttrace.Turn, error) {
-	raw, err := os.ReadFile(path)
+	return ParseTurnsFiltered(path, nil)
+}
+
+// ParseTurnsFiltered parses a rollout while retaining only turns selected by
+// include. A nil include retains every turn, matching ParseTurns.
+func ParseTurnsFiltered(path string, include func(traceID string) bool) ([]agenttrace.Turn, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 
 	sessionID := ""
 	sessionModel := ""
@@ -22,17 +32,31 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 	currentTurnID := ""
 	turnOrder := []string{}
 	turnsByID := map[string]*agenttrace.Turn{}
+	skippedTurnIDs := map[string]bool{}
 	pendingCalls := map[string]map[string]any{}
 	coveredCallIDs := map[string]bool{}
 
-	for lineNumber, line := range strings.Split(string(raw), "\n") {
+	reader := bufio.NewReader(file)
+	lineNumber := 0
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && readErr != io.EOF {
+			return nil, fmt.Errorf("%s:%d failed to read: %w", path, lineNumber+1, readErr)
+		}
+		if len(line) == 0 && readErr == io.EOF {
+			break
+		}
 		lineNumber++
-		if strings.TrimSpace(line) == "" {
+		line = bytes.TrimSuffix(line, []byte{'\n'})
+		if len(bytes.TrimSpace(line)) == 0 {
+			if readErr == io.EOF {
+				break
+			}
 			continue
 		}
 
 		var item map[string]any
-		if err := json.Unmarshal([]byte(line), &item); err != nil {
+		if err := json.Unmarshal(line, &item); err != nil {
 			return nil, fmt.Errorf("%s:%d is not valid JSON: %w", path, lineNumber, err)
 		}
 
@@ -60,6 +84,10 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 				currentTurnID = ""
 				continue
 			}
+			if skippedTurnIDs[turnID] {
+				currentTurnID = turnID
+				continue
+			}
 			traceID := agenttrace.StringValue(payload["trace_id"])
 			if traceID == "" {
 				traceID = agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID)
@@ -75,6 +103,11 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 				if existing.Model == "" {
 					existing.Model = agenttrace.StringOr(payload["model"], sessionModel)
 				}
+				continue
+			}
+			if include != nil && !include(traceID) {
+				skippedTurnIDs[turnID] = true
+				currentTurnID = turnID
 				continue
 			}
 			turn := &agenttrace.Turn{
@@ -106,6 +139,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 		case "response_item":
 			parseResponseItem(turn, payload, timestamp, pendingCalls, coveredCallIDs)
 		}
+
 	}
 
 	turns := make([]agenttrace.Turn, 0, len(turnOrder))

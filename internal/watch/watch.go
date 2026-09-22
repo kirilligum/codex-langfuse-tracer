@@ -59,7 +59,7 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 	scanStartedNS := opts.Now.UnixNano()
 	watermark := state.ScanWatermarkNS
 	exportedCount := 0
-	exportFailed := false
+	scanFailed := false
 	attemptedExport := false
 
 	var queueExported int
@@ -69,6 +69,10 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 		return state, queueExported, err
 	}
 	exportedCount += queueExported
+	processedTraceIDs := make(map[string]struct{}, len(state.ProcessedTraceIDs))
+	for _, traceID := range state.ProcessedTraceIDs {
+		processedTraceIDs[traceID] = struct{}{}
+	}
 
 	for _, sessionPath := range codextrace.SessionPaths(opts.Root) {
 		info, err := os.Stat(sessionPath)
@@ -83,15 +87,19 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 			continue
 		}
 
-		turns, err := codextrace.ParseTurns(sessionPath)
+		turns, err := codextrace.ParseTurnsFiltered(sessionPath, func(traceID string) bool {
+			_, processed := processedTraceIDs[traceID]
+			return !processed
+		})
 		if err != nil {
+			scanFailed = true
 			if !opts.Quiet {
 				fmt.Fprintf(stderr, "warning: skipped unreadable rollout %s: %v\n", sessionPath, err)
 			}
 			continue
 		}
 		for _, turn := range turns {
-			if state.HasProcessed(turn.TraceID) {
+			if _, processed := processedTraceIDs[turn.TraceID]; processed {
 				continue
 			}
 			var emitted int
@@ -101,11 +109,14 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 				return state, exportedCount + emitted, err
 			}
 			exportedCount += emitted
-			exportFailed = exportFailed || failed
+			scanFailed = scanFailed || failed
+			if state.HasProcessed(turn.TraceID) {
+				processedTraceIDs[turn.TraceID] = struct{}{}
+			}
 		}
 	}
 
-	if !exportFailed {
+	if !scanFailed {
 		state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
 			current.ScanWatermarkNS = scanStartedNS
 		})

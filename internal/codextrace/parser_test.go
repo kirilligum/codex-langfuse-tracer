@@ -2,6 +2,7 @@ package codextrace
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -167,6 +168,47 @@ func TestRepeatedTurnContextPreservesAccumulatedTurn(t *testing.T) {
 	}
 	if len(turn.Observations) != 1 || turn.Observations[0].Name != "codex.message.commentary" {
 		t.Fatalf("observations were not preserved: %+v", turn.Observations)
+	}
+}
+
+func TestParseTurnsFilteredOmitsProcessedTurnObservations(t *testing.T) {
+	t.Parallel()
+
+	const processedTurns = 2000
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	var source strings.Builder
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-filter"}}` + "\n")
+	message := strings.Repeat("old processed commentary ", 24)
+	processedTraceIDs := make(map[string]struct{}, processedTurns)
+	for index := 0; index < processedTurns; index++ {
+		turnID := fmt.Sprintf("processed-%d", index)
+		traceID := agenttrace.StableTraceID(agenttrace.ProviderCodex, "sess-filter", turnID)
+		processedTraceIDs[traceID] = struct{}{}
+		fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":%q,"trace_id":%q}}`+"\n", turnID, traceID)
+		fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":%q}}`+"\n", message)
+	}
+	newTurnID := "new-turn"
+	newTraceID := agenttrace.StableTraceID(agenttrace.ProviderCodex, "sess-filter", newTurnID)
+	fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:03Z","type":"turn_context","payload":{"turn_id":%q,"trace_id":%q}}`+"\n", newTurnID, newTraceID)
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:04Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new input"}]}}` + "\n")
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:05Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"new output"}]}}` + "\n")
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:06Z","type":"event_msg","payload":{"type":"task_complete"}}` + "\n")
+	if err := os.WriteFile(path, []byte(source.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := ParseTurnsFiltered(path, func(traceID string) bool {
+		_, alreadyProcessed := processedTraceIDs[traceID]
+		return !alreadyProcessed
+	})
+	if err != nil {
+		t.Fatalf("ParseTurnsFiltered: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("retained turn count = %d, want only the new turn", len(turns))
+	}
+	if turns[0].TraceID != newTraceID || turns[0].InputText() != "new input" || turns[0].OutputText() != "new output" || !turns[0].Completed {
+		t.Fatalf("new turn was not preserved: %+v", turns[0])
 	}
 }
 

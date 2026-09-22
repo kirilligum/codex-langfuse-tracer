@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +223,9 @@ func TestWatchScanSemantics(t *testing.T) {
 	if !bytes.Contains(stderr.Bytes(), []byte("warning: skipped unreadable rollout")) {
 		t.Fatalf("missing corrupt warning: %s", stderr.String())
 	}
+	if err := os.Remove(corrupt); err != nil {
+		t.Fatalf("remove corrupt fixture after warning: %v", err)
+	}
 
 	state, exported, err = ScanOnce(context.Background(), ScanOptions{
 		Root:             root,
@@ -257,6 +262,102 @@ func TestWatchScanSemantics(t *testing.T) {
 	}
 	if exported != 0 {
 		t.Fatalf("duplicate exported = %d", exported)
+	}
+}
+
+func TestWatchParseErrorDoesNotAdvanceWatermark(t *testing.T) {
+	t.Parallel()
+
+	root, statePath, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 5, 1, 10, 1, 0, 0, time.UTC)
+	watermark := now.Add(-time.Minute).UnixNano()
+	setMTime(t, rolloutPath, now.Add(-2*time.Minute))
+	corrupt := filepath.Join(filepath.Dir(rolloutPath), "rollout-corrupt.jsonl")
+	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "codex", "corrupt-rollout.jsonl"), corrupt)
+	setMTime(t, corrupt, now.Add(-30*time.Second))
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+
+	state, exported, err := ScanOnce(context.Background(), ScanOptions{
+		Root:      root,
+		StatePath: statePath,
+		Now:       now,
+		Stderr:    &stderr,
+	}, state)
+	if err != nil {
+		t.Fatalf("ScanOnce: %v", err)
+	}
+	if exported != 0 || state.ScanWatermarkNS != watermark {
+		t.Fatalf("corrupt rollout advanced scan: exported=%d watermark=%d want=%d", exported, state.ScanWatermarkNS, watermark)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("warning: skipped unreadable rollout")) {
+		t.Fatalf("missing corrupt-rollout diagnostic: %s", stderr.String())
+	}
+}
+
+func TestWatchFiltersProcessedTurnsBeforeRetainingObservations(t *testing.T) {
+	t.Parallel()
+
+	const processedTurns = 2000
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 5, 1, 10, 1, 0, 0, time.UTC)
+	var source strings.Builder
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"sess-watch-filter"}}` + "\n")
+	message := strings.Repeat("already processed response ", 24)
+	processedTraceIDs := make([]string, 0, processedTurns)
+	for index := 0; index < processedTurns; index++ {
+		turnID := fmt.Sprintf("processed-%d", index)
+		traceID := agenttrace.StableTraceID(agenttrace.ProviderCodex, "sess-watch-filter", turnID)
+		processedTraceIDs = append(processedTraceIDs, traceID)
+		fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:01Z","type":"turn_context","payload":{"turn_id":%q,"trace_id":%q}}`+"\n", turnID, traceID)
+		fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":%q}}`+"\n", message)
+	}
+	newTurnID := "new-turn"
+	newTraceID := agenttrace.StableTraceID(agenttrace.ProviderCodex, "sess-watch-filter", newTurnID)
+	fmt.Fprintf(&source, `{"timestamp":"2026-05-01T10:00:03Z","type":"turn_context","payload":{"turn_id":%q,"trace_id":%q}}`+"\n", newTurnID, newTraceID)
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:04Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new input"}]}}` + "\n")
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:05Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"new output"}]}}` + "\n")
+	source.WriteString(`{"timestamp":"2026-05-01T10:00:06Z","type":"event_msg","payload":{"type":"task_complete"}}` + "\n")
+	if err := os.WriteFile(rolloutPath, []byte(source.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setMTime(t, rolloutPath, now.Add(-30*time.Second))
+	sort.Strings(processedTraceIDs)
+	state := exportstate.State{
+		Version:           exportstate.Version,
+		ScanWatermarkNS:   now.Add(-time.Minute).UnixNano(),
+		ProcessedTraceIDs: processedTraceIDs,
+	}
+	spanCalls := 0
+	scoreCalls := 0
+	state, exported, err := ScanOnce(context.Background(), ScanOptions{
+		Root:             root,
+		Now:              now,
+		Quiet:            true,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(_ context.Context, turn agenttrace.Turn, _ string) (int, error) {
+			spanCalls++
+			if turn.TraceID != newTraceID {
+				t.Errorf("unexpected span export for trace %s", turn.TraceID)
+			}
+			return 200, nil
+		},
+		ExportScores: func(_ context.Context, turn agenttrace.Turn, _ string) error {
+			scoreCalls++
+			if turn.TraceID != newTraceID {
+				t.Errorf("unexpected score export for trace %s", turn.TraceID)
+			}
+			return nil
+		},
+	}, state)
+	if err != nil {
+		t.Fatalf("ScanOnce: %v", err)
+	}
+	if exported != 1 || spanCalls != 1 || scoreCalls != 1 || !state.HasProcessed(newTraceID) {
+		t.Fatalf("processed-turn filtering failed: exported=%d spans=%d scores=%d state=%+v", exported, spanCalls, scoreCalls, state)
 	}
 }
 
