@@ -3,111 +3,44 @@ package test
 import (
 	"bytes"
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 )
 
 // TEST-013
 // TEST-407
+// These tests stub the builder and staged exporter to focus on installer ordering and failure boundaries.
+// Model API authentication and pricing behavior are exercised by internal/langfuse tests.
 func TestInstallUninstallScripts(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
-	goModCacheOutput, err := exec.Command("go", "env", "GOMODCACHE").Output()
-	if err != nil {
-		t.Fatalf("go env GOMODCACHE: %v", err)
-	}
-	goModCache := strings.TrimSpace(string(goModCacheOutput))
 	binDir := filepath.Join(home, "fakebin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	systemctlLog := filepath.Join(home, "systemctl.log")
+	installEventLog := filepath.Join(home, "install.events")
 	systemctl := filepath.Join(binDir, "systemctl")
 	writeFakeSystemctl(t, systemctl)
+	writeFakeGo(t, filepath.Join(binDir, "go"))
 
 	codexHome := filepath.Join(home, ".codex")
 	xdgConfig := filepath.Join(home, ".config")
-	var logMu sync.Mutex
-	appendInstallLog := func(line string) {
-		logMu.Lock()
-		defer logMu.Unlock()
-		file, err := os.OpenFile(systemctlLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			t.Fatalf("open install log: %v", err)
-		}
-		defer file.Close()
-		if _, err := file.WriteString(line + "\n"); err != nil {
-			t.Fatalf("write install log: %v", err)
-		}
-	}
-	modelPosts := 0
-	var loopbackProbes atomic.Int32
-	var requestMu sync.Mutex
-	var unexpectedRequests []string
-	recordUnexpected := func(method, path string) {
-		requestMu.Lock()
-		defer requestMu.Unlock()
-		unexpectedRequests = append(unexpectedRequests, method+" "+path)
-	}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/public/models":
-			username, password, ok := r.BasicAuth()
-			if !ok || username != "pk-lf-test" || password != "sk-lf-test" {
-				recordUnexpected("unauthenticated", r.URL.Path)
-				http.Error(w, "authorization required", http.StatusUnauthorized)
-				return
-			}
-			appendInstallLog("sync get models")
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/public/models":
-			username, password, ok := r.BasicAuth()
-			if !ok || username != "pk-lf-test" || password != "sk-lf-test" {
-				recordUnexpected("unauthenticated", r.URL.Path)
-				http.Error(w, "authorization required", http.StatusUnauthorized)
-				return
-			}
-			modelPosts++
-			appendInstallLog("sync post model")
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{}`))
-		case isUnrelatedLoopbackProbe(r):
-			loopbackProbes.Add(1)
-			w.WriteHeader(http.StatusOK)
-		default:
-			recordUnexpected(r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	listener, err := net.Listen("tcp4", "127.0.0.2:0")
-	if err != nil {
-		t.Fatalf("listen on isolated loopback address: %v", err)
-	}
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
 	env := append(os.Environ(),
 		"HOME="+home,
 		"CODEX_HOME="+codexHome,
 		"XDG_CONFIG_HOME="+xdgConfig,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SYSTEMCTL_LOG="+systemctlLog,
+		"INSTALL_EVENT_LOG="+installEventLog,
 		"SYSTEMCTL_LOAD_STATE=not-found",
-		"GOMODCACHE="+goModCache,
-		"GOCACHE="+filepath.Join(home, "gocache"),
 	)
 
-	writeInstallLangfuseConfig(t, codexHome, server.URL)
+	writeInstallLangfuseConfig(t, codexHome, "https://langfuse.invalid")
 
 	install := exec.Command("bash", "../install.sh")
 	install.Env = env
@@ -140,20 +73,20 @@ func TestInstallUninstallScripts(t *testing.T) {
 	if strings.Contains(systemctlText, "--user stop codex-langfuse-watch.service") {
 		t.Fatalf("fresh install tried to stop a unit systemd reported as absent:\n%s", systemctlText)
 	}
-	if modelPosts != 7 {
-		t.Fatalf("model sync POST count = %d, want 7\nlog=%s", modelPosts, systemctlText)
+	eventRaw, err := os.ReadFile(installEventLog)
+	if err != nil {
+		t.Fatal(err)
 	}
-	requestMu.Lock()
-	unexpected := append([]string(nil), unexpectedRequests...)
-	requestMu.Unlock()
-	if len(unexpected) != 0 {
-		t.Fatalf("unexpected Langfuse requests: %v", unexpected)
+	eventText := string(eventRaw)
+	buildIndex := strings.Index(eventText, "go build output=")
+	syncIndex := strings.Index(eventText, "exporter --sync-model-pricing --quiet")
+	loadIndex := strings.Index(eventText, "systemctl --user show --property=LoadState --value codex-langfuse-watch.service")
+	restartIndex := strings.Index(eventText, "systemctl --user restart codex-langfuse-watch.service")
+	if buildIndex < 0 || syncIndex < buildIndex || loadIndex < syncIndex || restartIndex < loadIndex {
+		t.Fatalf("installer did not build, preflight, inspect service state, and restart in order:\n%s", eventText)
 	}
-	t.Logf("classified %d unauthenticated loopback GET / health probes as unrelated to model sync", loopbackProbes.Load())
-	syncIndex := strings.Index(systemctlText, "sync post model")
-	restartIndex := strings.Index(systemctlText, "restart codex-langfuse-watch.service")
-	if syncIndex < 0 || restartIndex < 0 || syncIndex > restartIndex {
-		t.Fatalf("model sync did not happen before restart:\n%s", systemctlText)
+	if !strings.Contains(eventText[buildIndex:syncIndex], ".stage.") {
+		t.Fatalf("preflight executable was not built in a staging path:\n%s", eventText)
 	}
 
 	oldBinary := []byte("previous exporter must remain in place until preflight and stop succeed")
@@ -179,14 +112,16 @@ func TestInstallUninstallScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	systemctlText = string(systemctlRaw)
-	syncIndex = strings.LastIndex(systemctlText, "sync post model")
-	stopIndex := strings.LastIndex(systemctlText, "--user stop codex-langfuse-watch.service")
-	restartIndex = strings.LastIndex(systemctlText, "restart codex-langfuse-watch.service")
-	if syncIndex < 0 || stopIndex < 0 || restartIndex < 0 || !(syncIndex < stopIndex && stopIndex < restartIndex) {
-		t.Fatalf("existing install did not preflight, stop, and then restart in order:\n%s", systemctlText)
+	eventRaw, err = os.ReadFile(installEventLog)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if modelPosts != 14 {
-		t.Fatalf("model sync POST count after existing install = %d, want 14", modelPosts)
+	eventText = string(eventRaw)
+	syncIndex = strings.LastIndex(eventText, "exporter --sync-model-pricing --quiet")
+	stopIndex := strings.LastIndex(eventText, "systemctl --user stop codex-langfuse-watch.service")
+	restartIndex = strings.LastIndex(eventText, "systemctl --user restart codex-langfuse-watch.service")
+	if syncIndex < 0 || stopIndex < 0 || restartIndex < 0 || !(syncIndex < stopIndex && stopIndex < restartIndex) {
+		t.Fatalf("existing install did not preflight, stop, and then restart in order:\n%s", eventText)
 	}
 	statePath := filepath.Join(codexHome, "langfuse-export-state.json")
 	lockPath := statePath + ".lock"
@@ -219,6 +154,7 @@ func TestInstallUninstallScripts(t *testing.T) {
 	failingLog := filepath.Join(failingHome, "systemctl.log")
 	failingSystemctl := filepath.Join(failingBinDir, "systemctl")
 	writeFakeSystemctl(t, failingSystemctl)
+	writeFakeGo(t, filepath.Join(failingBinDir, "go"))
 	failingCodexHome := filepath.Join(failingHome, ".codex")
 	oldFailingBinary := []byte("preserve old binary after pricing failure")
 	if err := os.MkdirAll(filepath.Join(failingCodexHome, "bin"), 0o755); err != nil {
@@ -235,26 +171,16 @@ func TestInstallUninstallScripts(t *testing.T) {
 	if err := os.WriteFile(failingService, []byte("old service"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	failingServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "pricing setup failed", http.StatusInternalServerError)
-	}))
-	failingListener, err := net.Listen("tcp4", "127.0.0.2:0")
-	if err != nil {
-		t.Fatalf("listen on isolated loopback address: %v", err)
-	}
-	failingServer.Listener = failingListener
-	failingServer.Start()
-	defer failingServer.Close()
-	writeInstallLangfuseConfig(t, failingCodexHome, failingServer.URL)
+	writeInstallLangfuseConfig(t, failingCodexHome, "https://langfuse.invalid")
 	failingEnv := append(os.Environ(),
 		"HOME="+failingHome,
 		"CODEX_HOME="+failingCodexHome,
 		"XDG_CONFIG_HOME="+filepath.Join(failingHome, ".config"),
 		"PATH="+failingBinDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SYSTEMCTL_LOG="+failingLog,
+		"INSTALL_EVENT_LOG="+filepath.Join(failingHome, "install.events"),
 		"SYSTEMCTL_LOAD_STATE=loaded",
-		"GOMODCACHE="+goModCache,
-		"GOCACHE="+filepath.Join(home, "gocache"),
+		"FAKE_EXPORTER_SYNC_FAIL=1",
 	)
 	failingInstall := exec.Command("bash", "../install.sh")
 	failingInstall.Env = failingEnv
@@ -270,6 +196,9 @@ func TestInstallUninstallScripts(t *testing.T) {
 	if readErr == nil && (strings.Contains(string(failingRaw), "--user stop codex-langfuse-watch.service") || strings.Contains(string(failingRaw), "restart codex-langfuse-watch.service")) {
 		t.Fatalf("install touched the service before pricing preflight passed:\n%s", string(failingRaw))
 	}
+	if !strings.Contains(string(output), "simulated pricing preflight failure") {
+		t.Fatalf("install failed for a reason other than the staged preflight:\n%s", output)
+	}
 
 	stopFailureHome := t.TempDir()
 	stopFailureBinDir := filepath.Join(stopFailureHome, "fakebin")
@@ -278,6 +207,7 @@ func TestInstallUninstallScripts(t *testing.T) {
 	}
 	stopFailureSystemctl := filepath.Join(stopFailureBinDir, "systemctl")
 	writeFakeSystemctl(t, stopFailureSystemctl)
+	writeFakeGo(t, filepath.Join(stopFailureBinDir, "go"))
 	stopFailureCodexHome := filepath.Join(stopFailureHome, ".codex")
 	if err := os.MkdirAll(filepath.Join(stopFailureCodexHome, "bin"), 0o755); err != nil {
 		t.Fatal(err)
@@ -287,18 +217,18 @@ func TestInstallUninstallScripts(t *testing.T) {
 	if err := os.WriteFile(stopFailureBinary, oldStopFailureBinary, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallLangfuseConfig(t, stopFailureCodexHome, server.URL)
+	writeInstallLangfuseConfig(t, stopFailureCodexHome, "https://langfuse.invalid")
 	stopFailureLog := filepath.Join(stopFailureHome, "systemctl.log")
+	stopFailureEventLog := filepath.Join(stopFailureHome, "install.events")
 	stopFailureEnv := append(os.Environ(),
 		"HOME="+stopFailureHome,
 		"CODEX_HOME="+stopFailureCodexHome,
 		"XDG_CONFIG_HOME="+filepath.Join(stopFailureHome, ".config"),
 		"PATH="+stopFailureBinDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SYSTEMCTL_LOG="+stopFailureLog,
+		"INSTALL_EVENT_LOG="+stopFailureEventLog,
 		"SYSTEMCTL_LOAD_STATE=loaded",
 		"SYSTEMCTL_FAIL_STOP=1",
-		"GOMODCACHE="+goModCache,
-		"GOCACHE="+filepath.Join(home, "gocache"),
 	)
 	stopFailureInstall := exec.Command("bash", "../install.sh")
 	stopFailureInstall.Env = stopFailureEnv
@@ -326,6 +256,7 @@ func TestInstallReportsPostStopFailureState(t *testing.T) {
 	}
 	systemctl := filepath.Join(binDir, "systemctl")
 	writeFakeSystemctl(t, systemctl)
+	writeFakeGo(t, filepath.Join(binDir, "go"))
 	codexHome := filepath.Join(home, ".codex")
 	if err := os.MkdirAll(filepath.Join(codexHome, "bin"), 0o755); err != nil {
 		t.Fatal(err)
@@ -335,60 +266,17 @@ func TestInstallReportsPostStopFailureState(t *testing.T) {
 	if err := os.WriteFile(binary, oldBinary, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var unexpected []string
-	var unexpectedMu sync.Mutex
-	modelPosts := 0
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Method == http.MethodGet || r.Method == http.MethodPost) && r.URL.Path == "/api/public/models" {
-			username, password, ok := r.BasicAuth()
-			if !ok || username != "pk-lf-test" || password != "sk-lf-test" {
-				http.Error(w, "authorization required", http.StatusUnauthorized)
-				return
-			}
-			if r.Method == http.MethodGet {
-				_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
-				return
-			}
-			modelPosts++
-			_, _ = w.Write([]byte(`{}`))
-			return
-		}
-		if isUnrelatedLoopbackProbe(r) {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		unexpectedMu.Lock()
-		unexpected = append(unexpected, r.Method+" "+r.URL.Path)
-		unexpectedMu.Unlock()
-		http.NotFound(w, r)
-	}))
-	listener, err := net.Listen("tcp4", "127.0.0.2:0")
-	if err != nil {
-		t.Fatalf("listen on isolated loopback address: %v", err)
-	}
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-	writeInstallLangfuseConfig(t, codexHome, server.URL)
-	cacheOutput, err := exec.Command("go", "env", "GOCACHE").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	moduleCacheOutput, err := exec.Command("go", "env", "GOMODCACHE").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeInstallLangfuseConfig(t, codexHome, "https://langfuse.invalid")
 	env := append(os.Environ(),
 		"HOME="+home,
 		"CODEX_HOME="+codexHome,
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SYSTEMCTL_LOG="+filepath.Join(home, "systemctl.log"),
+		"INSTALL_EVENT_LOG="+filepath.Join(home, "install.events"),
 		"SYSTEMCTL_LOAD_STATE=loaded",
 		"SYSTEMCTL_ACTIVE_STATE=failed",
 		"SYSTEMCTL_FAIL_RESTART=1",
-		"GOCACHE="+strings.TrimSpace(string(cacheOutput)),
-		"GOMODCACHE="+strings.TrimSpace(string(moduleCacheOutput)),
 	)
 	install := exec.Command("bash", "../install.sh")
 	install.Env = env
@@ -403,9 +291,6 @@ func TestInstallReportsPostStopFailureState(t *testing.T) {
 		t.Fatalf("post-stop failure did not promote the staged executable: bytes_equal_old=%v err=%v", bytes.Equal(got, oldBinary), err)
 	}
 	assertInstallStagesClean(t, binary, filepath.Join(home, ".config", "systemd", "user", "codex-langfuse-watch.service"))
-	if modelPosts != 7 || len(unexpected) != 0 {
-		t.Fatalf("pricing requests=%d unexpected=%v", modelPosts, unexpected)
-	}
 }
 
 // EVAL-006
@@ -446,6 +331,9 @@ func writeFakeSystemctl(t *testing.T, path string) {
 	script := `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+if [ -n "${INSTALL_EVENT_LOG:-}" ]; then
+    printf 'systemctl %s\n' "$*" >> "$INSTALL_EVENT_LOG"
+fi
 if [ "${2:-}" = "show" ]; then
     printf '%s\n' "${SYSTEMCTL_LOAD_STATE:-not-found}"
 fi
@@ -466,6 +354,45 @@ fi
 	}
 }
 
+func writeFakeGo(t *testing.T, path string) {
+	t.Helper()
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+output=""
+build_args="$*"
+while (($#)); do
+    if [ "$1" = "-o" ]; then
+        shift
+        output="${1:-}"
+        break
+    fi
+    shift
+done
+if [ -z "$output" ]; then
+    echo "fake go build requires -o" >&2
+    exit 2
+fi
+case "$build_args" in
+    *"./cmd/codex-langfuse-exporter") ;;
+    *) echo "fake go received unexpected build target: $build_args" >&2; exit 2 ;;
+esac
+cat > "$output" <<'FAKE_EXPORTER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'exporter %s\n' "$*" >> "$INSTALL_EVENT_LOG"
+if [ "${FAKE_EXPORTER_SYNC_FAIL:-0}" = "1" ]; then
+    echo "simulated pricing preflight failure" >&2
+    exit 1
+fi
+FAKE_EXPORTER
+chmod 755 "$output"
+printf 'go build output=%s\n' "$output" >> "$INSTALL_EVENT_LOG"
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func replaceEnvValue(env []string, key, value string) []string {
 	prefix := key + "="
 	filtered := make([]string, 0, len(env)+1)
@@ -475,21 +402,6 @@ func replaceEnvValue(env []string, key, value string) []string {
 		}
 	}
 	return append(filtered, prefix+value)
-}
-
-func isUnrelatedLoopbackProbe(request *http.Request) bool {
-	// The test environment has sent unauthenticated Go-client GET / probes to
-	// disposable loopback listeners. Keep this exact signature separate; every
-	// model API route and every other unexpected request remains an assertion.
-	if request.Method != http.MethodGet || request.URL.Path != "/" || request.Header.Get("Authorization") != "" || !strings.HasPrefix(request.UserAgent(), "Go-http-client/") {
-		return false
-	}
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	address := net.ParseIP(host)
-	return address != nil && address.IsLoopback()
 }
 
 func assertInstallStagesClean(t *testing.T, binaryPath, servicePath string) {

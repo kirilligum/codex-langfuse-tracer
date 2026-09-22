@@ -1,7 +1,7 @@
 # Export State Lock Recovery Plan
 
 - Issue: [#13 — Recover stale export-state locks after abrupt process termination](https://github.com/kirilligum/codex-langfuse-tracer/issues/13)
-- Status: implementation and local verification complete; deployment preflight and operational evidence pending
+- Status: implementation, local verification, clean committed deployment, and operational acceptance complete
 - Date: 2026-09-21
 - Source reviewed: local `main` at `63af12dac64e01d6894b6d43cefd726f9cf0cdec`
 - Owner: this repository, principally `internal/exportstate`
@@ -204,11 +204,11 @@ These observations were collected before implementation began. Later entries and
 | `go test ./... -count=1` | All command/internal packages passed. The `test` package failed in `TestInstallUninstallScripts` at `test/install_test.go:64`: `unexpected Langfuse request GET /`. The full gate is not green. |
 | `go test ./test -run '^TestInstallUninstallScripts$' -count=1 -v` | Reproduced the same unexpected root request and test failure. |
 | Independent disposable loopback HTTP listener | Received an unsolicited `GET /` from a loopback peer with a Go HTTP client User-Agent and no Authorization header while the probe itself sent zero HTTP requests. The sender process was not identified. |
-| Secondary-loopback installer mock | The first 30-second listener observation saw no probe, but a later 36-second installer test received the same unauthenticated loopback `GET /`. The test now classifies only that exact method/path, Go HTTP User-Agent, missing-Authorization, loopback-peer signature and logs the count. It continues to reject all other unexpected requests and checks BasicAuth on both expected model routes. This is an explicit accommodation for the independently observed probe, not an exporter endpoint allowlist. |
+| Secondary-loopback installer mock | The first 30-second listener observation saw no probe, but a later 36-second installer test received the same unauthenticated loopback `GET /`. The initial implementation classified that signature, but its sender was not identified. Final review removed that allowance and isolated installer sequencing from the mock network listener instead. |
 | Model-sync source review | `listModels` and `createModel` construct `/api/public/models` requests. No root request was found in that reviewed call path. |
 | Document checks | Existing diff whitespace check and the new-file whitespace check found no errors; all three relative document links resolve. |
 
-The initial installer failure was later resolved by classifying only the independently observed, unauthenticated loopback `GET /` probe signature. The exporter source review and installer tests continue to require BasicAuth on the model endpoints and reject all other unexpected routes. Implementation evidence and final gates are recorded below; this historical planning section is not itself a passing implementation test.
+The initial installer failure was first handled with a narrow request classifier, then corrected after review because the sender could not be identified and the allowance could conceal a matching regression. Installer tests now use an explicit fake builder/exporter to test staging, preflight invocation, stop/promotion/restart ordering, and failure preservation without opening a network listener. The production model API and BasicAuth contract remain covered by strict `internal/langfuse` tests that reject every unexpected route. Implementation evidence and final gates are recorded below; this historical planning section is not itself a passing implementation test.
 
 ## Implementation validation
 
@@ -221,10 +221,23 @@ Local code, documentation, install ordering, and process-crash recovery are impl
 | `go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1` | Passed all four packages, including killed-owner, live-owner, and contention recovery cases. |
 | Five serial watcher/hook latency samples | `TestEvalWatchExportLatency` and `TestEvalHookQueueDrainLatency` passed all five repetitions; maximum observed watch scan time was 6.51 ms against the 5 s limit. |
 | Two 10-second `internal/codextrace` fuzz gates | `FuzzParseTurnsDoesNotPanic` and `FuzzExportTextRedactsSentinels` passed. |
-| Installer and documentation tests | Passed fresh install, existing-install ordering, pricing and stop failure preservation, post-stop restart failure reporting, sidecar retention, and lock-upgrade documentation assertions. The test logged one independently observed unauthenticated loopback `GET /` probe and rejected all other unexpected requests. |
+| Installer and documentation tests | Passed fresh install, existing-install ordering, staged preflight invocation, pricing and stop failure preservation, post-stop restart failure reporting, sidecar retention, and lock-upgrade documentation assertions. Installer tests use no HTTP listener; model sync/auth tests strictly reject unexpected API routes. |
 | `git diff --check`, `bash -n install.sh uninstall.sh` | Passed. |
 
-No production service rollout, live Langfuse trace, or restart-window observation is claimed here. Those require the documented first-upgrade writer quiescence procedure and the target workstation's operational evidence; tests establish process-crash recovery on the tested local filesystem, not power-loss durability.
+## Production deployment and operational acceptance
+
+The first-upgrade cutover and clean-source promotion were completed on 2026-09-21. The installer was run only after the existing watcher had stopped and its process exited. Before the clean-source promotion, a process check found the single expected systemd exporter, no independent exporter, and no Claude-like command. A read-only check of standard Claude settings found no exporter hook command references. No Claude settings were changed.
+
+| Gate | Result |
+| --- | --- |
+| Clean source and installed artifact | The final local source revision was built before promotion; `go version -m` reports its matching VCS revision and `vcs.modified=false`. The final revision and installed binary digest are recorded in the handoff. |
+| Staged cutover | `./install.sh` passed pricing preflight, stopped the prior watcher, promoted the staged binary, and restarted the user service. The effective unit points to the installed `--watch` executable. |
+| State preservation and progress | Existing version 3 state was preserved: 951 processed IDs at initial quiescence, then 953 after the live watcher resumed. The queue and pending-score set were empty at verification. No state reset or Claude settings mutation occurred. |
+| Installed executable contention smoke | With an isolated temporary Codex home and disposable state, a real external `flock` caused the bounded timeout. Releasing it let the same installed process create version 3 state and continue; SIGTERM then exited cleanly. Production state was not used for this test. |
+| Live trace through the installed watcher | A sanitized `complete-tools` fixture with a unique synthetic session ID was exported through the normal watcher using the configured Langfuse project and disposable state. The remote API returned 9 unique observations, including the logical root, transcript, and command observation, plus 8 deterministic scores. |
+| Service observation | The user unit remained active for more than two maximum retry intervals plus the poll interval. `NRestarts=0`; the fresh journal contained zero `ERROR:` lines. Production state progressed while the service stayed active. |
+
+These checks establish the documented process-termination and live-contention behavior on this workstation and the configured Langfuse project. They do not establish power-loss durability or behavior on unsupported/network filesystems.
 
 ## Rollback and completion
 
