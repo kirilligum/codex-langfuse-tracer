@@ -230,6 +230,14 @@ type TraceVerification struct {
 	Root      Observation
 }
 
+// Observations v2 returns stored I/O as raw strings. Our OTLP text attributes
+// contain JSON string values, so decode exactly one layer before comparison.
+// Null, structured JSON, malformed data, and unencoded text cannot confirm it.
+func observationTextMatches(raw, expected string) bool {
+	var text *string
+	return json.Unmarshal([]byte(raw), &text) == nil && text != nil && *text == expected
+}
+
 func VerifyTrace(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace.Turn, timeout, interval time.Duration) (TraceVerification, error) {
 	root := true
 	deadline := time.Now().Add(timeout)
@@ -249,8 +257,8 @@ func VerifyTrace(ctx context.Context, cfg config.LangfuseConfig, turn agenttrace
 		} else if len(observations) == 1 {
 			observation := observations[0]
 			verification := TraceVerification{
-				HasInput:  observation.TraceID == turn.TraceID && observation.IsRootObservation && observation.Input == agenttrace.ExportText(turn.InputText()),
-				HasOutput: observation.TraceID == turn.TraceID && observation.IsRootObservation && observation.Output == agenttrace.ExportText(turn.OutputText()),
+				HasInput:  observation.TraceID == turn.TraceID && observation.IsRootObservation && observationTextMatches(observation.Input, agenttrace.ExportText(turn.InputText())),
+				HasOutput: observation.TraceID == turn.TraceID && observation.IsRootObservation && observationTextMatches(observation.Output, agenttrace.ExportText(turn.OutputText())),
 				Root:      observation,
 			}
 			if verification.HasInput && verification.HasOutput {

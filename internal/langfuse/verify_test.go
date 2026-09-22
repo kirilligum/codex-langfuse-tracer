@@ -34,10 +34,12 @@ func TestTraceVerificationClient(t *testing.T) {
 		if calls > 1 {
 			output = agenttrace.ExportText(turn.OutputText())
 		}
+		inputJSON, _ := json.Marshal(agenttrace.ExportText(turn.InputText()))
+		outputJSON, _ := json.Marshal(output)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{{
 				"id": "root-observation", "traceId": turn.TraceID, "projectId": "project-test",
-				"isRootObservation": true, "name": "codex.agent", "input": turn.InputText(), "output": output,
+				"isRootObservation": true, "name": "codex.agent", "input": string(inputJSON), "output": string(outputJSON),
 			}},
 			"meta": map[string]any{},
 		})
@@ -51,6 +53,35 @@ func TestTraceVerificationClient(t *testing.T) {
 	}
 	if !verification.HasInput || !verification.HasOutput || verification.Root.ProjectID != "project-test" || calls < 2 {
 		t.Fatalf("verification = %+v calls=%d", verification, calls)
+	}
+}
+
+func TestObservationTextMatchesSerializedStringOnly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, raw, expected string
+		want                bool
+	}{
+		{"plain text value", `"hello"`, "hello", true},
+		{"escaped text", `"line\n\"quoted\"\t雪"`, "line\n\"quoted\"\t雪", true},
+		{"equivalent JSON escapes", `"\u003cvalue\u003e"`, "<value>", true},
+		{"literal quotes", `"\"hello\""`, `"hello"`, true},
+		{"do not remove user quotes", `"hello"`, `"hello"`, false},
+		{"different text", `"other"`, "hello", false},
+		{"unencoded text", "hello", "hello", false},
+		{"object", `{"value":"hello"}`, `{"value":"hello"}`, false},
+		{"array", `["hello"]`, `["hello"]`, false},
+		{"number", "123", "123", false},
+		{"null", "null", "", false},
+		{"missing", "", "", false},
+		{"empty string", `""`, "", true},
+		{"trailing data", `"hello" "extra"`, "hello", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := observationTextMatches(tc.raw, tc.expected); got != tc.want {
+				t.Fatalf("observationTextMatches(%q, %q) = %v, want %v", tc.raw, tc.expected, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -106,6 +106,8 @@ Langfuse OTLP projection and trace verification:
 go test ./internal/langfuse -count=1
 ```
 
+`TestTraceVerificationClient` models the v2 API's raw serialized I/O strings, including delayed output visibility. `TestObservationTextMatchesSerializedStringOnly` verifies exactly one JSON string decoding step and rejects missing, null, structured, malformed, mismatched, and unencoded values. Literal user quotes and equivalent JSON escapes retain their meaning. The live completed-trace check uses the same comparison contract.
+
 Count metadata and Langfuse projection checks:
 
 ```sh

@@ -85,11 +85,11 @@ func TestLiveCompletedTraceShape(t *testing.T) {
 	if !ok || !root.IsRootObservation {
 		t.Fatalf("missing logical root observation: %s", canonicalLiveJSON(observations))
 	}
-	if root.Input != agenttrace.ExportText(turn.InputText()) || root.Output != agenttrace.ExportText(turn.OutputText()) {
+	if !observationTextMatches(root.Input, agenttrace.ExportText(turn.InputText())) || !observationTextMatches(root.Output, agenttrace.ExportText(turn.OutputText())) {
 		t.Fatalf("root I/O = %q/%q, want %q/%q", root.Input, root.Output, agenttrace.ExportText(turn.InputText()), agenttrace.ExportText(turn.OutputText()))
 	}
 	transcript, ok := byName["codex.transcript"]
-	if !ok || transcript.Input != root.Input || transcript.Output != root.Output {
+	if !ok || !observationTextMatches(transcript.Input, agenttrace.ExportText(turn.InputText())) || !observationTextMatches(transcript.Output, agenttrace.ExportText(turn.OutputText())) {
 		t.Fatalf("generation I/O does not match root: root=%s transcript=%s", canonicalLiveJSON(root), canonicalLiveJSON(transcript))
 	}
 	if _, ok := byName["codex.tool.command"]; !ok {
