@@ -359,7 +359,7 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 		"issues/list",
 		"internal/agenttrace/TAG_RULES.md",
 		"future watcher exports",
-		"explicit re-export",
+		"Do not resend an old turn to add tags or MCP metadata",
 		"codex-langfuse-watch.service",
 		"~/.codex/bin/codex-langfuse-exporter --path",
 	} {
@@ -410,7 +410,7 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 		"internal/langfuse/models.go",
 		"Do not add fallback local cost multiplication",
 		"install.sh",
-		"explicit re-export",
+		"Do not re-export an old turn to backfill its cost",
 		"~/.codex/bin/codex-langfuse-exporter --session-id",
 	} {
 		if !strings.Contains(readme, required) {

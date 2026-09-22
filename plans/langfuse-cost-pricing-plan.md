@@ -11,6 +11,8 @@
 
 ## 2. Design consensus and trade-offs
 
+> **Historical re-export steps superseded (2026-09-22):** do not execute the old-session re-export instructions in this plan. Re-ingestion can create duplicate Langfuse v4 observations; see the [duplicate-observation RCA](duplicate-observations-rca-20260922.md) and current README guidance.
+
 | Topic | Verdict | Rationale |
 |---|---|---|
 | Native Langfuse cost calculation | FOR | `README.md` states that the exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` and does not emit `cost_details`. Local Langfuse code at `/home/kirill/p/langfuse/worker/src/services/IngestionService/index.ts` multiplies matching `usage_details` keys by model pricing keys and stores `calculatedTotalCost`. |

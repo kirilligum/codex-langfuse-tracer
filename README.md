@@ -355,11 +355,7 @@ The built-in pricing catalog is source-dated from https://openai.com/api/pricing
 
 When provider pricing changes or a supported coding agent emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
 
-Langfuse calculates cost during ingestion. Existing rows are not backfilled automatically; use an explicit re-export for old sessions after model pricing is synced:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --session-id <session-id> --no-verify
-```
+Langfuse calculates cost during ingestion. Changing model pricing does not make this exporter update observations that were already sent. Do not re-export an old turn to backfill its cost; Langfuse observations are immutable and another send can create duplicate rows. Historical corrections need a separately reviewed, Langfuse-supported procedure.
 
 `<provider>.tool.command` metadata includes:
 
@@ -393,7 +389,7 @@ The exporter also creates deterministic trace-level Langfuse scores after each s
 - `changed_file_count`
 - `outcome`
 
-These scores are idempotent on re-export and use only parsed trace metadata. They do not make extra LLM calls. The eight score events are submitted in one Langfuse ingestion batch; trace export continues to use only the OTLP trace endpoint.
+These scores use deterministic IDs and parsed trace metadata. Their current event timestamp is assigned when the score batch is sent, so a resend on another UTC date may create another score instead of overwriting the first. Do not use manual re-export as a score repair mechanism. The scores do not make extra LLM calls. The eight score events are submitted in one Langfuse ingestion batch; trace export continues to use only the OTLP trace endpoint.
 
 ## Filtering
 
@@ -424,11 +420,11 @@ Observation filters use observation metadata:
 - `Observations: file changes`: `Name equals codex.tool.file_change`
 - `Observations: web search`: `Name equals codex.tool.web_search`
 
-After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse rows are not automatically backfilled; use an explicit re-export command when old rows need the new fields.
+After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse observations are not updated by this exporter. Do not resend an old turn to add tags or MCP metadata; another send can create duplicate rows. Historical corrections need a separately reviewed, Langfuse-supported procedure.
 
 ## Manual Export
 
-The watcher is the normal production path. Manual export is for explicit backfill or debugging.
+The watcher is the normal production path. Manual export sends the selected turn to the configured Langfuse project; it does not check whether the trace was already sent. Repeating an export can create duplicate observations. Use manual export only when you have established that the selected trace is missing, or for a deliberately new trace.
 
 Export the latest local Codex session:
 
@@ -448,17 +444,7 @@ Export a specific rollout file:
 ~/.codex/bin/codex-langfuse-exporter --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
 ```
 
-Explicit re-export for backfill uses the same command shape:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --path <rollout.jsonl> --no-verify
-```
-
-Skip post-export verification:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --latest --no-verify
-```
+`--no-verify` only skips the post-export check. It does not check for an existing trace or prevent duplicate writes.
 
 Manual exports print a trace URL when the Langfuse project can be resolved:
 
@@ -567,7 +553,7 @@ Common failure modes:
 - Browser sign-in redirects to `localhost`: the Langfuse server's `NEXTAUTH_URL` is still set to `http://localhost:3000`. Set it to the actual browser URL, such as a Tailscale URL, and recreate the `langfuse-web` container.
 - A browser on Windows cannot reach a Tailscale IP that works from WSL: Tailscale may be running only inside WSL. Run Tailscale on the Windows host too, or open the browser inside the same WSL network environment.
 - Native Codex OTEL still enabled, causing noisy duplicate traces.
-- Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Use `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>` for explicit backfill, or add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports.
+- Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports. The explicit `--provider claude --path <transcript.jsonl>` mode sends the transcript again if used; first confirm its trace is missing.
 - Watch state already marked a historical turn as processed.
 - Langfuse ingestion delay. Wait a few seconds and refresh the UI.
 - Empty Input/Output on unrelated observations. Select `codex.transcript`.

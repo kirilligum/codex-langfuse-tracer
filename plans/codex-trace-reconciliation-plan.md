@@ -8,6 +8,8 @@
 - Date: 2026-08-15
 - Document ID: CLT-RECONCILE-PLAN-001
 
+> **Deferred (2026-09-22):** this reconciliation design predates the duplicate-observation RCA. Do not implement its remote-absence and retry assumptions until the [export delivery reliability plan](export-delivery-reliability-plan.md) defines the delivery contract. The incident-specific stale-lock defect is already fixed; see the [RCA](duplicate-observations-rca-20260922.md).
+
 This plan defines the repository-local implementation, verification, deployment, and handoff work for one `codex-langfuse-exporter --reconcile` mode. The mode inventories completed local Codex rollout turns, compares their deterministic trace IDs with the one Langfuse backend already selected by repository configuration, exports and verifies missing traces through existing owners, and reports deterministic counts. Gateway promotion belongs to external infrastructure; machine failover orchestration, Claude automation, credential rotation, and trace-retention incident work do not block this repository deliverable.
 
 ## 2. Design consensus and trade-offs

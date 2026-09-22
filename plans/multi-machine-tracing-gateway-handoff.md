@@ -10,6 +10,8 @@
 
 This document is the canonical handoff for making one public Langfuse hostname serve traces from every coding-agent workstation while allowing an operator to move the public gateway to another machine. It records the verified runtime state, decisions, ownership boundaries, intended command-line experience, implementation sequence, acceptance evidence, and known gaps. It is standards-informed lifecycle documentation, not a claim of ISO/IEEE or safety-critical compliance.
 
+**2026-09-22 RCA update:** the [reported repeat-export incident](duplicate-observations-rca-20260922.md) was the historical watcher checkpoint/lock restart loop. The lock recovery correction is in installed revision `2b8b915`, and the user confirmed the duplicate rows are no longer visible. The remaining acceptance/checkpoint ambiguity has a separate [delivery reliability plan](export-delivery-reliability-plan.md). The earlier proposal for a shared observation classifier and manual preflight is not the incident remedy and is not approved for implementation.
+
 ## Outcome
 
 ### Inputs

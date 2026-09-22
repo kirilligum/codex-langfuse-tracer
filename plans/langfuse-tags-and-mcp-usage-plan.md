@@ -11,6 +11,8 @@
 
 ## 2. Design Consensus and Trade-Offs
 
+> **Historical re-export steps superseded (2026-09-22):** do not execute the old-trace re-export instructions in this plan. Re-ingestion can create duplicate Langfuse v4 observations; see the [duplicate-observation RCA](duplicate-observations-rca-20260922.md) and current README guidance.
+
 | Topic | Verdict | Rationale |
 | --- | --- | --- |
 | Tags vs metadata | DECISION | Keep `codex_insight.navigation` in `internal/codextrace/insight.go` as the complete trace-table filter index. Add tags as the same navigation values plus observed MCP server tags, because Langfuse exposes tags directly in trace filtering while metadata remains more structured. |
