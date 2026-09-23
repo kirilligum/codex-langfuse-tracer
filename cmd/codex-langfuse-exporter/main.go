@@ -362,6 +362,9 @@ func runDoctor(ctx context.Context, cfg config.LangfuseConfig, opts options, std
 		if len(state.Queue) > 0 {
 			add("state_queue", "fail", fmt.Sprintf("queue=%d", len(state.Queue)))
 		}
+		if len(state.PendingScores) > 0 {
+			add("state_pending_scores", "fail", fmt.Sprintf("pending_scores=%d", len(state.PendingScores)))
+		}
 	}
 
 	if output, err := runCommand(ctx, "systemctl", "--user", "is-active", buildinfo.InstalledServiceName); err != nil {
@@ -370,7 +373,7 @@ func runDoctor(ctx context.Context, cfg config.LangfuseConfig, opts options, std
 		add("watcher", "ok", strings.TrimSpace(string(output)))
 	}
 	if output, err := runCommand(ctx, "journalctl", "--user", "-u", buildinfo.InstalledServiceName, "--since", "15 minutes ago", "--no-pager"); err != nil {
-		add("recent_errors", "warn", strings.TrimSpace(string(output)))
+		add("recent_errors", "fail", "journal unavailable: "+strings.TrimSpace(string(output)))
 	} else {
 		count := recentErrorCount(string(output))
 		status := "ok"

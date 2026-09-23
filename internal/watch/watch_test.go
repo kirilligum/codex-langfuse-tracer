@@ -298,6 +298,607 @@ func TestWatchParseErrorDoesNotAdvanceWatermark(t *testing.T) {
 	}
 }
 
+func TestWatchStatFailureRetainsWatermarkAndRecovers(t *testing.T) {
+	t.Parallel()
+
+	root, _, healthyPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-2 * time.Minute).UnixNano()
+	setMTime(t, healthyPath, now.Add(-20*time.Second))
+	targetPath := filepath.Join(root, "restored-rollout.jsonl")
+	unavailablePath := filepath.Join(filepath.Dir(healthyPath), "rollout-unavailable.jsonl")
+	if err := os.Symlink(targetPath, unavailablePath); err != nil {
+		t.Fatal(err)
+	}
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	spanCalls := 0
+	var stderr bytes.Buffer
+	opts := ScanOptions{
+		Root:   root,
+		Quiet:  true,
+		Stderr: &stderr,
+		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			return turn, "test", nil
+		},
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+
+	state, exported, err := ScanOnce(context.Background(), withScanNow(opts, now), state)
+	if err != nil {
+		t.Fatalf("first ScanOnce: %v", err)
+	}
+	healthyTraceID := completeTraceID(t, healthyPath)
+	if exported != 1 || spanCalls != 1 || !state.HasProcessed(healthyTraceID) {
+		t.Fatalf("healthy sibling did not make progress: exported=%d spans=%d state=%+v", exported, spanCalls, state)
+	}
+	if state.ScanWatermarkNS != watermark {
+		t.Fatalf("stat failure advanced watermark to %d, want %d", state.ScanWatermarkNS, watermark)
+	}
+	if !strings.Contains(stderr.String(), "ERROR: watch_scan_incomplete discovery_errors=0 stat_errors=1") {
+		t.Fatalf("quiet scan did not report bounded incomplete status: %q", stderr.String())
+	}
+
+	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "codex", "complete-no-tools.jsonl"), targetPath)
+	setMTime(t, targetPath, now.Add(-30*time.Second))
+	state, exported, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(time.Minute)), state)
+	if err != nil {
+		t.Fatalf("recovery ScanOnce: %v", err)
+	}
+	if exported != 1 || spanCalls != 2 || state.ScanWatermarkNS != now.Add(time.Minute).UnixNano() {
+		t.Fatalf("restored old-mtime source did not recover once: exported=%d spans=%d watermark=%d state=%+v", exported, spanCalls, state.ScanWatermarkNS, state)
+	}
+	if !state.HasProcessed(completeTraceID(t, targetPath)) {
+		t.Fatal("restored source trace was not checkpointed")
+	}
+}
+
+func TestWatchDiscoveryFailureAllowsHealthyProgress(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-time.Minute).UnixNano()
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	deps := defaultScanDependencies()
+	deps.discover = func(gotRoot string) ([]string, error) {
+		paths, err := codextrace.SessionPaths(gotRoot)
+		if err != nil {
+			return paths, err
+		}
+		return paths, watchDiscoveryTestError{count: 2}
+	}
+	var stderr bytes.Buffer
+	spanCalls := 0
+	state, exported, err := scanOnce(context.Background(), ScanOptions{
+		Root:             root,
+		Now:              now,
+		Quiet:            true,
+		Stderr:           &stderr,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}, state, newScanRuntime(), deps)
+	if err != nil {
+		t.Fatalf("scanOnce: %v", err)
+	}
+	if exported != 1 || spanCalls != 1 || !state.HasProcessed(completeTraceID(t, rolloutPath)) {
+		t.Fatalf("healthy source did not progress during partial discovery: exported=%d spans=%d state=%+v", exported, spanCalls, state)
+	}
+	if state.ScanWatermarkNS != watermark {
+		t.Fatalf("partial discovery advanced watermark to %d, want %d", state.ScanWatermarkNS, watermark)
+	}
+	if !strings.Contains(stderr.String(), "ERROR: watch_scan_incomplete discovery_errors=2") {
+		t.Fatalf("quiet scan did not report discovery failure: %q", stderr.String())
+	}
+}
+
+type watchDiscoveryTestError struct{ count int }
+
+func (e watchDiscoveryTestError) Error() string { return "injected partial discovery failure" }
+
+func (e watchDiscoveryTestError) ErrorCount() int { return e.count }
+
+func TestWatchCancellationAfterParseDoesNotExportOrAdvance(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	watermark := now.Add(-time.Minute).UnixNano()
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := defaultScanDependencies()
+	originalParse := deps.parse
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		turns, err := originalParse(path, include)
+		cancel()
+		return turns, err
+	}
+	spanCalls := 0
+	state, exported, err := scanOnce(ctx, ScanOptions{
+		Root:             root,
+		Now:              now,
+		Quiet:            true,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}, state, newScanRuntime(), deps)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan error = %v, want context cancellation", err)
+	}
+	if exported != 0 || spanCalls != 0 || state.ScanWatermarkNS != watermark || state.HasProcessed(completeTraceID(t, rolloutPath)) {
+		t.Fatalf("cancelled scan exported or advanced: exported=%d spans=%d state=%+v", exported, spanCalls, state)
+	}
+}
+
+func TestWatchCorruptSourceDoesNotBlockHealthyTurn(t *testing.T) {
+	t.Parallel()
+
+	root, _, healthyPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-time.Minute).UnixNano()
+	setMTime(t, healthyPath, now.Add(-10*time.Second))
+	corruptPath := filepath.Join(filepath.Dir(healthyPath), "rollout-000-corrupt.jsonl")
+	if err := os.WriteFile(corruptPath, []byte("{\"type\":\"session_meta\"}\n{not-json}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setMTime(t, corruptPath, now.Add(-20*time.Second))
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	runtime := newScanRuntime()
+	deps := defaultScanDependencies()
+	parseCalls := map[string]int{}
+	originalParse := deps.parse
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		parseCalls[path]++
+		return originalParse(path, include)
+	}
+	spanCalls := 0
+	var stderr bytes.Buffer
+	opts := ScanOptions{
+		Root:             root,
+		Quiet:            true,
+		Stderr:           &stderr,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("first scanOnce: %v", err)
+	}
+	healthyTraceID := completeTraceID(t, healthyPath)
+	if exported != 1 || spanCalls != 1 || !state.HasProcessed(healthyTraceID) {
+		t.Fatalf("corrupt sibling blocked healthy trace: exported=%d spans=%d state=%+v", exported, spanCalls, state)
+	}
+	if state.ScanWatermarkNS != watermark {
+		t.Fatalf("corrupt source advanced watermark to %d, want %d", state.ScanWatermarkNS, watermark)
+	}
+	if !strings.Contains(stderr.String(), "ERROR: watch_scan_incomplete discovery_errors=0 stat_errors=0 parse_errors=1") {
+		t.Fatalf("quiet corrupt scan did not report parse failure: %q", stderr.String())
+	}
+	_, _, err = scanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("deferred scanOnce: %v", err)
+	}
+	if parseCalls[healthyPath] != 1 || parseCalls[corruptPath] != 1 {
+		t.Fatalf("unchanged sources were reparsed during deferred retry: parse calls=%v", parseCalls)
+	}
+}
+
+func TestWatchParseRetryDeadlineAndRepair(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "source")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	corruptPath := filepath.Join(sessionDir, "rollout-retry.jsonl")
+	if err := os.WriteFile(corruptPath, []byte("{not-json}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, corruptPath, now.Add(-time.Second))
+	watermark := now.Add(-time.Minute).UnixNano()
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	runtime := newScanRuntime()
+	deps := defaultScanDependencies()
+	parseCalls := 0
+	originalParse := deps.parse
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		parseCalls++
+		return originalParse(path, include)
+	}
+	spanCalls := 0
+	var stderr bytes.Buffer
+	opts := ScanOptions{
+		Root:             root,
+		Quiet:            true,
+		Stderr:           &stderr,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+	for _, scanTime := range []time.Time{now, now.Add(29 * time.Second)} {
+		var err error
+		state, _, err = scanOnce(context.Background(), withScanNow(opts, scanTime), state, runtime, deps)
+		if err != nil {
+			t.Fatalf("scan at %s: %v", scanTime, err)
+		}
+		if state.ScanWatermarkNS != watermark {
+			t.Fatalf("failed/deferred parse advanced watermark to %d, want %d", state.ScanWatermarkNS, watermark)
+		}
+	}
+	if parseCalls != 1 {
+		t.Fatalf("unchanged corrupt source parsed %d times before retry deadline, want 1", parseCalls)
+	}
+	state, _, err := scanOnce(context.Background(), withScanNow(opts, now.Add(30*time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("deadline scan: %v", err)
+	}
+	if parseCalls != 2 || state.ScanWatermarkNS != watermark {
+		t.Fatalf("retry was not attempted at deadline: parses=%d watermark=%d", parseCalls, state.ScanWatermarkNS)
+	}
+
+	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "codex", "complete-no-tools.jsonl"), corruptPath)
+	setMTime(t, corruptPath, now.Add(31*time.Second))
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now.Add(32*time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("repair scan: %v", err)
+	}
+	if parseCalls != 3 || exported != 1 || spanCalls != 1 || state.ScanWatermarkNS != now.Add(32*time.Second).UnixNano() {
+		t.Fatalf("changed source did not retry and recover immediately: parses=%d exported=%d spans=%d state=%+v", parseCalls, exported, spanCalls, state)
+	}
+}
+
+func TestWatchCachedIncompleteTurnCompletesAfterAppend(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := incompleteWatchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	watermark := now.Add(-time.Minute).UnixNano()
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	runtime := newScanRuntime()
+	deps := defaultScanDependencies()
+	parseCalls := 0
+	originalParse := deps.parse
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		parseCalls++
+		return originalParse(path, include)
+	}
+	spanCalls := 0
+	opts := ScanOptions{
+		Root:             root,
+		Quiet:            true,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("incomplete scan: %v", err)
+	}
+	if exported != 0 || parseCalls != 1 || state.ScanWatermarkNS != now.UnixNano() {
+		t.Fatalf("incomplete turn was not held safely: exported=%d parses=%d state=%+v", exported, parseCalls, state)
+	}
+
+	appendRolloutLine(t, rolloutPath, `{"timestamp":"2026-09-22T12:00:01Z","type":"event_msg","payload":{"type":"task_complete"}}`)
+	setMTime(t, rolloutPath, now.Add(time.Second))
+	state, exported, err = scanOnce(context.Background(), withScanNow(opts, now.Add(2*time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("completion scan: %v", err)
+	}
+	if parseCalls != 2 || exported != 1 || spanCalls != 1 || !state.HasProcessed(incompleteTraceID(t)) {
+		t.Fatalf("append did not invalidate successful cache: parses=%d exported=%d spans=%d state=%+v", parseCalls, exported, spanCalls, state)
+	}
+}
+
+func TestWatchPendingScoreBypassesSuccessCache(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	traceID := completeTraceID(t, rolloutPath)
+	state := exportstate.State{
+		Version:         exportstate.Version,
+		ScanWatermarkNS: now.Add(-time.Minute).UnixNano(),
+		PendingScores:   map[string]string{traceID: "persisted-environment"},
+	}
+	runtime := newScanRuntime()
+	spanCalls := 0
+	scoreCalls := 0
+	firstScoreFails := true
+	opts := ScanOptions{
+		Root:  root,
+		Quiet: true,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: func(_ context.Context, turn agenttrace.Turn, environment string) error {
+			scoreCalls++
+			if turn.TraceID != traceID || environment != "persisted-environment" {
+				t.Errorf("score retry turn=%s environment=%q", turn.TraceID, environment)
+			}
+			if firstScoreFails {
+				return errors.New("injected score failure")
+			}
+			return nil
+		},
+	}
+	state, _, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, defaultScanDependencies())
+	if err != nil {
+		t.Fatalf("first score scan: %v", err)
+	}
+	if spanCalls != 0 || scoreCalls != 1 || state.PendingScoreEnvironment(traceID) != "persisted-environment" || state.ScanWatermarkNS >= now.UnixNano() {
+		t.Fatalf("failed pending score was not retained: spans=%d scores=%d state=%+v", spanCalls, scoreCalls, state)
+	}
+	firstScoreFails = false
+	state, _, err = scanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state, runtime, defaultScanDependencies())
+	if err != nil {
+		t.Fatalf("score retry scan: %v", err)
+	}
+	if spanCalls != 0 || scoreCalls != 2 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
+		t.Fatalf("pending score retry resent spans or failed to checkpoint: spans=%d scores=%d state=%+v", spanCalls, scoreCalls, state)
+	}
+}
+
+func TestWatchChangedDuringParseDoesNotCacheOrAdvance(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	watermark := now.Add(-time.Minute).UnixNano()
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	runtime := newScanRuntime()
+	deps := defaultScanDependencies()
+	originalParse := deps.parse
+	parseCalls := 0
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		parseCalls++
+		turns, err := originalParse(path, include)
+		if parseCalls == 1 && err == nil {
+			for _, line := range []string{
+				`{"timestamp":"2026-09-22T12:00:01Z","type":"turn_context","payload":{"turn_id":"second-turn","trace_id":"trace-second-turn"}}`,
+				`{"timestamp":"2026-09-22T12:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"second input"}]}}`,
+				`{"timestamp":"2026-09-22T12:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"second output"}]}}`,
+				`{"timestamp":"2026-09-22T12:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+			} {
+				appendRolloutLine(t, path, line)
+			}
+			setMTime(t, path, now.Add(time.Second))
+		}
+		return turns, err
+	}
+	spanCalls := 0
+	var stderr bytes.Buffer
+	opts := ScanOptions{
+		Root:             root,
+		Quiet:            true,
+		Stderr:           &stderr,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("first changed-source scan: %v", err)
+	}
+	if exported != 1 || spanCalls != 1 || state.ScanWatermarkNS != watermark || !strings.Contains(stderr.String(), "changed_sources=1") {
+		t.Fatalf("mutation during parse was not held for retry: exported=%d spans=%d state=%+v stderr=%q", exported, spanCalls, state, stderr.String())
+	}
+	state, exported, err = scanOnce(context.Background(), withScanNow(opts, now.Add(2*time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("second changed-source scan: %v", err)
+	}
+	if parseCalls != 2 || exported != 1 || spanCalls != 2 || !state.HasProcessed("trace-second-turn") || state.ScanWatermarkNS != now.Add(2*time.Second).UnixNano() {
+		t.Fatalf("changed source was cached or lost: parses=%d exported=%d spans=%d state=%+v", parseCalls, exported, spanCalls, state)
+	}
+}
+
+func TestWatchScanCacheEvictsOldestMetadataEntry(t *testing.T) {
+	runtime := newScanRuntime()
+	path := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(path, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= scanCacheCapacity; index++ {
+		runtime.put(scanCacheEntry{path: fmt.Sprintf("source-%04d", index), info: info})
+	}
+	if len(runtime.entries) != scanCacheCapacity || runtime.get("source-0000") != nil {
+		t.Fatalf("cache did not evict oldest entry: entries=%d oldest=%+v", len(runtime.entries), runtime.get("source-0000"))
+	}
+	if runtime.get(fmt.Sprintf("source-%04d", scanCacheCapacity)) == nil {
+		t.Fatal("cache evicted newest source")
+	}
+}
+
+func TestWatchCacheEvictionRereadsWithoutRepeatingCompletedWork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "source")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-time.Minute).UnixNano()
+	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: watermark}
+	paths := make([]string, scanCacheCapacity+1)
+	for index := range paths {
+		path := filepath.Join(sessionDir, fmt.Sprintf("rollout-%04d.jsonl", index))
+		traceID := fmt.Sprintf("trace-cache-eviction-%04d", index)
+		source := strings.Join([]string{
+			`{"timestamp":"2026-09-22T12:00:00Z","type":"session_meta","payload":{"id":"cache-eviction"}}`,
+			fmt.Sprintf(`{"timestamp":"2026-09-22T12:00:01Z","type":"turn_context","payload":{"turn_id":"turn-%04d","trace_id":%q}}`, index, traceID),
+			`{"timestamp":"2026-09-22T12:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"input"}]}}`,
+			`{"timestamp":"2026-09-22T12:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"output"}]}}`,
+			`{"timestamp":"2026-09-22T12:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+		}, "\n") + "\n"
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		setMTime(t, path, now.Add(-10*time.Second))
+		paths[index] = path
+	}
+	corruptPath := filepath.Join(sessionDir, "rollout-z-corrupt.jsonl")
+	if err := os.WriteFile(corruptPath, []byte("{not-json}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setMTime(t, corruptPath, now.Add(-20*time.Second))
+	runtime := newScanRuntime()
+	deps := defaultScanDependencies()
+	parseCalls := make(map[string]int, len(paths)+1)
+	originalParse := deps.parse
+	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
+		parseCalls[path]++
+		return originalParse(path, include)
+	}
+	spanCalls := 0
+	opts := ScanOptions{
+		Root:  root,
+		Quiet: true,
+		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			return turn, "cache-eviction", nil
+		},
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if exported != len(paths) || spanCalls != len(paths) || state.ScanWatermarkNS != watermark {
+		t.Fatalf("first scan lost work or advanced on corruption: exported=%d spans=%d watermark=%d", exported, spanCalls, state.ScanWatermarkNS)
+	}
+	for _, path := range paths {
+		if parseCalls[path] != 1 {
+			t.Fatalf("source %s first parse count=%d, want 1", filepath.Base(path), parseCalls[path])
+		}
+	}
+	state, exported, err = scanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state, runtime, deps)
+	if err != nil {
+		t.Fatalf("second scan after eviction: %v", err)
+	}
+	if exported != 0 || spanCalls != len(paths) || parseCalls[paths[0]] < 2 || parseCalls[corruptPath] < 1 {
+		t.Fatalf("eviction did not cause a safe reread: exported=%d spans=%d first=%d corrupt=%d", exported, spanCalls, parseCalls[paths[0]], parseCalls[corruptPath])
+	}
+	for _, path := range paths {
+		if parseCalls[path] < 1 || parseCalls[path] > 2 {
+			t.Fatalf("source %s had unexpected parse count %d", filepath.Base(path), parseCalls[path])
+		}
+	}
+	if parseCalls[corruptPath] > 2 {
+		t.Fatalf("corrupt source retried too often after eviction: %d", parseCalls[corruptPath])
+	}
+}
+
+func TestWatchRestartDoesNotDuplicateDurablyProcessedTrace(t *testing.T) {
+	t.Parallel()
+
+	root, _, rolloutPath := watchFixture(t)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	setMTime(t, rolloutPath, now.Add(-10*time.Second))
+	traceID := completeTraceID(t, rolloutPath)
+	state := exportstate.State{
+		Version:           exportstate.Version,
+		ScanWatermarkNS:   now.Add(-time.Minute).UnixNano(),
+		ProcessedTraceIDs: []string{traceID},
+	}
+	spanCalls := 0
+	state, exported, err := ScanOnce(context.Background(), ScanOptions{
+		Root:  root,
+		Now:   now,
+		Quiet: true,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}, state)
+	if err != nil {
+		t.Fatalf("restarted scan: %v", err)
+	}
+	if exported != 0 || spanCalls != 0 || !state.HasProcessed(traceID) || state.ScanWatermarkNS != now.UnixNano() {
+		t.Fatalf("restart did not honor durable processed checkpoint: exported=%d spans=%d state=%+v", exported, spanCalls, state)
+	}
+}
+
+func TestWatchMissingSessionsRootIsIncompleteAndDrainsQueue(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-time.Minute).UnixNano()
+	queuedPath := filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl")
+	state := exportstate.State{
+		Version:         exportstate.Version,
+		ScanWatermarkNS: watermark,
+		Queue: []exportstate.QueueRequest{{
+			Provider:   agenttrace.ProviderCodex,
+			SourcePath: queuedPath,
+			EnqueuedAt: now.Format(time.RFC3339Nano),
+		}},
+	}
+	var stderr bytes.Buffer
+	spanCalls := 0
+	state, exported, err := ScanOnce(context.Background(), ScanOptions{
+		Root:             root,
+		Now:              now,
+		Quiet:            true,
+		Stderr:           &stderr,
+		ResolveWorkspace: testWorkspace,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
+			spanCalls++
+			return 200, nil
+		},
+		ExportScores: successfulScores,
+	}, state)
+	if err != nil {
+		t.Fatalf("ScanOnce: %v", err)
+	}
+	if exported != 1 || spanCalls != 1 || len(state.Queue) != 0 {
+		t.Fatalf("queue was blocked by missing Codex root: exported=%d spans=%d queue=%d", exported, spanCalls, len(state.Queue))
+	}
+	if state.ScanWatermarkNS != watermark || !strings.Contains(stderr.String(), "ERROR: watch_scan_incomplete discovery_errors=1") {
+		t.Fatalf("missing root did not remain visibly incomplete: watermark=%d stderr=%q", state.ScanWatermarkNS, stderr.String())
+	}
+}
+
 func TestWatchFiltersProcessedTurnsBeforeRetainingObservations(t *testing.T) {
 	t.Parallel()
 

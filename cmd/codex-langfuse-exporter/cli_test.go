@@ -253,12 +253,14 @@ func TestDoctorMode(t *testing.T) {
 	configPath := writeLangfuseConfig(t, home, server.URL)
 
 	oldRunCommand := runCommand
+	journalOutput := "all quiet\n"
+	var journalError error
 	runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "systemctl":
 			return []byte("active\n"), nil
 		case "journalctl":
-			return []byte("all quiet\n"), nil
+			return []byte(journalOutput), journalError
 		default:
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil, nil
@@ -288,6 +290,36 @@ func TestDoctorMode(t *testing.T) {
 	}
 	if !result.OK || len(result.Checks) == 0 {
 		t.Fatalf("doctor json result = %+v", result)
+	}
+
+	journalOutput = "ERROR: watch_scan_incomplete discovery_errors=1 stat_errors=0 parse_errors=0 delivery_errors=0 changed_sources=0 watermark_advanced=false\n"
+	stdout.Reset()
+	code = run(context.Background(), []string{"--doctor", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String(), "doctor recent_errors fail count=1") {
+		t.Fatalf("doctor did not fail on incomplete scan: exit=%d stdout=%s", code, stdout.String())
+	}
+
+	if err := exportstate.Save(context.Background(), statePath, exportstate.State{
+		Version:       exportstate.Version,
+		PendingScores: map[string]string{"trace-pending": "test-environment"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	journalOutput = "all quiet\n"
+	stdout.Reset()
+	code = run(context.Background(), []string{"--doctor", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String(), "doctor state_pending_scores fail pending_scores=1") {
+		t.Fatalf("doctor did not report pending scores: exit=%d stdout=%s", code, stdout.String())
+	}
+
+	if err := exportstate.Save(context.Background(), statePath, exportstate.State{Version: exportstate.Version}); err != nil {
+		t.Fatal(err)
+	}
+	journalError = errors.New("injected journal read failure")
+	stdout.Reset()
+	code = run(context.Background(), []string{"--doctor", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String(), "doctor recent_errors fail journal unavailable") {
+		t.Fatalf("doctor treated unavailable journal as healthy: exit=%d stdout=%s", code, stdout.String())
 	}
 }
 

@@ -46,6 +46,16 @@ go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'Test
 go test ./internal/watch -count=1
 ```
 
+Codex discovery, incomplete-scan health, watermark recovery, and cache lifecycle regressions:
+
+```sh
+go test ./internal/codextrace -run '^(TestSessionPathsIncludesMixedDepths|TestSessionPathsReturnsPartialResultsAndError|TestSessionPathsMissingRootIsAnError|TestFindSessionByIDPropagatesMissingRoot|TestLatestSessionPropagatesMissingRoot|TestParseTurnsFilteredOmitsProcessedTurnObservations)$' -count=1
+go test ./internal/watch -run '^(TestWatchStatFailureRetainsWatermarkAndRecovers|TestWatchDiscoveryFailureAllowsHealthyProgress|TestWatchCancellationAfterParseDoesNotExportOrAdvance|TestWatchCorruptSourceDoesNotBlockHealthyTurn|TestWatchParseRetryDeadlineAndRepair|TestWatchCachedIncompleteTurnCompletesAfterAppend|TestWatchPendingScoreBypassesSuccessCache|TestWatchChangedDuringParseDoesNotCacheOrAdvance|TestWatchScanCacheEvictsOldestMetadataEntry|TestWatchCacheEvictionRereadsWithoutRepeatingCompletedWork|TestWatchRestartDoesNotDuplicateDurablyProcessedTrace|TestWatchMissingSessionsRootIsIncompleteAndDrainsQueue|TestWatchFiltersProcessedTurnsBeforeRetainingObservations|TestLargeRolloutProbeRejectsSkippedTarget|TestLargeRolloutTargetConsumptionOracle|TestLargeRolloutProbeRejectsMalformedTail)$' -count=1
+go test ./cmd/codex-langfuse-exporter -run '^TestDoctorMode$' -count=1
+```
+
+The stat and discovery regressions prove successful turns can checkpoint while an uncertain source pins the global watermark. Quiet-mode tests require a bounded `ERROR: watch_scan_incomplete` line, and the doctor fixture fails on that marker, pending scores, and unavailable journal data. Cache tests cover parse retry deadlines, appends, a source changing during parse, pending-score bypass, process restart, and an over-capacity source set. Eviction may cause rereading; durable processed IDs must still prevent duplicate callbacks.
+
 Export state lock recovery and upgrade transaction checks:
 
 ```sh
@@ -222,7 +232,7 @@ Manual CLI validation is a separate optional check using a different transcript/
 
 Before publishing a release or public demo, run:
 
-After a Codex rollout OOM or a parser memory change, run the optional large-rollout check against the affected source and current state:
+The opt-in large-rollout probe copies the target to a private disk-backed snapshot, appends a unique completed marker to that same file, inventories actual source trace IDs, and verifies the marker and known source IDs were visited. It uses a private state copy and local span/score callbacks; it never changes the supplied source or production state. To run it against an actual source and state:
 
 ```sh
 go test -c -o /tmp/codex-langfuse-watch-live.test ./internal/watch
@@ -231,7 +241,33 @@ CODEX_LANGFUSE_WATCH_STATE_PATH="$HOME/.codex/langfuse-export-state.json" \
 /usr/bin/time -v /tmp/codex-langfuse-watch-live.test -test.run '^TestLiveCodexLargeRolloutFilteredScan$' -test.count=1 -test.v
 ```
 
-`TestLiveCodexLargeRolloutFilteredScan` requires a rollout of at least 100 MiB. It symlinks the source into a temporary Codex root, reads the supplied version 3 state into memory, and runs the normal watcher scan with local stub callbacks. It makes no Langfuse requests and writes no production state. Record the source size, test outcome, and maximum resident set reported by `/usr/bin/time`; do not include rollout content or trace IDs in reports.
+The live probe requires a source of at least 100 MiB and an existing version 3 state. It records byte and trace counts, source/state overlap, callbacks and RSS. Do not include rollout content or trace IDs in reports. This probe is separate from the generated multi-case memory gate.
+
+Run the resource matrix only on a host that meets the frozen reserve/PSI protocol. It writes generated JSONL under disk-backed `/var/tmp`, runs candidate and installed-baseline workers serially in fresh systemd user scopes hard-capped at 768 MiB memory with no swap, takes five RSS/time measurements per case for each revision, and fails if either worker cannot complete or candidate process RSS exceeds the fixed 768 MiB allowance.
+
+Build the comparison worker from the exact installed baseline recorded in the acceptance plan. The helper files are copied into a detached worktree only for this measurement:
+
+```sh
+baseline_worktree=$(mktemp -d /var/tmp/codex-langfuse-baseline.XXXXXX)
+git worktree add --detach "$baseline_worktree" 03139fa58eb57c9a66b24c76903847d9c1330ea3
+cp internal/watch/memory_gate_spec_test.go "$baseline_worktree/internal/watch/"
+cp internal/watch/memory_gate_legacy_worker_test.go "$baseline_worktree/internal/watch/"
+(
+  cd "$baseline_worktree"
+  go test -p=1 -c -ldflags "-X github.com/kirilligum/codex-langfuse-tracer/internal/watch.memoryGateLegacySourceRevision=03139fa58eb57c9a66b24c76903847d9c1330ea3" -o /var/tmp/codex-langfuse-baseline.test ./internal/watch
+)
+```
+
+Run the measured gate and then remove the temporary worktree and binary:
+
+```sh
+CODEX_LANGFUSE_MEMORY_GATE_BASELINE_BINARY=/var/tmp/codex-langfuse-baseline.test \
+CODEX_LANGFUSE_RUN_MEMORY_GATE=1 go test -p=1 ./internal/watch -run '^TestWatchMemoryEnvelope$' -count=1 -timeout=90m -v
+git worktree remove --force "$baseline_worktree"
+rm -f /var/tmp/codex-langfuse-baseline.test
+```
+
+The input preparation and each worker are separate processes. Both revisions use the same generated source and version 3 state for 100/400 MiB processed history followed by one selected completed EOF turn, a 100 MiB unprocessed backlog, a 100 MiB selected turn, a 16 MiB JSON record, pending-score retry, and healthy parsing behind corruption. The normal watcher suite also has a small fixture-oracle test for the processed-history plus selected-EOF case. A killed or skipped case is not a pass; preserve the reported resource failure and update [the acceptance record](plans/watcher-scan-recovery-and-memory-validation-plan.md).
 
 ```sh
 go test ./... -count=1

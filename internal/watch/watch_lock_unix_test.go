@@ -188,6 +188,9 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 
 func TestWatchRetriesQueueRemovalAfterCheckpoint(t *testing.T) {
 	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	statePath := filepath.Join(root, "state.json")
 	transcriptPath := filepath.Join(root, "claude.jsonl")
 	copyFile(t, filepath.Join("..", "..", "testdata", "sources", "claude", "no-tools.jsonl"), transcriptPath)

@@ -20,6 +20,10 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 // ParseTurnsFiltered parses a rollout while retaining only turns selected by
 // include. A nil include retains every turn, matching ParseTurns.
 func ParseTurnsFiltered(path string, include func(traceID string) bool) ([]agenttrace.Turn, error) {
+	return parseTurnsFiltered(path, include, nil)
+}
+
+func parseTurnsFiltered(path string, include func(traceID string) bool, observeRetained func(traceID string)) ([]agenttrace.Turn, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -110,6 +114,9 @@ func ParseTurnsFiltered(path string, include func(traceID string) bool) ([]agent
 				currentTurnID = turnID
 				continue
 			}
+			if observeRetained != nil {
+				observeRetained(traceID)
+			}
 			turn := &agenttrace.Turn{
 				Provider:  agenttrace.ProviderCodex,
 				SessionID: sessionID,
@@ -131,6 +138,9 @@ func ParseTurnsFiltered(path string, include func(traceID string) bool) ([]agent
 		turn := turnsByID[currentTurnID]
 		if turn == nil {
 			continue
+		}
+		if observeRetained != nil && (itemType == "event_msg" || itemType == "response_item") {
+			observeRetained(turn.TraceID)
 		}
 
 		switch itemType {

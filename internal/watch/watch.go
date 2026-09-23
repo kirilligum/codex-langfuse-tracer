@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,84 @@ type ScanOptions struct {
 	InitialLookbackSecs int
 }
 
+const (
+	scanCacheCapacity  = 1024
+	parseRetryInterval = 30 * time.Second
+)
+
+type scanDependencies struct {
+	discover func(string) ([]string, error)
+	stat     func(string) (os.FileInfo, error)
+	parse    func(string, func(string) bool) ([]agenttrace.Turn, error)
+}
+
+func defaultScanDependencies() scanDependencies {
+	return scanDependencies{
+		discover: codextrace.SessionPaths,
+		stat:     os.Stat,
+		parse:    codextrace.ParseTurnsFiltered,
+	}
+}
+
+type scanCacheEntry struct {
+	path        string
+	info        os.FileInfo
+	parseFailed bool
+	lastAttempt time.Time
+}
+
+type scanRuntime struct {
+	entries map[string]*list.Element
+	lru     *list.List
+}
+
+func newScanRuntime() *scanRuntime {
+	return &scanRuntime{entries: make(map[string]*list.Element), lru: list.New()}
+}
+
+func (r *scanRuntime) get(path string) *scanCacheEntry {
+	if r == nil {
+		return nil
+	}
+	element := r.entries[path]
+	if element == nil {
+		return nil
+	}
+	r.lru.MoveToFront(element)
+	return element.Value.(*scanCacheEntry)
+}
+
+func (r *scanRuntime) put(entry scanCacheEntry) {
+	if r == nil {
+		return
+	}
+	if r.entries == nil {
+		r.entries = make(map[string]*list.Element)
+		r.lru = list.New()
+	}
+	if existing := r.entries[entry.path]; existing != nil {
+		existing.Value = &entry
+		r.lru.MoveToFront(existing)
+		return
+	}
+	r.entries[entry.path] = r.lru.PushFront(&entry)
+	if r.lru.Len() > scanCacheCapacity {
+		oldest := r.lru.Back()
+		delete(r.entries, oldest.Value.(*scanCacheEntry).path)
+		r.lru.Remove(oldest)
+	}
+}
+
+func (r *scanRuntime) remove(path string) {
+	if r == nil {
+		return
+	}
+	if element := r.entries[path]; element != nil {
+		delete(r.entries, path)
+		r.lru.Remove(element)
+	}
+}
+
 func InitializeState(ctx context.Context, statePath string, now time.Time, stdout io.Writer, quiet bool) (exportstate.State, bool, error) {
 	if now.IsZero() {
 		now = time.Now()
@@ -52,6 +131,10 @@ func InitializeState(ctx context.Context, statePath string, now time.Time, stdou
 }
 
 func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (exportstate.State, int, error) {
+	return scanOnce(ctx, opts, state, newScanRuntime(), defaultScanDependencies())
+}
+
+func scanOnce(ctx context.Context, opts ScanOptions, state exportstate.State, runtime *scanRuntime, deps scanDependencies) (exportstate.State, int, error) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
@@ -61,6 +144,11 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 	exportedCount := 0
 	scanFailed := false
 	attemptedExport := false
+	discoveryErrors := 0
+	statErrors := 0
+	parseErrors := 0
+	deliveryErrors := 0
+	changedSources := 0
 
 	var queueExported int
 	var err error
@@ -69,14 +157,30 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 		return state, queueExported, err
 	}
 	exportedCount += queueExported
+	if err := ctx.Err(); err != nil {
+		return state, exportedCount, err
+	}
 	processedTraceIDs := make(map[string]struct{}, len(state.ProcessedTraceIDs))
 	for _, traceID := range state.ProcessedTraceIDs {
 		processedTraceIDs[traceID] = struct{}{}
 	}
 
-	for _, sessionPath := range codextrace.SessionPaths(opts.Root) {
-		info, err := os.Stat(sessionPath)
+	sessionPaths, discoveryErr := deps.discover(opts.Root)
+	if discoveryErr != nil {
+		scanFailed = true
+		discoveryErrors += discoveryErrorCount(discoveryErr)
+		if !opts.Quiet {
+			fmt.Fprintf(stderr, "warning: incomplete Codex rollout discovery: %v\n", discoveryErr)
+		}
+	}
+	for _, sessionPath := range sessionPaths {
+		if err := ctx.Err(); err != nil {
+			return state, exportedCount, err
+		}
+		info, err := deps.stat(sessionPath)
 		if err != nil {
+			scanFailed = true
+			statErrors++
 			if !opts.Quiet {
 				fmt.Fprintf(stderr, "warning: skipped unreadable rollout %s: %v\n", sessionPath, err)
 			}
@@ -86,19 +190,44 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 		if mtimeNS <= watermark || mtimeNS > scanStartedNS {
 			continue
 		}
+		cached := runtime.get(sessionPath)
+		if cached != nil && !sameSource(cached.info, info) {
+			runtime.remove(sessionPath)
+			cached = nil
+		}
+		if cached != nil && !cached.parseFailed {
+			continue
+		}
+		if cached != nil && opts.Now.Sub(cached.lastAttempt) < parseRetryInterval {
+			scanFailed = true
+			parseErrors++
+			if !opts.Quiet {
+				fmt.Fprintf(stderr, "warning: deferred retry for unchanged unreadable rollout %s\n", sessionPath)
+			}
+			continue
+		}
 
-		turns, err := codextrace.ParseTurnsFiltered(sessionPath, func(traceID string) bool {
+		turns, err := deps.parse(sessionPath, func(traceID string) bool {
 			_, processed := processedTraceIDs[traceID]
 			return !processed
 		})
 		if err != nil {
 			scanFailed = true
+			parseErrors++
+			runtime.put(scanCacheEntry{path: sessionPath, info: info, parseFailed: true, lastAttempt: opts.Now})
 			if !opts.Quiet {
 				fmt.Fprintf(stderr, "warning: skipped unreadable rollout %s: %v\n", sessionPath, err)
 			}
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return state, exportedCount, err
+		}
+		sourceDeliveryFailed := false
 		for _, turn := range turns {
+			if err := ctx.Err(); err != nil {
+				return state, exportedCount, err
+			}
 			if _, processed := processedTraceIDs[turn.TraceID]; processed {
 				continue
 			}
@@ -109,13 +238,47 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 				return state, exportedCount + emitted, err
 			}
 			exportedCount += emitted
-			scanFailed = scanFailed || failed
+			if failed {
+				scanFailed = true
+				deliveryErrors++
+				sourceDeliveryFailed = true
+			}
 			if state.HasProcessed(turn.TraceID) {
 				processedTraceIDs[turn.TraceID] = struct{}{}
 			}
 		}
+		after, err := deps.stat(sessionPath)
+		if err != nil {
+			scanFailed = true
+			statErrors++
+			runtime.remove(sessionPath)
+			if !opts.Quiet {
+				fmt.Fprintf(stderr, "warning: rollout changed or became unreadable during scan %s: %v\n", sessionPath, err)
+			}
+			continue
+		}
+		if !sameSource(info, after) {
+			scanFailed = true
+			changedSources++
+			runtime.remove(sessionPath)
+			if !opts.Quiet {
+				fmt.Fprintf(stderr, "warning: rollout changed during scan %s\n", sessionPath)
+			}
+			continue
+		}
+		if sourceDeliveryFailed || hasPendingScore(turns, processedTraceIDs, state) {
+			runtime.remove(sessionPath)
+			continue
+		}
+		runtime.put(scanCacheEntry{path: sessionPath, info: after})
 	}
 
+	if scanFailed {
+		fmt.Fprintf(stderr, "ERROR: watch_scan_incomplete discovery_errors=%d stat_errors=%d parse_errors=%d delivery_errors=%d changed_sources=%d watermark_advanced=false\n", discoveryErrors, statErrors, parseErrors, deliveryErrors, changedSources)
+	}
+	if err := ctx.Err(); err != nil {
+		return state, exportedCount, err
+	}
 	if !scanFailed {
 		state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
 			current.ScanWatermarkNS = scanStartedNS
@@ -125,6 +288,27 @@ func ScanOnce(ctx context.Context, opts ScanOptions, state exportstate.State) (e
 		}
 	}
 	return state, exportedCount, nil
+}
+
+func sameSource(before, after os.FileInfo) bool {
+	return before != nil && after != nil && os.SameFile(before, after) && before.Size() == after.Size() && before.ModTime().UnixNano() == after.ModTime().UnixNano()
+}
+
+func discoveryErrorCount(err error) int {
+	var counted interface{ ErrorCount() int }
+	if errors.As(err, &counted) && counted.ErrorCount() > 0 {
+		return counted.ErrorCount()
+	}
+	return 1
+}
+
+func hasPendingScore(turns []agenttrace.Turn, processed map[string]struct{}, state exportstate.State) bool {
+	for _, turn := range turns {
+		if _, done := processed[turn.TraceID]; !done && state.PendingScoreEnvironment(turn.TraceID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
@@ -375,6 +559,7 @@ func WatchSessions(ctx context.Context, opts ScanOptions) error {
 	if !opts.Quiet {
 		fmt.Fprintf(writerOrDiscard(opts.Stdout), "watching %s\n", opts.Root)
 	}
+	runtime := newScanRuntime()
 	interval := time.Duration(opts.PollIntervalSeconds * float64(time.Second))
 	if interval < 500*time.Millisecond {
 		interval = 500 * time.Millisecond
@@ -389,7 +574,7 @@ func WatchSessions(ctx context.Context, opts ScanOptions) error {
 				current = *latest
 			}
 		}
-		current, _, err = ScanOnce(ctx, opts, current)
+		current, _, err = scanOnce(ctx, opts, current, runtime, defaultScanDependencies())
 		if err != nil {
 			return err
 		}

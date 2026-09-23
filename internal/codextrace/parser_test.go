@@ -197,18 +197,51 @@ func TestParseTurnsFilteredOmitsProcessedTurnObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	turns, err := ParseTurnsFiltered(path, func(traceID string) bool {
+	include := func(traceID string) bool {
 		_, alreadyProcessed := processedTraceIDs[traceID]
 		return !alreadyProcessed
+	}
+	retainedByTrace := make(map[string]int)
+	turns, err := parseTurnsFiltered(path, include, func(traceID string) {
+		retainedByTrace[traceID]++
 	})
 	if err != nil {
-		t.Fatalf("ParseTurnsFiltered: %v", err)
+		t.Fatalf("parseTurnsFiltered: %v", err)
 	}
 	if len(turns) != 1 {
 		t.Fatalf("retained turn count = %d, want only the new turn", len(turns))
 	}
 	if turns[0].TraceID != newTraceID || turns[0].InputText() != "new input" || turns[0].OutputText() != "new output" || !turns[0].Completed {
 		t.Fatalf("new turn was not preserved: %+v", turns[0])
+	}
+	for traceID := range processedTraceIDs {
+		if retainedByTrace[traceID] != 0 {
+			t.Fatalf("processed trace %s reached observation retention %d times", traceID, retainedByTrace[traceID])
+		}
+	}
+	if retainedByTrace[newTraceID] == 0 {
+		t.Fatalf("new trace %s never reached observation retention", newTraceID)
+	}
+
+	publicTurns, err := ParseTurnsFiltered(path, include)
+	if err != nil {
+		t.Fatalf("ParseTurnsFiltered: %v", err)
+	}
+	if !reflect.DeepEqual(publicTurns, turns) {
+		t.Fatal("public filtered parser differs from the instrumented parser result")
+	}
+	allTurns, err := ParseTurns(path)
+	if err != nil {
+		t.Fatalf("ParseTurns: %v", err)
+	}
+	var selectedAfterFullParse []agenttrace.Turn
+	for _, turn := range allTurns {
+		if include(turn.TraceID) {
+			selectedAfterFullParse = append(selectedAfterFullParse, turn)
+		}
+	}
+	if !reflect.DeepEqual(publicTurns, selectedAfterFullParse) {
+		t.Fatal("filtered parser projection differs from full parse followed by selection")
 	}
 }
 

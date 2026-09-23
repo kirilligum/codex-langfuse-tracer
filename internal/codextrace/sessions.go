@@ -2,40 +2,86 @@ package codextrace
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-func SessionPaths(root string) []string {
-	matches, _ := filepath.Glob(filepath.Join(root, "sessions", "**", "rollout-*.jsonl"))
-	if len(matches) == 0 {
-		matches = recursiveSessionPaths(filepath.Join(root, "sessions"))
-	}
-	sort.Strings(matches)
-	return matches
+type discoveryError struct {
+	count int
+	first error
 }
 
-func recursiveSessionPaths(sessionsDir string) []string {
+func (e *discoveryError) Error() string {
+	if e == nil || e.count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Codex session discovery encountered %d filesystem error(s): %v", e.count, e.first)
+}
+
+func (e *discoveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.first
+}
+
+func (e *discoveryError) ErrorCount() int {
+	if e == nil {
+		return 0
+	}
+	return e.count
+}
+
+type walkDirFunc func(string, fs.WalkDirFunc) error
+
+func SessionPaths(root string) ([]string, error) {
+	return sessionPathsWith(filepath.Join(root, "sessions"), filepath.WalkDir)
+}
+
+func sessionPathsWith(sessionsDir string, walk walkDirFunc) ([]string, error) {
 	var matches []string
-	_ = filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() {
+	var walkFailure discoveryError
+	addWalkError := func(err error) {
+		if err == nil {
+			return
+		}
+		walkFailure.count++
+		if walkFailure.first == nil {
+			walkFailure.first = err
+		}
+	}
+	walkErr := walk(sessionsDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			addWalkError(err)
 			return nil
 		}
-		name := d.Name()
+		if entry == nil || entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
 		if strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl") {
 			matches = append(matches, path)
 		}
 		return nil
 	})
+	addWalkError(walkErr)
 	sort.Strings(matches)
-	return matches
+	if walkFailure.count != 0 {
+		return matches, &walkFailure
+	}
+	return matches, nil
 }
 
 func FindSessionByID(sessionID, root string) (string, error) {
+	paths, err := SessionPaths(root)
+	if err != nil {
+		return "", fmt.Errorf("discover Codex sessions: %w", err)
+	}
 	var matches []string
-	for _, path := range SessionPaths(root) {
+	for _, path := range paths {
 		if strings.Contains(filepath.Base(path), sessionID) {
 			matches = append(matches, path)
 		}
@@ -50,7 +96,10 @@ func FindSessionByID(sessionID, root string) (string, error) {
 }
 
 func LatestSession(root string) (string, error) {
-	paths := SessionPaths(root)
+	paths, err := SessionPaths(root)
+	if err != nil {
+		return "", fmt.Errorf("discover Codex sessions: %w", err)
+	}
 	if len(paths) == 0 {
 		return "", fmt.Errorf("no Codex rollout JSONL files found under %s", filepath.Join(root, "sessions"))
 	}

@@ -241,7 +241,7 @@ This repo does not install Codex or Langfuse.
 There is one automatic export path:
 
 1. `codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`.
-2. The exporter polls `~/.codex/sessions/` for `rollout-*.jsonl` every five seconds by default.
+2. The exporter recursively polls `~/.codex/sessions/` for `rollout-*.jsonl` at the configured interval (five seconds by default).
 3. The watcher considers only completed turns with non-empty canonical input and output from Codex `response_item` messages.
 4. One export sends `codex.agent`, `codex.transcript`, and all child observations in a single batch, then creates deterministic trace-level scores.
 5. Processed traces, score retries, and queue requests are saved in `~/.codex/langfuse-export-state.json`.
@@ -253,6 +253,12 @@ The version 3 state document uses `processed_trace_ids`, `pending_scores[trace_i
 Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
 
 During catch-up after an outage, the watcher waits one configured poll interval between turn export attempts so the Langfuse ingestion and score queues receive bounded load.
+
+An incomplete filesystem discovery, rollout stat/read error, source change during a scan, or failed export keeps the global scan watermark in place. The watcher can still checkpoint healthy turns found in the same scan. It prints an `ERROR: watch_scan_incomplete ... watermark_advanced=false` summary even in quiet mode; doctor treats that error as unhealthy during its 15-minute journal window. A missing `~/.codex/sessions/` directory is also reported as incomplete discovery, including before Codex has created it.
+
+The running watcher keeps a bounded in-memory cache of stable, successfully parsed file metadata, not transcript content. It avoids reparsing unchanged healthy files while another source holds the watermark. An unchanged corrupt rollout is retried at most once every 30 seconds; a changed source is retried on the next scan while its mtime remains eligible. A service restart clears this cache and may reread files, while persisted per-turn checkpoints prevent already completed traces from being resent.
+
+Discovery uses modification time and currently visible paths. If a source disappears from the watched tree and is later restored with an mtime older than an already advanced watermark, it is outside automatic recovery; rewriting a file while preserving its identity, size, and mtime is also not detectable. Keep source files intact, and do not delete or edit export state to clear a warning. The doctor reports pending score checkpoints and an unreadable journal as failures rather than a healthy result.
 
 When `span_export_succeeded ... checkpoint=pending` appears, the export callback returned successfully and the watcher has not yet recorded its pending-score checkpoint. The existing `exported` line appears only after that checkpoint operation succeeds. If `span_checkpoint_unconfirmed` appears, the checkpoint operation returned an error after a successful export callback, so a later retry may repeat the send. These lines distinguish local steps; they do not prove complete or lasting remote visibility. They contain trace IDs, status, and fixed labels only.
 
@@ -563,6 +569,9 @@ Common failure modes:
 - `./install.sh` fails with `Langfuse model list /api/public/models failed with HTTP 401`: the configured public/secret key pair is not valid for the Langfuse instance at `LANGFUSE_HOST`. Seed the same `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, or create/copy a project key pair from the Langfuse UI and update `~/.codex/config.toml`.
 - The journal shows `ERROR: export state lock busy path=... waited=2s retry_in=...`: the watcher is waiting for a state transaction and retries that same checkpoint in place. It logs at most once per minute while the lock remains busy. Check for another exporter using the same state path and inspect fresh logs for a recovery message; do not delete the sidecar to clear contention. `--doctor` may continue to show the recent error during its existing 15-minute journal window after recovery.
 - `--claude-hook` exits nonzero with an export state lock error: the request was not acknowledged or queued. Once contention clears, retry the existing hook invocation or explicitly export its transcript with `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>`.
+- The journal shows `ERROR: watch_scan_incomplete ...`: the scan did not establish a complete source inventory or finish all eligible work, so its watermark stayed put. Read the surrounding watcher messages, restore access or repair the source, and let the service retry. Healthy turns from the same scan may already be checkpointed; do not reset state or manually resend them. Doctor can continue failing for up to 15 minutes after the last incomplete scan.
+- `--doctor` reports `state_pending_scores fail`: score submission or its checkpoint is still pending. Let the watcher retry and rerun doctor; do not delete the pending entry or resend spans manually.
+- `--doctor` reports `recent_errors fail journal unavailable`: doctor could not read watcher history, so it cannot certify recent scan health. Restore the user's journal access/service and rerun doctor.
 - `systemctl --user status codex-langfuse-watch.service` says the unit is not found after `./install.sh`: the installer likely failed before the service install step. Fix the Langfuse reachability or authentication error and rerun `./install.sh`.
 - Browser sign-in redirects to `localhost`: the Langfuse server's `NEXTAUTH_URL` is still set to `http://localhost:3000`. Set it to the actual browser URL, such as a Tailscale URL, and recreate the `langfuse-web` container.
 - A browser on Windows cannot reach a Tailscale IP that works from WSL: Tailscale may be running only inside WSL. Run Tailscale on the Windows host too, or open the browser inside the same WSL network environment.
