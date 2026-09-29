@@ -218,14 +218,14 @@ func TestMemoryGateProcessedHistoryFixtureSelectsEOFTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare small P100 fixture: %v", err)
 	}
-	if prepared.spec.ExpectedTraceID != memoryGateEOFTurnTraceID || prepared.spec.ExpectedSelectedTurns != 1 || prepared.spec.ExpectedSpanCalls != 1 || prepared.spec.ExpectedScoreCalls != 1 {
+	if prepared.spec.ExpectedTraceID != memoryGateEOFTurnTraceID || prepared.spec.ExpectedSelectedTurns != 1 || prepared.spec.ExpectedLaminarCalls != 1 {
 		t.Fatalf("P100 expected oracle = %+v", prepared.spec)
 	}
 	state, err := exportstate.Load(prepared.state)
 	if err != nil || state == nil {
 		t.Fatalf("load generated P100 state: state=%t err=%v", state != nil, err)
 	}
-	var sourceTurns, selectedTurns, parseCalls, spanCalls, scoreCalls int
+	var sourceTurns, selectedTurns, parseCalls, spanCalls int
 	deps := defaultScanDependencies()
 	originalParse := deps.parse
 	deps.parse = func(path string, include func(string) bool) ([]agenttrace.Turn, error) {
@@ -254,19 +254,12 @@ func TestMemoryGateProcessedHistoryFixtureSelectsEOFTurn(t *testing.T) {
 			}
 			return 200, nil
 		},
-		ExportScores: func(_ context.Context, turn agenttrace.Turn, _ string) error {
-			scoreCalls++
-			if turn.TraceID != memoryGateEOFTurnTraceID || !turn.Completed {
-				t.Errorf("EOF score turn = trace:%q completed:%t", turn.TraceID, turn.Completed)
-			}
-			return nil
-		},
 	}, *state, newScanRuntime(), deps)
 	if err != nil {
 		t.Fatalf("scan small P100 fixture: %v", err)
 	}
-	if parseCalls != 1 || sourceTurns != prepared.spec.ExpectedSourceTurns || selectedTurns != 1 || spanCalls != 1 || scoreCalls != 1 || exported != 1 || !scanned.HasProcessed(memoryGateEOFTurnTraceID) || scanned.ScanWatermarkNS != now.UnixNano() {
-		t.Fatalf("P100 fixture oracle: parses=%d source=%d selected=%d spans=%d scores=%d exported=%d state=%+v", parseCalls, sourceTurns, selectedTurns, spanCalls, scoreCalls, exported, scanned)
+	if parseCalls != 1 || sourceTurns != prepared.spec.ExpectedSourceTurns || selectedTurns != 1 || spanCalls != 1 || exported != 1 || !scanned.HasProcessed(memoryGateEOFTurnTraceID) || scanned.ScanWatermarkNS != now.UnixNano() {
+		t.Fatalf("P100 fixture oracle: parses=%d source=%d selected=%d spans=%d exported=%d state=%+v", parseCalls, sourceTurns, selectedTurns, spanCalls, exported, scanned)
 	}
 }
 
@@ -332,7 +325,6 @@ func runMemoryGateWorker(t *testing.T) {
 		})
 	}
 	spanCalls := 0
-	scoreCalls := 0
 	runtime := newScanRuntime()
 	scannedState, exported, err := scanOnce(context.Background(), ScanOptions{
 		Root:  root,
@@ -360,16 +352,6 @@ func runMemoryGateWorker(t *testing.T) {
 			}
 			return 200, nil
 		},
-		ExportScores: func(_ context.Context, turn agenttrace.Turn, environment string) error {
-			scoreCalls++
-			if spec.ExpectedTraceID != "" && turn.TraceID != spec.ExpectedTraceID {
-				t.Errorf("case %s score trace=%q, want %q", spec.Name, turn.TraceID, spec.ExpectedTraceID)
-			}
-			if spec.Name == "S100" && environment != "persisted-score-environment" {
-				t.Errorf("S100 environment=%q", environment)
-			}
-			return nil
-		},
 	}, *state, runtime, deps)
 	if err != nil {
 		t.Fatalf("scan memory case %s: %v", spec.Name, err)
@@ -380,8 +362,8 @@ func runMemoryGateWorker(t *testing.T) {
 	if sourceTurnContexts != spec.ExpectedSourceTurns || selectedTurnContexts != spec.ExpectedSelectedTurns {
 		t.Fatalf("case %s parsed turn counts: source=%d selected=%d; want %d/%d", spec.Name, sourceTurnContexts, selectedTurnContexts, spec.ExpectedSourceTurns, spec.ExpectedSelectedTurns)
 	}
-	if spanCalls != spec.ExpectedSpanCalls || scoreCalls != spec.ExpectedScoreCalls || exported != spec.ExpectedSpanCalls {
-		t.Fatalf("case %s callbacks: spans=%d scores=%d exported=%d; want %d/%d/%d", spec.Name, spanCalls, scoreCalls, exported, spec.ExpectedSpanCalls, spec.ExpectedScoreCalls, spec.ExpectedSpanCalls)
+	if spanCalls != spec.ExpectedLaminarCalls || exported != spec.ExpectedLaminarCalls {
+		t.Fatalf("case %s collector deliveries: spans=%d exported=%d; want %d/%d", spec.Name, spanCalls, exported, spec.ExpectedLaminarCalls, spec.ExpectedLaminarCalls)
 	}
 	wantWatermark := now.UnixNano()
 	if spec.CorruptSibling {
@@ -402,7 +384,7 @@ func runMemoryGateWorker(t *testing.T) {
 			t.Fatalf("C100 repeated stable parses: %v", parsed)
 		}
 	}
-	t.Logf("memory_case name=%s scans=%d source_turn_contexts=%d selected_turn_contexts=%d processed_turn_contexts=%d primary_parse_calls=%d spans=%d scores=%d processed_state=%d pending_scores=%d", spec.Name, 1+boolToInt(spec.CorruptSibling), sourceTurnContexts, selectedTurnContexts, sourceTurnContexts-selectedTurnContexts, parsed["rollout-primary.jsonl"], spanCalls, scoreCalls, len(scannedState.ProcessedTraceIDs), len(scannedState.PendingScores))
+	t.Logf("memory_case name=%s scans=%d source_turn_contexts=%d selected_turn_contexts=%d processed_turn_contexts=%d primary_parse_calls=%d collector_deliveries=%d processed_state=%d legacy_pending=%d", spec.Name, 1+boolToInt(spec.CorruptSibling), sourceTurnContexts, selectedTurnContexts, sourceTurnContexts-selectedTurnContexts, parsed["rollout-primary.jsonl"], spanCalls, len(scannedState.ProcessedTraceIDs), len(scannedState.PendingScores))
 }
 
 func prepareProcessedHistoryCase(root string) (preparedMemoryCase, error) {
@@ -455,7 +437,7 @@ func prepareProcessedHistoryCaseWithTarget(root, name string, target int64) (pre
 	if err := finishMemorySource(file, writer, sourcePath); err != nil {
 		return preparedMemoryCase{}, err
 	}
-	spec := memoryGateSpec{Name: name, TargetBytes: target, ExpectedSpanCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: turns + 1, ExpectedSelectedTurns: 1, ExpectedTraceID: memoryGateEOFTurnTraceID}
+	spec := memoryGateSpec{Name: name, TargetBytes: target, ExpectedSpanCalls: 1, ExpectedLaminarCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: turns + 1, ExpectedSelectedTurns: 1, ExpectedTraceID: memoryGateEOFTurnTraceID}
 	return finishPreparedMemoryCase(root, state, spec)
 }
 
@@ -492,7 +474,7 @@ func prepareUnprocessedBacklogCase(root string) (preparedMemoryCase, error) {
 	if err := finishMemorySource(file, writer, sourcePath); err != nil {
 		return preparedMemoryCase{}, err
 	}
-	spec := memoryGateSpec{Name: "U100", TargetBytes: target, ExpectedSpanCalls: turns, ExpectedScoreCalls: turns, ExpectedSourceTurns: turns, ExpectedSelectedTurns: turns, MinInputBytes: messageBytes}
+	spec := memoryGateSpec{Name: "U100", TargetBytes: target, ExpectedSpanCalls: turns, ExpectedLaminarCalls: turns, ExpectedScoreCalls: turns, ExpectedSourceTurns: turns, ExpectedSelectedTurns: turns, MinInputBytes: messageBytes}
 	return finishPreparedMemoryCase(root, state, spec)
 }
 
@@ -534,7 +516,7 @@ func prepareLargeSelectedTurnCase(root string) (preparedMemoryCase, error) {
 	if err := finishMemorySource(file, writer, sourcePath); err != nil {
 		return preparedMemoryCase{}, err
 	}
-	spec := memoryGateSpec{Name: "T100", TargetBytes: target, ExpectedSpanCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: 1, ExpectedSelectedTurns: 1, ExpectedTraceID: traceID, ExpectedObsPerTurn: observations, MinInputBytes: len("input")}
+	spec := memoryGateSpec{Name: "T100", TargetBytes: target, ExpectedSpanCalls: 1, ExpectedLaminarCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: 1, ExpectedSelectedTurns: 1, ExpectedTraceID: traceID, ExpectedObsPerTurn: observations, MinInputBytes: len("input")}
 	return finishPreparedMemoryCase(root, state, spec)
 }
 
@@ -571,7 +553,7 @@ func prepareLargeRecordCase(root string) (preparedMemoryCase, error) {
 	if err := finishMemorySource(file, writer, sourcePath); err != nil {
 		return preparedMemoryCase{}, err
 	}
-	spec := memoryGateSpec{Name: "R16", TargetBytes: target, ExpectedSpanCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: 1, ExpectedSelectedTurns: 1, ExpectedTraceID: "trace-large-record", MinInputBytes: len("input"), MinOutputBytes: int(target)}
+	spec := memoryGateSpec{Name: "R16", TargetBytes: target, ExpectedSpanCalls: 1, ExpectedLaminarCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: 1, ExpectedSelectedTurns: 1, ExpectedTraceID: "trace-large-record", MinInputBytes: len("input"), MinOutputBytes: int(target)}
 	return finishPreparedMemoryCase(root, state, spec)
 }
 
@@ -619,7 +601,7 @@ func preparePendingScoreCase(root string) (preparedMemoryCase, error) {
 		return preparedMemoryCase{}, err
 	}
 	state.PendingScores = map[string]string{pendingTraceID: "persisted-score-environment"}
-	spec := memoryGateSpec{Name: "S100", TargetBytes: target, ExpectedScoreCalls: 1, ExpectedSourceTurns: turns + 1, ExpectedSelectedTurns: 1, ExpectedTraceID: pendingTraceID}
+	spec := memoryGateSpec{Name: "S100", TargetBytes: target, ExpectedLaminarCalls: 1, ExpectedScoreCalls: 1, ExpectedSourceTurns: turns + 1, ExpectedSelectedTurns: 1, ExpectedTraceID: pendingTraceID}
 	return finishPreparedMemoryCase(root, state, spec)
 }
 

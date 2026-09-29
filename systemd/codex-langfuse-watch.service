@@ -1,5 +1,5 @@
 [Unit]
-Description=Export completed Codex turns to Langfuse
+Description=Export completed Codex and Claude turns through the local Laminar Collector
 After=default.target
 
 [Service]

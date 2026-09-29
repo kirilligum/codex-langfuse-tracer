@@ -5,19 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
 )
 
 // TEST-002
@@ -40,26 +40,16 @@ func TestCLIFlags(t *testing.T) {
 	if opts.PollIntervalSeconds != buildinfo.DefaultPollIntervalSeconds {
 		t.Fatalf("poll interval = %v", opts.PollIntervalSeconds)
 	}
-	if opts.VerifyWaitSeconds != 25.0 || opts.VerifyIntervalSeconds != 3.0 {
-		t.Fatalf("verify defaults = %v/%v", opts.VerifyWaitSeconds, opts.VerifyIntervalSeconds)
-	}
-
 	opts, err = parseArgs([]string{
 		"--path", "/tmp/rollout.jsonl",
 		"--turn-id", "turn-1",
-		"--no-verify",
-		"--verify-wait-seconds", "1.5",
-		"--verify-interval-seconds", "0.25",
 		"--quiet",
 	})
 	if err != nil {
 		t.Fatalf("parse path mode: %v", err)
 	}
-	if opts.Path != "/tmp/rollout.jsonl" || opts.TurnID != "turn-1" || !opts.NoVerify || !opts.Quiet {
+	if opts.Path != "/tmp/rollout.jsonl" || opts.TurnID != "turn-1" || !opts.Quiet {
 		t.Fatalf("path options not preserved: %+v", opts)
-	}
-	if opts.VerifyWaitSeconds != 1.5 || opts.VerifyIntervalSeconds != 0.25 {
-		t.Fatalf("verify values not preserved: %+v", opts)
 	}
 	opts, err = parseArgs([]string{"--doctor", "--json"})
 	if err != nil {
@@ -86,7 +76,7 @@ func TestCLIFlags(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--watch", "--json"},
-		{"--sync-model-pricing", "--json"},
+		{"--check-receiver", "--json"},
 		{"--claude-hook", "--json"},
 	} {
 		_, err := parseArgs(args)
@@ -128,7 +118,7 @@ func TestCLIProviderSelection(t *testing.T) {
 		{"--provider", "claude", "--latest"},
 		{"--provider", "claude", "--session-id", "abc"},
 		{"--provider", "claude", "--watch"},
-		{"--provider", "claude", "--sync-model-pricing"},
+		{"--provider", "claude", "--check-receiver"},
 	} {
 		_, err := parseArgs(args)
 		if err == nil {
@@ -156,78 +146,55 @@ func TestEvalProviderCLISurface(t *testing.T) {
 }
 
 // TEST-406
-func TestSyncModelPricingMode(t *testing.T) {
+func TestCheckReceiverMode(t *testing.T) {
 	home := t.TempDir()
-	configPath := writeLangfuseConfig(t, home, "http://127.0.0.1")
+	var requests atomic.Int32
+	var receiverCheckComplete atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer "+strings.Repeat("a", 64) {
+			t.Fatalf("unexpected receiver check: %s %s", r.Method, r.URL.Path)
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read receiver request: %v", err)
+		}
+		if !receiverCheckComplete.Load() && len(payload) != 0 {
+			t.Fatalf("empty OTLP receiver check unexpectedly carries data: %d bytes", len(payload))
+		}
+		if receiverCheckComplete.Load() && len(payload) == 0 {
+			t.Fatal("manual trace export unexpectedly carries an empty body")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	configPath := writeLaminarConfig(t, home, server.URL)
 
-	opts, err := parseArgs([]string{"--sync-model-pricing"})
-	if err != nil {
-		t.Fatalf("parse sync mode: %v", err)
-	}
-	if opts.Mode() != "sync-model-pricing" {
-		t.Fatalf("mode = %q", opts.Mode())
+	opts, err := parseArgs([]string{"--check-receiver"})
+	if err != nil || opts.Mode() != "check-receiver" {
+		t.Fatalf("receiver check options=%+v err=%v", opts, err)
 	}
 	for _, args := range [][]string{
-		{"--sync-model-pricing", "--latest"},
-		{"--sync-model-pricing", "--path", "/tmp/rollout.jsonl"},
-		{"--sync-model-pricing", "--watch"},
+		{"--check-receiver", "--latest"},
+		{"--check-receiver", "--watch"},
 	} {
 		if _, err := parseArgs(args); err == nil {
 			t.Fatalf("parseArgs(%v) succeeded, want mutually exclusive mode error", args)
 		}
 	}
 
-	calls := 0
-	oldSync := syncModelPricing
-	syncModelPricing = func(ctx context.Context, cfg config.LangfuseConfig) (langfuse.ModelSyncSummary, error) {
-		calls++
-		if cfg.Host != "http://127.0.0.1" {
-			t.Fatalf("cfg host = %q", cfg.Host)
-		}
-		return langfuse.ModelSyncSummary{Existing: 1, Created: 2}, nil
-	}
-	t.Cleanup(func() { syncModelPricing = oldSync })
-
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--sync-model-pricing", "--config", configPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run sync exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if calls != 1 {
-		t.Fatalf("sync calls = %d, want 1", calls)
-	}
-	if !strings.Contains(stdout.String(), "model_pricing existing=1 created=2 conflicting=0") {
-		t.Fatalf("missing sync summary stdout=%s", stdout.String())
+	code := run(context.Background(), []string{"--check-receiver", "--config", configPath}, &stdout, &stderr)
+	if code != 0 || requests.Load() != 1 || !strings.Contains(stdout.String(), "receiver_accepted status=200") {
+		t.Fatalf("check receiver exit=%d requests=%d stdout=%s stderr=%s", code, requests.Load(), stdout.String(), stderr.String())
 	}
 
+	receiverCheckComplete.Store(true)
 	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
-	otelPosts := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/public/otel/v1/traces":
-			otelPosts++
-			w.WriteHeader(http.StatusOK)
-		case "/api/public/ingestion":
-			writeTestIngestionSuccess(t, w, r)
-		case "/api/public/projects":
-			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
-		case "/api/public/models":
-			t.Fatalf("export mode called model sync endpoint")
-		default:
-			t.Fatalf("unexpected request %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	exportConfigPath := writeLangfuseConfig(t, home, server.URL)
-	code = run(context.Background(), []string{"--path", rolloutPath, "--config", exportConfigPath, "--no-verify"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run export exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if calls != 1 {
-		t.Fatalf("sync was called during export mode: %d", calls)
-	}
-	if otelPosts != 1 {
-		t.Fatalf("otel posts = %d, want 1", otelPosts)
+	requests.Store(0)
+	code = run(context.Background(), []string{"--path", rolloutPath, "--config", configPath}, &stdout, &stderr)
+	if code != 0 || requests.Load() != 1 {
+		t.Fatalf("export through Laminar exit=%d requests=%d stdout=%s stderr=%s", code, requests.Load(), stdout.String(), stderr.String())
 	}
 }
 
@@ -239,18 +206,18 @@ func TestDoctorMode(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/public/health":
-			_, _ = w.Write([]byte(`{"status":"OK"}`))
-		case "/api/public/models":
-			_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
-		case "/api/public/projects":
-			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
+		case "/v1/traces":
+			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
 	}))
 	defer server.Close()
-	configPath := writeLangfuseConfig(t, home, server.URL)
+	configPath := writeLaminarConfig(t, home, server.URL)
+	oldHealth, oldMetrics := checkCollectorHealth, checkCollectorMetrics
+	checkCollectorHealth = func(context.Context) (int, error) { return http.StatusOK, nil }
+	checkCollectorMetrics = func(context.Context) (int, error) { return http.StatusOK, nil }
+	t.Cleanup(func() { checkCollectorHealth, checkCollectorMetrics = oldHealth, oldMetrics })
 
 	oldRunCommand := runCommand
 	journalOutput := "all quiet\n"
@@ -273,7 +240,7 @@ func TestDoctorMode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doctor exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	for _, want := range []string{"doctor health ok", "doctor auth ok", "doctor watcher ok", "doctor state ok", "doctor result ok"} {
+	for _, want := range []string{"doctor receiver_auth ok", "doctor collector_health ok", "doctor collector_metrics ok", "doctor watcher ok", "doctor state ok", "doctor result ok"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("doctor output missing %q in %s", want, stdout.String())
 		}
@@ -308,8 +275,8 @@ func TestDoctorMode(t *testing.T) {
 	journalOutput = "all quiet\n"
 	stdout.Reset()
 	code = run(context.Background(), []string{"--doctor", "--config", configPath, "--state-file", statePath}, &stdout, &stderr)
-	if code == 0 || !strings.Contains(stdout.String(), "doctor state_pending_scores fail pending_scores=1") {
-		t.Fatalf("doctor did not report pending scores: exit=%d stdout=%s", code, stdout.String())
+	if code == 0 || !strings.Contains(stdout.String(), "doctor state_legacy_pending_traces fail pending_traces=1") {
+		t.Fatalf("doctor did not report pending legacy traces: exit=%d stdout=%s", code, stdout.String())
 	}
 
 	if err := exportstate.Save(context.Background(), statePath, exportstate.State{Version: exportstate.Version}); err != nil {

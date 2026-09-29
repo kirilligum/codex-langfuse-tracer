@@ -1,4 +1,4 @@
-package langfuse
+package laminar
 
 import (
 	"context"
@@ -40,25 +40,30 @@ func (m *memoryExporter) Snapshots() spanSnapshots {
 		if span.Parent().IsValid() {
 			parent = span.Parent().SpanID().String()
 		}
+		status := span.Status()
 		snapshots = append(snapshots, spanSnapshot{
-			Name:          span.Name(),
-			TraceID:       span.SpanContext().TraceID().String(),
-			SpanID:        span.SpanContext().SpanID().String(),
-			ParentSpanID:  parent,
-			Attributes:    attrs,
-			ResourceAttrs: resourceAttrs,
+			Name:              span.Name(),
+			TraceID:           span.SpanContext().TraceID().String(),
+			SpanID:            span.SpanContext().SpanID().String(),
+			ParentSpanID:      parent,
+			StatusCode:        status.Code.String(),
+			StatusDescription: status.Description,
+			Attributes:        attrs,
+			ResourceAttrs:     resourceAttrs,
 		})
 	}
 	return snapshots
 }
 
 type spanSnapshot struct {
-	Name          string
-	TraceID       string
-	SpanID        string
-	ParentSpanID  string
-	Attributes    map[string]string
-	ResourceAttrs map[string]string
+	Name              string
+	TraceID           string
+	SpanID            string
+	ParentSpanID      string
+	StatusCode        string
+	StatusDescription string
+	Attributes        map[string]string
+	ResourceAttrs     map[string]string
 }
 
 type spanSnapshots []spanSnapshot

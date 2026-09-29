@@ -1,3 +1,5 @@
+//go:build legacywatchmemory
+
 package watch
 
 import (

@@ -69,7 +69,6 @@ func TestEvalWatchExportLatency(t *testing.T) {
 			batchesByTrace[turn.TraceID]++
 			return 200, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error { return nil },
 	}, state)
 	if err != nil {
 		t.Fatal(err)

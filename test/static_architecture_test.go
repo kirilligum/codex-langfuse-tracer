@@ -49,7 +49,7 @@ func TestNoDuplicateAgentTraceLogic(t *testing.T) {
 		for _, forbidden := range []string{
 			`"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"`,
 			`"github.com/kirilligum/codex-langfuse-tracer/internal/claudetrace"`,
-			`"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"`,
+			`"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"`,
 		} {
 			if strings.Contains(text, forbidden) {
 				t.Fatalf("%s imports forbidden provider/runtime package %s", path, forbidden)
@@ -85,12 +85,11 @@ func TestEvalAgentTraceOwnershipSurface(t *testing.T) {
 	}
 }
 
-func TestCanonicalLangfuseObservationArchitecture(t *testing.T) {
+func TestCanonicalLaminarSpanArchitecture(t *testing.T) {
 	t.Parallel()
 
 	productionFiles := []string{
-		filepath.Join("..", "internal", "langfuse", "api.go"),
-		filepath.Join("..", "internal", "langfuse", "export.go"),
+		filepath.Join("..", "internal", "laminar", "export.go"),
 		filepath.Join("..", "internal", "watch", "watch.go"),
 		filepath.Join("..", "cmd", "codex-langfuse-exporter", "main.go"),
 	}
@@ -99,8 +98,7 @@ func TestCanonicalLangfuseObservationArchitecture(t *testing.T) {
 		for _, forbidden := range []string{
 			"langfuse.trace.input",
 			"langfuse.trace.output",
-			"/api/public/traces",
-			"/api/public/observations",
+			"/api/public/",
 			"firstObservationIndex",
 			"TurnProgress",
 			"FinalSpansExported",
@@ -114,10 +112,17 @@ func TestCanonicalLangfuseObservationArchitecture(t *testing.T) {
 			}
 		}
 	}
-	api := readText(t, filepath.Join("..", "internal", "langfuse", "api.go"))
-	for _, required := range []string{"/api/public/v2/observations", "isRootObservation", "type Observation struct"} {
-		if !strings.Contains(api, required) {
-			t.Fatalf("api.go missing canonical observation client marker %q", required)
+	exporter := readText(t, filepath.Join("..", "internal", "laminar", "export.go"))
+	for _, required := range []string{
+		"lmnr.span.type",
+		"lmnr.span.input",
+		"lmnr.span.output",
+		"lmnr.association.properties.tags",
+		"gen_ai.usage.input_tokens",
+		"codex_score_",
+	} {
+		if !strings.Contains(exporter, required) {
+			t.Fatalf("Laminar exporter missing canonical projection marker %q", required)
 		}
 	}
 }
@@ -166,14 +171,14 @@ func TestRemovedIdentityOverrides(t *testing.T) {
 			"opts.Environment",
 			"&opts.Environment",
 		},
-		filepath.Join("..", "internal", "langfuse", "workspace.go"): {
+		filepath.Join("..", "internal", "laminar", "workspace.go"): {
 			"workspaceUserID",
 			strings.Join([]string{"format", "Workspace", "UserID"}, ""),
 			"normalizeHomePath",
 			"enrichWorkspaceMetadata",
 			"func gitBranch",
 		},
-		filepath.Join("..", "internal", "langfuse", "export.go"): {
+		filepath.Join("..", "internal", "laminar", "export.go"): {
 			"userIDAttribute",
 			"func exportSpans",
 		},

@@ -7,8 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,41 +21,43 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/watch"
 )
 
 type options struct {
-	Provider              string
-	ClaudeHook            bool
-	SessionID             string
-	Path                  string
-	Latest                bool
-	Watch                 bool
-	Doctor                bool
-	SyncModelPricing      bool
-	TurnID                string
-	ConfigPath            string
-	StateFile             string
-	ServiceName           string
-	PollIntervalSeconds   float64
-	JSON                  bool
-	Quiet                 bool
-	NoVerify              bool
-	VerifyWaitSeconds     float64
-	VerifyIntervalSeconds float64
+	Provider            string
+	ClaudeHook          bool
+	SessionID           string
+	Path                string
+	Latest              bool
+	Watch               bool
+	Doctor              bool
+	CheckReceiver       bool
+	TurnID              string
+	ConfigPath          string
+	StateFile           string
+	ServiceName         string
+	PollIntervalSeconds float64
+	JSON                bool
+	Quiet               bool
 }
 
-var syncModelPricing = langfuse.SyncModelPricing
-var hostnameUserID = langfuse.HostnameUserID
+var hostnameUserID = laminar.HostnameUserID
 var errUnsupportedProvider = providers.ErrUnsupportedProvider
 var stdin io.Reader = os.Stdin
+var checkCollectorHealth = func(ctx context.Context) (int, error) {
+	return checkHTTPStatus(ctx, "http://127.0.0.1:14317/")
+}
+var checkCollectorMetrics = func(ctx context.Context) (int, error) {
+	return checkHTTPStatus(ctx, "http://127.0.0.1:14319/metrics")
+}
 
 func (o options) Mode() string {
 	switch {
-	case o.SyncModelPricing:
-		return "sync-model-pricing"
+	case o.CheckReceiver:
+		return "check-receiver"
 	case o.ClaudeHook:
 		return "claude-hook"
 	case o.SessionID != "":
@@ -76,13 +77,11 @@ func (o options) Mode() string {
 
 func parseArgs(args []string) (options, error) {
 	opts := options{
-		Provider:              agenttrace.ProviderCodex,
-		ConfigPath:            config.DefaultConfigPath(),
-		StateFile:             config.DefaultStatePath(),
-		ServiceName:           buildinfo.DefaultServiceName,
-		PollIntervalSeconds:   buildinfo.DefaultPollIntervalSeconds,
-		VerifyWaitSeconds:     25.0,
-		VerifyIntervalSeconds: 3.0,
+		Provider:            agenttrace.ProviderCodex,
+		ConfigPath:          config.DefaultLaminarConfigPath(),
+		StateFile:           config.DefaultStatePath(),
+		ServiceName:         buildinfo.DefaultServiceName,
+		PollIntervalSeconds: buildinfo.DefaultPollIntervalSeconds,
 	}
 
 	fs := flag.NewFlagSet(buildinfo.InstalledBinaryName, flag.ContinueOnError)
@@ -93,18 +92,15 @@ func parseArgs(args []string) (options, error) {
 	fs.StringVar(&opts.Path, "path", "", "Path to a Codex rollout JSONL file")
 	fs.BoolVar(&opts.Latest, "latest", false, "Export the latest Codex rollout JSONL file")
 	fs.BoolVar(&opts.Watch, "watch", false, "Continuously export newly completed Codex turns")
-	fs.BoolVar(&opts.Doctor, "doctor", false, "Check Langfuse config, reachability, auth, service, and export state")
-	fs.BoolVar(&opts.SyncModelPricing, "sync-model-pricing", false, "Create missing Langfuse model pricing definitions")
+	fs.BoolVar(&opts.Doctor, "doctor", false, "Check Laminar receiver, Collector, watcher service, and export state")
+	fs.BoolVar(&opts.CheckReceiver, "check-receiver", false, "Validate the local authenticated Laminar receiver without exporting a span")
 	fs.StringVar(&opts.TurnID, "turn-id", "", "Only export one turn id from the selected session")
-	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "Path to ~/.codex/config.toml")
+	fs.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "Path to ~/.config/lmnr/codex-tracer.json")
 	fs.StringVar(&opts.StateFile, "state-file", opts.StateFile, "Path to watch state file")
 	fs.StringVar(&opts.ServiceName, "service-name", opts.ServiceName, "OTel service.name")
 	fs.Float64Var(&opts.PollIntervalSeconds, "poll-interval-seconds", opts.PollIntervalSeconds, "Watch poll interval")
 	fs.BoolVar(&opts.JSON, "json", false, "Emit machine-readable JSON for manual exports and doctor")
 	fs.BoolVar(&opts.Quiet, "quiet", false, "Only print errors")
-	fs.BoolVar(&opts.NoVerify, "no-verify", false, "Do not fetch traces after export")
-	fs.Float64Var(&opts.VerifyWaitSeconds, "verify-wait-seconds", opts.VerifyWaitSeconds, "Trace verification timeout")
-	fs.Float64Var(&opts.VerifyIntervalSeconds, "verify-interval-seconds", opts.VerifyIntervalSeconds, "Trace verification interval")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -118,15 +114,15 @@ func parseArgs(args []string) (options, error) {
 	opts.Provider = spec.Name
 
 	selected := 0
-	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch, opts.Doctor, opts.SyncModelPricing, opts.ClaudeHook} {
+	for _, ok := range []bool{opts.SessionID != "", opts.Path != "", opts.Latest, opts.Watch, opts.Doctor, opts.CheckReceiver, opts.ClaudeHook} {
 		if ok {
 			selected++
 		}
 	}
 	if selected != 1 {
-		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, --doctor, --claude-hook, or --sync-model-pricing")
+		return options{}, errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, --doctor, --check-receiver, or --claude-hook")
 	}
-	if opts.JSON && (opts.Watch || opts.SyncModelPricing || opts.ClaudeHook) {
+	if opts.JSON && (opts.Watch || opts.CheckReceiver || opts.ClaudeHook) {
 		return options{}, errors.New("--json is supported only for manual exports and --doctor")
 	}
 	if spec.ExplicitPathOnly && opts.Path == "" {
@@ -152,19 +148,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	cfg, err := config.Load(opts.ConfigPath)
+	cfg, err := config.LoadLaminar(opts.ConfigPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 1
 	}
-	if opts.SyncModelPricing {
-		summary, err := syncModelPricing(ctx, cfg)
+	if opts.CheckReceiver {
+		status, err := laminar.CheckReceiver(ctx, cfg)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}
 		if !opts.Quiet {
-			fmt.Fprintf(stdout, "model_pricing existing=%d created=%d conflicting=%d\n", summary.Existing, summary.Created, summary.Conflicting)
+			fmt.Fprintf(stdout, "receiver_accepted status=%d\n", status)
 		}
 		return 0
 	}
@@ -188,12 +184,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Stderr:              stderr,
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
-			ResolveWorkspace:    langfuse.ResolveWorkspace,
+			ResolveWorkspace:    laminar.ResolveWorkspace,
 			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
-				return langfuse.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
-			},
-			ExportScores: func(ctx context.Context, turn agenttrace.Turn, environment string) error {
-				return langfuse.CreateDeterministicScores(ctx, cfg, turn, environment)
+				return laminar.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 			},
 		})
 		if err != nil {
@@ -235,13 +228,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !opts.JSON && !opts.Quiet {
 		fmt.Fprintf(stdout, "session_file=%s\n", sessionPath)
 	}
-	projectID, err := langfuse.FetchProjectID(ctx, cfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "ERROR: %v\n", err)
-		return 1
-	}
 	for _, turn := range exportable {
-		resolvedTurn, environment, err := langfuse.ResolveWorkspace(ctx, turn)
+		resolvedTurn, environment, err := laminar.ResolveWorkspace(ctx, turn)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
@@ -250,63 +238,37 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if !opts.JSON && !opts.Quiet {
 			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
 		}
-		status, err := langfuse.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
+		status, err := laminar.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 1
 		}
-		if err := langfuse.CreateDeterministicScores(ctx, cfg, turn, environment); err != nil {
-			fmt.Fprintf(stderr, "ERROR: %v\n", err)
-			return 1
-		}
 		result := exportResult{
-			Provider:    turn.Profile().Provider,
-			SessionFile: sessionPath,
-			TurnID:      turn.TurnID,
-			TraceID:     turn.TraceID,
-			Status:      status,
+			Provider:        turn.Profile().Provider,
+			SessionFile:     sessionPath,
+			TurnID:          turn.TurnID,
+			TraceID:         turn.TraceID,
+			CollectorStatus: status,
 		}
 		if !opts.JSON && !opts.Quiet {
-			fmt.Fprintf(stdout, "exported trace=%s status=%d\n", turn.TraceID, status)
+			fmt.Fprintf(stdout, "collector_accepted trace=%s status=%d\n", turn.TraceID, status)
 		}
-		if !opts.NoVerify {
-			verification, err := langfuse.VerifyTrace(ctx, cfg, turn, seconds(opts.VerifyWaitSeconds), seconds(opts.VerifyIntervalSeconds))
-			if err != nil {
-				fmt.Fprintf(stderr, "ERROR: %v\n", err)
-				return 1
-			}
-			result.VerifiedInput = verification.HasInput
-			result.VerifiedOutput = verification.HasOutput
-			if !opts.JSON && !opts.Quiet {
-				fmt.Fprintf(stdout, "verified trace=%s input=%v output=%v\n", turn.TraceID, verification.HasInput, verification.HasOutput)
-			}
-			if !verification.HasInput || !verification.HasOutput {
-				fmt.Fprintf(stderr, "ERROR: trace %s did not show exported input/output before timeout\n", turn.TraceID)
-				return 1
-			}
-		}
-		result.TraceURL = langfuse.BuildTraceURL(cfg, projectID, turn.TraceID)
 		if opts.JSON {
 			if err := writeJSONLine(stdout, result); err != nil {
 				fmt.Fprintf(stderr, "ERROR: %v\n", err)
 				return 1
 			}
-		} else if !opts.Quiet && result.TraceURL != "" {
-			fmt.Fprintf(stdout, "trace_url=%s\n", result.TraceURL)
 		}
 	}
 	return 0
 }
 
 type exportResult struct {
-	Provider       string `json:"provider"`
-	SessionFile    string `json:"session_file"`
-	TurnID         string `json:"turn_id"`
-	TraceID        string `json:"trace_id"`
-	TraceURL       string `json:"trace_url,omitempty"`
-	Status         int    `json:"status"`
-	VerifiedInput  bool   `json:"verified_input,omitempty"`
-	VerifiedOutput bool   `json:"verified_output,omitempty"`
+	Provider        string `json:"provider"`
+	SessionFile     string `json:"session_file"`
+	TurnID          string `json:"turn_id"`
+	TraceID         string `json:"trace_id"`
+	CollectorStatus int    `json:"collector_status"`
 }
 
 type doctorCheck struct {
@@ -324,7 +286,7 @@ var runCommand = func(ctx context.Context, name string, args ...string) ([]byte,
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-func runDoctor(ctx context.Context, cfg config.LangfuseConfig, opts options, stdout, stderr io.Writer) int {
+func runDoctor(ctx context.Context, cfg config.LaminarConfig, opts options, stdout, stderr io.Writer) int {
 	result := doctorResult{OK: true}
 	add := func(name, status, detail string) {
 		result.Checks = append(result.Checks, doctorCheck{Name: name, Status: status, Detail: detail})
@@ -333,24 +295,21 @@ func runDoctor(ctx context.Context, cfg config.LangfuseConfig, opts options, std
 		}
 	}
 
-	add("config", "ok", "host="+cfg.Host)
-	if status, err := langfuse.CheckHealth(ctx, cfg); err != nil {
-		add("health", "fail", err.Error())
-		if loopbackHostClosed(cfg.Host) {
-			add("host_binding", "fail", "host points to loopback but the configured port is not accepting TCP connections")
-		}
+	add("config", "ok", "receiver="+cfg.BaseURL)
+	if status, err := laminar.CheckReceiver(ctx, cfg); err != nil {
+		add("receiver_auth", "fail", err.Error())
 	} else {
-		add("health", "ok", fmt.Sprintf("status=%d", status))
+		add("receiver_auth", "ok", fmt.Sprintf("status=%d", status))
 	}
-	if status, err := langfuse.CheckAuth(ctx, cfg); err != nil {
-		add("auth", "fail", err.Error())
+	if status, err := checkCollectorHealth(ctx); err != nil {
+		add("collector_health", "fail", err.Error())
 	} else {
-		add("auth", "ok", fmt.Sprintf("status=%d", status))
+		add("collector_health", "ok", fmt.Sprintf("status=%d", status))
 	}
-	if projectID, err := langfuse.FetchProjectID(ctx, cfg); err != nil {
-		add("project", "warn", err.Error())
+	if status, err := checkCollectorMetrics(ctx); err != nil {
+		add("collector_metrics", "fail", err.Error())
 	} else {
-		add("project", "ok", "project_id="+projectID)
+		add("collector_metrics", "ok", fmt.Sprintf("status=%d", status))
 	}
 
 	if state, err := exportstate.Load(opts.StateFile); err != nil {
@@ -363,7 +322,7 @@ func runDoctor(ctx context.Context, cfg config.LangfuseConfig, opts options, std
 			add("state_queue", "fail", fmt.Sprintf("queue=%d", len(state.Queue)))
 		}
 		if len(state.PendingScores) > 0 {
-			add("state_pending_scores", "fail", fmt.Sprintf("pending_scores=%d", len(state.PendingScores)))
+			add("state_legacy_pending_traces", "fail", fmt.Sprintf("pending_traces=%d", len(state.PendingScores)))
 		}
 	}
 
@@ -417,37 +376,21 @@ func writeJSONLine(writer io.Writer, value any) error {
 	return err
 }
 
-func loopbackHostClosed(rawHost string) bool {
-	parsed, err := netURL(rawHost)
+func checkHTTPStatus(ctx context.Context, endpoint string) (int, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return false
+		return 0, err
 	}
-	host := parsed.Hostname()
-	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-		return false
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, err
 	}
-	port := parsed.Port()
-	if port == "" {
-		switch parsed.Scheme {
-		case "https":
-			port = "443"
-		default:
-			port = "80"
-		}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return response.StatusCode, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 500*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
-		return false
-	}
-	return true
-}
-
-func netURL(rawHost string) (*url.URL, error) {
-	if !strings.Contains(rawHost, "://") {
-		rawHost = "http://" + rawHost
-	}
-	return url.Parse(rawHost)
+	return response.StatusCode, nil
 }
 
 func recentErrorCount(logs string) int {
@@ -469,7 +412,7 @@ func selectedSessionPath(opts options) (string, error) {
 	case opts.SessionID != "":
 		return codextrace.FindSessionByID(opts.SessionID, config.CodexHome())
 	default:
-		return "", errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, or --sync-model-pricing")
+		return "", errors.New("exactly one source mode is required: --session-id, --path, --latest, --watch, --doctor, --check-receiver, or --claude-hook")
 	}
 }
 

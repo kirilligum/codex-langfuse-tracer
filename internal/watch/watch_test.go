@@ -37,7 +37,6 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 		t.Fatal("fixture unexpectedly starts exportable")
 	}
 	exportCalls := 0
-	scoreCalls := 0
 	opts := ScanOptions{
 		Root:      root,
 		StatePath: statePath,
@@ -52,18 +51,14 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 			exportCalls++
 			return 200, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error {
-			scoreCalls++
-			return nil
-		},
 	}
 	state, exported, err := ScanOnce(context.Background(), withScanNow(opts, now), state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	traceID := incompleteTraceID(t)
-	if exported != 0 || exportCalls != 0 || scoreCalls != 0 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
-		t.Fatalf("incomplete turn changed export state: exported=%d exports=%d scores=%d state=%+v", exported, exportCalls, scoreCalls, state)
+	if exported != 0 || exportCalls != 0 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
+		t.Fatalf("incomplete turn changed export state: exported=%d exports=%d state=%+v", exported, exportCalls, state)
 	}
 	if state.ScanWatermarkNS != now.UnixNano() {
 		t.Fatalf("watermark = %d, want %d", state.ScanWatermarkNS, now.UnixNano())
@@ -75,27 +70,30 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exported != 1 || exportCalls != 1 || scoreCalls != 1 || !state.HasProcessed(traceID) {
-		t.Fatalf("completed turn was not exported once: exported=%d exports=%d scores=%d state=%+v", exported, exportCalls, scoreCalls, state)
+	if exported != 1 || exportCalls != 1 || !state.HasProcessed(traceID) {
+		t.Fatalf("completed turn was not exported once: exported=%d exports=%d state=%+v", exported, exportCalls, state)
 	}
 }
 
 // TEST-604
-func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
+func TestLegacyPendingScoreCheckpointReexportsTraceWithStableEnvironment(t *testing.T) {
 	t.Parallel()
 
 	root, statePath, rolloutPath := watchFixture(t)
 	now := time.Date(2026, 5, 1, 11, 1, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
-	state := exportstate.State{Version: exportstate.Version, ScanWatermarkNS: now.Add(-time.Minute).UnixNano()}
+	const environment = "repository--feature-one-a1b2c3"
+	traceID := completeTraceID(t, rolloutPath)
+	state := exportstate.State{
+		Version:         exportstate.Version,
+		ScanWatermarkNS: now.Add(-time.Minute).UnixNano(),
+		PendingScores:   map[string]string{traceID: environment},
+	}
 	if err := exportstate.Save(context.Background(), statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	const environment = "repository--feature-one-a1b2c3"
 	spanCalls := 0
-	scoreCalls := 0
 	resolverCalls := 0
-	scoreFailed := true
 	var stdout bytes.Buffer
 	opts := ScanOptions{
 		Root:      root,
@@ -103,7 +101,7 @@ func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
 		Stdout:    &stdout,
 		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
 			resolverCalls++
-			return turn, environment, nil
+			return turn, "branch-may-have-changed", nil
 		},
 		ExportSpans: func(_ context.Context, turn agenttrace.Turn, gotEnvironment string) (int, error) {
 			spanCalls++
@@ -112,40 +110,26 @@ func TestCompletedTurnScoreRetryUsesStableEnvironment(t *testing.T) {
 			}
 			return 202, nil
 		},
-		ExportScores: func(_ context.Context, _ agenttrace.Turn, gotEnvironment string) error {
-			scoreCalls++
-			if gotEnvironment != environment {
-				t.Fatalf("score environment = %q, want %q", gotEnvironment, environment)
-			}
-			if scoreFailed {
-				return errors.New("injected score failure")
-			}
-			return nil
-		},
 	}
-	traceID := completeTraceID(t, rolloutPath)
 	state, exported, err := ScanOnce(context.Background(), withScanNow(opts, now), state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exported != 1 || spanCalls != 1 || scoreCalls != 1 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != environment {
-		t.Fatalf("failed score checkpoint = exported:%d spans:%d scores:%d state:%+v", exported, spanCalls, scoreCalls, state)
+	if exported != 1 || spanCalls != 1 || resolverCalls != 1 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
+		t.Fatalf("legacy checkpoint migration = exported:%d spans:%d workspace:%d state:%+v", exported, spanCalls, resolverCalls, state)
 	}
 	if !strings.Contains(stdout.String(), "span_export_succeeded trace="+traceID+" status=202 checkpoint=pending") {
-		t.Fatalf("initial successful span export was not diagnosed: %s", stdout.String())
+		t.Fatalf("trace export was not diagnosed: %s", stdout.String())
 	}
-
-	scoreFailed = false
-	stdout.Reset()
+	if !strings.Contains(stdout.String(), "processed trace="+traceID) {
+		t.Fatalf("processed trace was not diagnosed after durable checkpoint: %s", stdout.String())
+	}
 	state, exported, err = ScanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exported != 0 || spanCalls != 1 || scoreCalls != 2 || resolverCalls != 1 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
-		t.Fatalf("score retry re-exported or changed environment: exported:%d spans:%d scores:%d resolver:%d state:%+v", exported, spanCalls, scoreCalls, resolverCalls, state)
-	}
-	if strings.Contains(stdout.String(), "span_export_succeeded") {
-		t.Fatalf("score-only retry logged a span send: %s", stdout.String())
+	if exported != 0 || spanCalls != 1 || resolverCalls != 1 || !state.HasProcessed(traceID) {
+		t.Fatalf("completed migration repeated work: exported:%d spans:%d resolver:%d state:%+v", exported, spanCalls, resolverCalls, state)
 	}
 }
 
@@ -171,10 +155,6 @@ func TestWatchEnvironmentPersistsOnlyAfterSuccessfulSpanExport(t *testing.T) {
 		},
 		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
 			return 0, errors.New("injected OTLP failure")
-		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error {
-			t.Fatal("scores must not run after failed span export")
-			return nil
 		},
 	}, state)
 	if err != nil {
@@ -212,7 +192,6 @@ func TestWatchScanSemantics(t *testing.T) {
 			exportCalls++
 			return 0, errors.New("boom")
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce failed export: %v", err)
@@ -236,7 +215,6 @@ func TestWatchScanSemantics(t *testing.T) {
 			exportCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce success: %v", err)
@@ -255,7 +233,6 @@ func TestWatchScanSemantics(t *testing.T) {
 			t.Fatal("duplicate export callback should not run")
 			return 0, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce duplicate: %v", err)
@@ -324,7 +301,6 @@ func TestWatchStatFailureRetainsWatermarkAndRecovers(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 
 	state, exported, err := ScanOnce(context.Background(), withScanNow(opts, now), state)
@@ -384,7 +360,6 @@ func TestWatchDiscoveryFailureAllowsHealthyProgress(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state, newScanRuntime(), deps)
 	if err != nil {
 		t.Fatalf("scanOnce: %v", err)
@@ -433,7 +408,6 @@ func TestWatchCancellationAfterParseDoesNotExportOrAdvance(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state, newScanRuntime(), deps)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("scan error = %v, want context cancellation", err)
@@ -475,7 +449,6 @@ func TestWatchCorruptSourceDoesNotBlockHealthyTurn(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
 	if err != nil {
@@ -535,7 +508,6 @@ func TestWatchParseRetryDeadlineAndRepair(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 	for _, scanTime := range []time.Time{now, now.Add(29 * time.Second)} {
 		var err error
@@ -594,7 +566,6 @@ func TestWatchCachedIncompleteTurnCompletesAfterAppend(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
 	if err != nil {
@@ -615,7 +586,7 @@ func TestWatchCachedIncompleteTurnCompletesAfterAppend(t *testing.T) {
 	}
 }
 
-func TestWatchPendingScoreBypassesSuccessCache(t *testing.T) {
+func TestLegacyPendingCheckpointBypassesSourceCache(t *testing.T) {
 	t.Parallel()
 
 	root, _, rolloutPath := watchFixture(t)
@@ -629,40 +600,39 @@ func TestWatchPendingScoreBypassesSuccessCache(t *testing.T) {
 	}
 	runtime := newScanRuntime()
 	spanCalls := 0
-	scoreCalls := 0
-	firstScoreFails := true
+	failExport := true
 	opts := ScanOptions{
 		Root:  root,
 		Quiet: true,
+		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			return turn, "persisted-environment", nil
+		},
 		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
 			spanCalls++
+			if failExport {
+				return 0, errors.New("injected local receiver failure")
+			}
 			return 200, nil
 		},
-		ExportScores: func(_ context.Context, turn agenttrace.Turn, environment string) error {
-			scoreCalls++
-			if turn.TraceID != traceID || environment != "persisted-environment" {
-				t.Errorf("score retry turn=%s environment=%q", turn.TraceID, environment)
-			}
-			if firstScoreFails {
-				return errors.New("injected score failure")
-			}
-			return nil
-		},
 	}
-	state, _, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, defaultScanDependencies())
+	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, defaultScanDependencies())
 	if err != nil {
-		t.Fatalf("first score scan: %v", err)
+		t.Fatalf("failed legacy checkpoint migration scan: %v", err)
 	}
-	if spanCalls != 0 || scoreCalls != 1 || state.PendingScoreEnvironment(traceID) != "persisted-environment" || state.ScanWatermarkNS >= now.UnixNano() {
-		t.Fatalf("failed pending score was not retained: spans=%d scores=%d state=%+v", spanCalls, scoreCalls, state)
+	if exported != 0 || spanCalls != 1 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "persisted-environment" || state.ScanWatermarkNS >= now.UnixNano() {
+		t.Fatalf("failed migration changed its checkpoint: exported=%d spans=%d state=%+v", exported, spanCalls, state)
 	}
-	firstScoreFails = false
-	state, _, err = scanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state, runtime, defaultScanDependencies())
+	if runtime.get(rolloutPath) != nil {
+		t.Fatal("failed legacy checkpoint source was cached and would be skipped on retry")
+	}
+
+	failExport = false
+	state, exported, err = scanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state, runtime, defaultScanDependencies())
 	if err != nil {
-		t.Fatalf("score retry scan: %v", err)
+		t.Fatalf("retry legacy checkpoint migration scan: %v", err)
 	}
-	if spanCalls != 0 || scoreCalls != 2 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
-		t.Fatalf("pending score retry resent spans or failed to checkpoint: spans=%d scores=%d state=%+v", spanCalls, scoreCalls, state)
+	if exported != 1 || spanCalls != 2 || !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
+		t.Fatalf("legacy checkpoint was not migrated after receiver recovery: exported=%d spans=%d state=%+v", exported, spanCalls, state)
 	}
 }
 
@@ -705,7 +675,6 @@ func TestWatchChangedDuringParseDoesNotCacheOrAdvance(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
 	if err != nil {
@@ -796,7 +765,6 @@ func TestWatchCacheEvictionRereadsWithoutRepeatingCompletedWork(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}
 	state, exported, err := scanOnce(context.Background(), withScanNow(opts, now), state, runtime, deps)
 	if err != nil {
@@ -848,7 +816,6 @@ func TestWatchRestartDoesNotDuplicateDurablyProcessedTrace(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("restarted scan: %v", err)
@@ -886,7 +853,6 @@ func TestWatchMissingSessionsRootIsIncompleteAndDrainsQueue(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce: %v", err)
@@ -933,7 +899,6 @@ func TestWatchFiltersProcessedTurnsBeforeRetainingObservations(t *testing.T) {
 		ProcessedTraceIDs: processedTraceIDs,
 	}
 	spanCalls := 0
-	scoreCalls := 0
 	state, exported, err := ScanOnce(context.Background(), ScanOptions{
 		Root:             root,
 		Now:              now,
@@ -946,19 +911,12 @@ func TestWatchFiltersProcessedTurnsBeforeRetainingObservations(t *testing.T) {
 			}
 			return 200, nil
 		},
-		ExportScores: func(_ context.Context, turn agenttrace.Turn, _ string) error {
-			scoreCalls++
-			if turn.TraceID != newTraceID {
-				t.Errorf("unexpected score export for trace %s", turn.TraceID)
-			}
-			return nil
-		},
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce: %v", err)
 	}
-	if exported != 1 || spanCalls != 1 || scoreCalls != 1 || !state.HasProcessed(newTraceID) {
-		t.Fatalf("processed-turn filtering failed: exported=%d spans=%d scores=%d state=%+v", exported, spanCalls, scoreCalls, state)
+	if exported != 1 || spanCalls != 1 || !state.HasProcessed(newTraceID) {
+		t.Fatalf("processed-turn filtering failed: exported=%d spans=%d state=%+v", exported, spanCalls, state)
 	}
 }
 
@@ -1016,7 +974,6 @@ func TestWatchDrainsClaudeQueue(t *testing.T) {
 			exportedTraceIDs = append(exportedTraceIDs, turn.TraceID)
 			return 202, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce: %v", err)
@@ -1044,7 +1001,6 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	errCh := make(chan error, 1)
 	watchReady := make(chan struct{}, 1)
 	spanCalls := 0
-	scoreCalls := 0
 	go func() {
 		errCh <- WatchSessions(ctx, ScanOptions{
 			Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, PollIntervalSeconds: 0.01, Stdout: watcherReadyWriter(watchReady),
@@ -1052,10 +1008,6 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 				spanCalls++
 				exported <- turn.TraceID
 				return 202, nil
-			},
-			ExportScores: func(context.Context, agenttrace.Turn, string) error {
-				scoreCalls++
-				return nil
 			},
 		})
 	}()
@@ -1105,8 +1057,8 @@ func TestWatchReloadsClaudeQueueFromHookState(t *testing.T) {
 	if err := <-errCh; !errors.Is(err, context.Canceled) {
 		t.Fatalf("WatchSessions error = %v", err)
 	}
-	if spanCalls != 1 || scoreCalls != 1 {
-		t.Fatalf("span calls=%d score calls=%d, want one each", spanCalls, scoreCalls)
+	if spanCalls != 1 {
+		t.Fatalf("span calls=%d, want one", spanCalls)
 	}
 	loaded, err := exportstate.Load(statePath)
 	if err != nil {
@@ -1249,18 +1201,15 @@ func TestWatchLogs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	_, _, err := ScanOnce(context.Background(), ScanOptions{
 		Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Stdout: &stdout, Stderr: &stderr,
-		ExportSpans:  func(context.Context, agenttrace.Turn, string) (int, error) { return 201, nil },
-		ExportScores: successfulScores,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) { return 201, nil },
 	}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	successLog := stdout.String()
 	spanSuccess := strings.Index(successLog, "span_export_succeeded trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=201 checkpoint=pending")
-	exported := strings.Index(successLog, "exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=201 path=")
-	scored := strings.Index(successLog, "scored trace=1e087e4ea8aa8d8e29e604d2cd8704d9 path=")
-	if spanSuccess < 0 || exported < 0 || scored < 0 || spanSuccess >= exported || exported >= scored ||
-		!bytes.Contains(stdout.Bytes(), []byte("scored trace=1e087e4ea8aa8d8e29e604d2cd8704d9 path=")) {
+	processed := strings.Index(successLog, "processed trace=1e087e4ea8aa8d8e29e604d2cd8704d9 path=")
+	if spanSuccess < 0 || processed < 0 || spanSuccess >= processed {
 		t.Fatalf("success log order is wrong: %s", successLog)
 	}
 
@@ -1272,8 +1221,7 @@ func TestWatchLogs(t *testing.T) {
 	stderr.Reset()
 	_, _, err = ScanOnce(context.Background(), ScanOptions{
 		Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Stdout: &stdout, Stderr: &stderr,
-		ExportSpans:  func(context.Context, agenttrace.Turn, string) (int, error) { return 0, errors.New("export failed") },
-		ExportScores: successfulScores,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) { return 0, errors.New("export failed") },
 	}, state)
 	if err != nil {
 		t.Fatal(err)
@@ -1298,8 +1246,7 @@ func TestWatchLogs(t *testing.T) {
 	stderr.Reset()
 	_, _, err = ScanOnce(context.Background(), ScanOptions{
 		Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Stdout: &stdout, Stderr: &stderr, Quiet: true,
-		ExportSpans:  func(context.Context, agenttrace.Turn, string) (int, error) { return 201, nil },
-		ExportScores: successfulScores,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) { return 201, nil },
 	}, state)
 	if err != nil {
 		t.Fatal(err)
@@ -1330,7 +1277,7 @@ func TestWatchSpanCheckpointFailureLogs(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			var stdout, stderr bytes.Buffer
-			spanCalls, scoreCalls := 0, 0
+			spanCalls := 0
 			_, _, scanErr := ScanOnce(ctx, ScanOptions{
 				Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace, Now: now, Quiet: quiet, Stdout: &stdout, Stderr: &stderr,
 				ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
@@ -1338,24 +1285,20 @@ func TestWatchSpanCheckpointFailureLogs(t *testing.T) {
 					cancel()
 					return 202, nil
 				},
-				ExportScores: func(context.Context, agenttrace.Turn, string) error {
-					scoreCalls++
-					return nil
-				},
 			}, initial)
 			cancel()
 			if !errors.Is(scanErr, context.Canceled) {
 				t.Fatalf("ScanOnce error = %v, want context canceled", scanErr)
 			}
-			if spanCalls != 1 || scoreCalls != 0 {
-				t.Fatalf("callbacks = spans:%d scores:%d, want spans:1 scores:0", spanCalls, scoreCalls)
+			if spanCalls != 1 {
+				t.Fatalf("span callback calls = %d, want 1", spanCalls)
 			}
 			traceID := completeTraceID(t, rolloutPath)
 			expectedError := "ERROR: span_checkpoint_unconfirmed trace=" + traceID + " export_result=success replay_possible=true"
 			if strings.Count(stderr.String(), expectedError) != 1 {
 				t.Fatalf("checkpoint diagnostic = %q, want exactly one %q", stderr.String(), expectedError)
 			}
-			if strings.Contains(stdout.String(), "exported trace=") || strings.Contains(stdout.String(), "scored trace=") {
+			if strings.Contains(stdout.String(), "processed trace=") {
 				t.Fatalf("checkpoint failure logged a completed checkpoint: %q", stdout.String())
 			}
 			if got := strings.Count(stdout.String(), "span_export_succeeded trace="+traceID+" status=202 checkpoint=pending"); got != map[bool]int{false: 1, true: 0}[quiet] {
@@ -1432,8 +1375,7 @@ func TestEvalHookQueueDrainLatency(t *testing.T) {
 	_, exported, err := ScanOnce(context.Background(), ScanOptions{
 		Root: root, StatePath: statePath, ResolveWorkspace: testWorkspace,
 		Now: time.Date(2026, 5, 4, 12, 1, 0, 0, time.UTC), Quiet: true,
-		ExportSpans:  func(context.Context, agenttrace.Turn, string) (int, error) { return 202, nil },
-		ExportScores: successfulScores,
+		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) { return 202, nil },
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce: %v", err)

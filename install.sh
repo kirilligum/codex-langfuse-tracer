@@ -57,7 +57,7 @@ staged_service="$staged_service_dir/codex-langfuse-watch.service"
 
 (cd "$repo_dir" && go build -o "$staged_exporter" ./cmd/codex-langfuse-exporter)
 install -m 644 "$service_src" "$staged_service"
-"$staged_exporter" --sync-model-pricing --quiet
+"$staged_exporter" --check-receiver --quiet
 
 load_state="$(systemctl --user show --property=LoadState --value "$service_name")"
 if [ -z "$load_state" ]; then
@@ -80,4 +80,4 @@ systemctl --user restart "$service_name"
 echo "installed exporter: $exporter_dst"
 echo "installed service: $service_dst"
 echo "restarted service: $service_name"
-echo "synced Langfuse model pricing from ~/.codex/config.toml"
+echo "validated authenticated local Laminar receiver"

@@ -19,7 +19,7 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -41,7 +41,7 @@ func newDeliveryOTLPServer(t *testing.T, holdAcknowledgment bool) *deliveryOTLPS
 	}
 	result.holdAcknowledgment.Store(holdAcknowledgment)
 	result.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/public/otel/v1/traces" {
+		if r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer test-local-receiver-token" {
 			result.errors <- errors.New("unexpected OTLP path")
 			http.Error(w, "unexpected path", http.StatusNotFound)
 			return
@@ -112,20 +112,16 @@ func (server *deliveryOTLPServer) checkErrors(t *testing.T) {
 	}
 }
 
-func deliveryConfig(host string) config.LangfuseConfig {
-	return config.LangfuseConfig{Host: host, PublicKey: "pk-lf-delivery-test", SecretKey: "sk-lf-delivery-test"}
+func deliveryConfig(host string) config.LaminarConfig {
+	return config.LaminarConfig{BaseURL: host, Token: "test-local-receiver-token"}
 }
 
-func deliveryScanOptions(root, statePath, host string, now time.Time, scores *atomic.Int32) ScanOptions {
+func deliveryScanOptions(root, statePath, host string, now time.Time) ScanOptions {
 	return ScanOptions{
 		Root: root, StatePath: statePath, Now: now,
 		ResolveWorkspace: testWorkspace,
 		ExportSpans: func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
-			return langfuse.ExportSpans(ctx, deliveryConfig(host), turn, environment, "delivery-test-host", buildinfo.DefaultServiceName)
-		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error {
-			scores.Add(1)
-			return nil
+			return laminar.ExportSpans(ctx, deliveryConfig(host), turn, environment, "delivery-test-host", buildinfo.DefaultServiceName)
 		},
 	}
 }
@@ -147,8 +143,7 @@ func TestWatchRetriesAfterLostAcknowledgement(t *testing.T) {
 	}
 
 	mock := newDeliveryOTLPServer(t, true)
-	var scoreCalls atomic.Int32
-	opts := deliveryScanOptions(root, statePath, mock.server.URL, now, &scoreCalls)
+	opts := deliveryScanOptions(root, statePath, mock.server.URL, now)
 	logicalAttempts := 0
 	underlyingExport := opts.ExportSpans
 	opts.ExportSpans = func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
@@ -167,7 +162,7 @@ func TestWatchRetriesAfterLostAcknowledgement(t *testing.T) {
 				cancelRequest()
 			}
 		}()
-		status, exportErr := langfuse.ExportSpans(requestCtx, deliveryConfig(mock.server.URL), turn, environment, "delivery-test-host", buildinfo.DefaultServiceName)
+		status, exportErr := laminar.ExportSpans(requestCtx, deliveryConfig(mock.server.URL), turn, environment, "delivery-test-host", buildinfo.DefaultServiceName)
 		cancelRequest()
 		<-cancelDone
 		return status, exportErr
@@ -182,8 +177,8 @@ func TestWatchRetriesAfterLostAcknowledgement(t *testing.T) {
 	if len(firstRequests) == 0 {
 		t.Fatal("mock receiver did not record the request before its acknowledgement was canceled")
 	}
-	if logicalAttempts != 1 || scoreCalls.Load() != 0 {
-		t.Fatalf("first scan callbacks = spans:%d scores:%d, want spans:1 scores:0", logicalAttempts, scoreCalls.Load())
+	if logicalAttempts != 1 {
+		t.Fatalf("first scan span submissions = %d, want 1", logicalAttempts)
 	}
 	if state.HasProcessed(completeTraceID(t, rolloutPath)) || state.PendingScoreEnvironment(completeTraceID(t, rolloutPath)) != "" {
 		t.Fatalf("first scan advanced in-memory checkpoints after lost acknowledgement: %+v", state)
@@ -205,8 +200,8 @@ func TestWatchRetriesAfterLostAcknowledgement(t *testing.T) {
 		t.Fatalf("recovery scan: %v", err)
 	}
 	mock.checkErrors(t)
-	if logicalAttempts != 2 || scoreCalls.Load() != 1 {
-		t.Fatalf("recovery callbacks = spans:%d scores:%d, want spans:2 total scores:1", logicalAttempts, scoreCalls.Load())
+	if logicalAttempts != 2 {
+		t.Fatalf("recovery span submissions = %d, want 2 total attempts", logicalAttempts)
 	}
 	traceID := completeTraceID(t, rolloutPath)
 	if !state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
@@ -223,7 +218,7 @@ func TestWatchRetriesAfterLostAcknowledgement(t *testing.T) {
 	}
 
 	_, exported, err := ScanOnce(context.Background(), withScanNow(opts, now.Add(time.Second)), state)
-	if err != nil || exported != 0 || logicalAttempts != 2 || scoreCalls.Load() != 1 || len(mock.requestSnapshot()) != len(requests) {
-		t.Fatalf("processed scan performed additional work: exported=%d attempts=%d scores=%d requests=%d err=%v", exported, logicalAttempts, scoreCalls.Load(), len(mock.requestSnapshot()), err)
+	if err != nil || exported != 0 || logicalAttempts != 2 || len(mock.requestSnapshot()) != len(requests) {
+		t.Fatalf("processed scan performed additional work: exported=%d attempts=%d requests=%d err=%v", exported, logicalAttempts, len(mock.requestSnapshot()), err)
 	}
 }

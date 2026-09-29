@@ -1,4 +1,4 @@
-package langfuse
+package laminar
 
 import (
 	"context"
@@ -20,7 +20,7 @@ const (
 )
 
 // ResolveWorkspace resolves the export-time Git worktree and branch and returns
-// the turn metadata and Langfuse environment that must be used for the export.
+// the turn metadata and environment that must be used for the export.
 func ResolveWorkspace(ctx context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
 	turn.GitBranch = ""
 	if turn.CWD == "" {
@@ -108,20 +108,20 @@ func normalizeEnvironmentComponent(value, empty string) string {
 
 func validateWorkspaceEnvironment(environment string) error {
 	if environment == "" || len(environment) > maxEnvironmentLength {
-		return fmt.Errorf("invalid Langfuse environment length %d", len(environment))
+		return fmt.Errorf("invalid workspace environment length %d", len(environment))
 	}
 	if strings.HasPrefix(environment, "langfuse") {
-		return fmt.Errorf("Langfuse environment uses reserved prefix")
+		return fmt.Errorf("workspace environment uses reserved prefix")
 	}
 	for _, char := range environment {
 		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' {
-			return fmt.Errorf("Langfuse environment contains invalid character %q", char)
+			return fmt.Errorf("workspace environment contains invalid character %q", char)
 		}
 	}
 	return nil
 }
 
-// HostnameUserID returns the process-scoped hostname used as langfuse.user.id.
+// HostnameUserID returns the process-scoped hostname used for the Laminar user association.
 func HostnameUserID() (string, error) {
 	return resolveHostnameUserID(os.Hostname)
 }

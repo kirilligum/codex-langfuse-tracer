@@ -1,19 +1,21 @@
 package config
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 )
 
-type LangfuseConfig struct {
-	Host      string
-	PublicKey string
-	SecretKey string
+type LaminarConfig struct {
+	BaseURL string
+	Token   string
 }
 
 func CodexHome() string {
@@ -27,48 +29,71 @@ func CodexHome() string {
 	return filepath.Join(home, ".codex")
 }
 
-func DefaultConfigPath() string {
-	return filepath.Join(CodexHome(), "config.toml")
+func DefaultLaminarConfigPath() string {
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(".config", "lmnr", "codex-tracer.json")
+		}
+		configHome = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configHome, "lmnr", "codex-tracer.json")
 }
 
 func DefaultStatePath() string {
 	return filepath.Join(CodexHome(), buildinfo.DefaultStateFileName)
 }
 
-type langfuseTOML struct {
-	MCPServers map[string]mcpServer `toml:"mcp_servers"`
+type laminarPluginConfig struct {
+	ProjectAPIKey string `json:"projectApiKey"`
+	BaseURL       string `json:"baseUrl"`
 }
 
-type mcpServer struct {
-	Env map[string]string `toml:"env"`
-}
-
-func Load(path string) (LangfuseConfig, error) {
-	var parsed langfuseTOML
-	if _, err := toml.DecodeFile(path, &parsed); err != nil {
-		return LangfuseConfig{}, fmt.Errorf("missing Langfuse host/public key/secret key in [mcp_servers.langfuse.env] in %s: %w", path, err)
+func LoadLaminar(path string) (LaminarConfig, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return LaminarConfig{}, fmt.Errorf("read Laminar receiver config %s: %w", path, err)
 	}
-
-	env := map[string]string(nil)
-	if parsed.MCPServers != nil {
-		env = parsed.MCPServers["langfuse"].Env
+	if !info.Mode().IsRegular() {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver config %s must be a regular file", path)
 	}
-	host := strings.TrimRight(env["LANGFUSE_HOST"], "/")
-	publicKey := env["LANGFUSE_PUBLIC_KEY"]
-	secretKey := env["LANGFUSE_SECRET_KEY"]
-	missing := make([]string, 0, 3)
-	if host == "" {
-		missing = append(missing, "host")
+	if info.Mode().Perm()&0o077 != 0 {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver config %s must not be accessible by group or other users", path)
 	}
-	if publicKey == "" {
-		missing = append(missing, "public key")
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() || parent.Mode().Perm()&0o077 != 0 {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver config directory %s must be private", filepath.Dir(path))
 	}
-	if secretKey == "" {
-		missing = append(missing, "secret key")
+	file, err := os.Open(path)
+	if err != nil {
+		return LaminarConfig{}, fmt.Errorf("open Laminar receiver config %s: %w", path, err)
 	}
-	if len(missing) > 0 {
-		return LangfuseConfig{}, fmt.Errorf("missing Langfuse %s in [mcp_servers.langfuse.env] in %s", strings.Join(missing, "/"), path)
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	var parsed laminarPluginConfig
+	if err := decoder.Decode(&parsed); err != nil {
+		return LaminarConfig{}, fmt.Errorf("decode Laminar receiver config %s: %w", path, err)
 	}
-
-	return LangfuseConfig{Host: host, PublicKey: publicKey, SecretKey: secretKey}, nil
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver config %s contains trailing JSON", path)
+	}
+	if len(parsed.ProjectAPIKey) != 64 {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver token in %s must be a 32-byte hexadecimal token", path)
+	}
+	if _, err := hex.DecodeString(parsed.ProjectAPIKey); err != nil {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver token in %s must be a 32-byte hexadecimal token", path)
+	}
+	endpoint, err := url.Parse(parsed.BaseURL)
+	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Port() == "" {
+		return LaminarConfig{}, fmt.Errorf("Laminar receiver config %s must target a local HTTP receiver", path)
+	}
+	if hostname := endpoint.Hostname(); hostname != "localhost" {
+		ip := net.ParseIP(hostname)
+		if ip == nil || !ip.IsLoopback() {
+			return LaminarConfig{}, fmt.Errorf("Laminar receiver config %s must target a local HTTP receiver", path)
+		}
+	}
+	return LaminarConfig{BaseURL: parsed.BaseURL, Token: parsed.ProjectAPIKey}, nil
 }

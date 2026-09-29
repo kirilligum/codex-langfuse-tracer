@@ -16,7 +16,7 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/claudehook"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/codextrace"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/providers"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/watch"
@@ -84,7 +84,7 @@ func TestFullAcceptance(t *testing.T) {
 
 // TEST-305
 // TEST-403
-func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
+func TestFullAcceptanceLaminarUsageContract(t *testing.T) {
 	t.Parallel()
 
 	complete := contractFromFixture(t, "complete-tools")
@@ -122,7 +122,7 @@ func TestFullAcceptanceLangfuseFilterCostContract(t *testing.T) {
 }
 
 // TEST-406
-func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
+func TestFullAcceptanceLaminarTagsAndMCP(t *testing.T) {
 	t.Parallel()
 
 	completeTurn := turnFromFixture(t, "complete-tools")
@@ -166,8 +166,8 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 		if span.name == "" {
 			t.Fatalf("missing span %s", name)
 		}
-		if span.attributes["langfuse.trace.tags"] != wantTags {
-			t.Fatalf("%s tags = %q want %q", name, span.attributes["langfuse.trace.tags"], wantTags)
+		if span.attributes["lmnr.association.properties.tags"] != wantTags {
+			t.Fatalf("%s tags = %q want %q", name, span.attributes["lmnr.association.properties.tags"], wantTags)
 		}
 	}
 	for _, span := range spans {
@@ -175,7 +175,7 @@ func TestFullAcceptanceLangfuseTagsAndMCP(t *testing.T) {
 			continue
 		}
 		for key := range span.attributes {
-			if strings.HasPrefix(key, "langfuse.trace.metadata.codex_insight.") {
+			if strings.HasPrefix(key, "lmnr.association.properties.metadata.codex_insight_") {
 				t.Fatalf("%s repeats root insight metadata %s", span.name, key)
 			}
 		}
@@ -256,7 +256,6 @@ func TestFullClaudeAcceptance(t *testing.T) {
 			exported = append(exported, turn)
 			return 201, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error { return nil },
 	}, stateValue)
 	if err != nil {
 		t.Fatalf("ScanOnce Claude queue: %v", err)
@@ -353,7 +352,7 @@ func (e *acceptanceExporter) Shutdown(context.Context) error {
 func emitAcceptanceSpans(t *testing.T, turn agenttrace.Turn) acceptanceSpans {
 	t.Helper()
 	exporter := &acceptanceExporter{}
-	if err := langfuse.EmitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
+	if err := laminar.EmitSpans(context.Background(), turn, "default", "test-host", buildinfo.DefaultServiceName, exporter); err != nil {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	exporter.mu.Lock()

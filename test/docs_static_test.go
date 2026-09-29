@@ -14,19 +14,10 @@ func TestDocsAndRuntimeDoNotReferencePythonExporter(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "bin", "export_codex_session_to_langfuse.py")); !os.IsNotExist(err) {
 		t.Fatalf("Python exporter still exists: %v", err)
 	}
-	for _, path := range []string{
-		"AGENTS.md",
-		"README.md",
-		"TESTING.md",
-		"systemd/codex-langfuse-watch.service",
-	} {
-		raw, err := os.ReadFile(filepath.Join("..", path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(raw)
+	for _, path := range []string{"AGENTS.md", "README.md", "TESTING.md", "systemd/codex-langfuse-watch.service"} {
+		text := readRepoDoc(t, path)
 		if strings.Contains(text, "export_codex_session_to_langfuse.py") || strings.Contains(text, "python3 -m py_compile") {
-			t.Fatalf("%s still references Python exporter", path)
+			t.Fatalf("%s still references the removed Python exporter", path)
 		}
 	}
 }
@@ -34,51 +25,33 @@ func TestDocsAndRuntimeDoNotReferencePythonExporter(t *testing.T) {
 // TEST-605
 func TestDocsCompletedCodexVisibility(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
-	agentNotes := readRepoDoc(t, "AGENTS.md")
 	for _, required := range []string{
-		"Incomplete turns remain local until Codex records completion",
-		"one clean Langfuse batch",
-		"every completed exportable turn",
-		"`--turn-id` restricts the local input only",
-		"does not read or update watcher state",
+		"completed turns with non-empty canonical input and output",
+		"one OTLP batch per completed turn",
+		"does not read or update watcher checkpoints",
 		"`processed_trace_ids`",
 		"`pending_scores[trace_id]`",
-		"Langfuse v4 observation fields",
-		"Deprecated trace-level input/output fields are not emitted",
 		"at-least-once",
 		"span_export_succeeded ... checkpoint=pending",
 		"span_checkpoint_unconfirmed",
+		"does not prove the backend has indexed the trace",
 		"does not stream tokens or partial assistant text",
-		"currently configured Langfuse target",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing completed-turn contract %q", required)
 		}
 	}
 	for _, required := range []string{
-		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment",
-		"TestVersion3State|TestStateUpdatePreservesQueue",
-		"TestOTLPCompletedTurnSingleBatch|TestCanonicalObservationIO",
-		"TestIncompleteTurnWaitsForCompletion|TestCompletedTurnScoreRetryUsesStableEnvironment|TestWatchLogs",
-		"TestWatchSpanCheckpointFailureLogs",
-		"TestEvalWatchExportLatency",
-		"LIVE_LANGFUSE_CODEX_SMOKE_TRACE_ID",
-		"TestLiveCodexSmokeTrace",
+		"TestLegacyPendingScoreCheckpointReexportsTraceWithStableEnvironment",
+		"TestLegacyPendingCheckpointBypassesSourceCache",
+		"acknowledgement loss",
+		"process termination before a durable checkpoint",
+		"do not prove Collector durability or exactly-once delivery",
 	} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing completed-turn command fragment %q", required)
-		}
-	}
-	for _, forbiddenAlternative := range []string{
-		"native Codex OTEL path",
-		"wrapper export path",
-		"per-file observation fanout",
-	} {
-		if !strings.Contains(agentNotes, forbiddenAlternative) {
-			t.Fatalf("AGENTS missing canonical-path constraint %q", forbiddenAlternative)
+			t.Fatalf("TESTING missing retry contract %q", required)
 		}
 	}
 }
@@ -86,22 +59,19 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 // EVAL-007
 func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(raw)
+	readme := readRepoDoc(t, "README.md")
 	for _, required := range []string{
 		"codex-langfuse-exporter",
 		"codex.agent",
 		"codex.transcript",
-		"langfuse.observation.input",
-		"langfuse.observation.output",
+		"lmnr.span.input",
+		"lmnr.span.output",
+		"gen_ai.usage",
 		"codex.tool.file_change",
 		"systemd --user",
-		"go test ./...",
+		"go test ./... -count=1",
 	} {
-		if !strings.Contains(text, required) {
+		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing %q", required)
 		}
 	}
@@ -110,8 +80,8 @@ func TestEvalDocsTraceContractCompleteness(t *testing.T) {
 // TEST-108
 func TestDocsTraceInsightMetadata(t *testing.T) {
 	t.Parallel()
-
-	required := []string{
+	readme := readRepoDoc(t, "README.md")
+	for _, required := range []string{
 		"verification_status",
 		"verification_command_count",
 		"changed_file_count",
@@ -120,18 +90,10 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 		"command_kind",
 		"duration_ms",
 		"failure_type",
-		"hidden chain-of-thought",
-	}
-	for _, path := range []string{"README.md"} {
-		raw, err := os.ReadFile(filepath.Join("..", path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := strings.ToLower(string(raw))
-		for _, value := range required {
-			if !strings.Contains(text, value) {
-				t.Fatalf("%s missing %q", path, value)
-			}
+		"Hidden or encrypted reasoning blocks are omitted",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("README missing %q", required)
 		}
 	}
 }
@@ -139,82 +101,39 @@ func TestDocsTraceInsightMetadata(t *testing.T) {
 // TEST-705
 func TestDocsWorkspaceIdentity(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	exampleConfig := readRepoDoc(t, filepath.Join("examples", "codex-config.toml"))
 	for _, required := range []string{
 		"--doctor",
 		"--json",
-		"trace_url",
-		"deterministic trace-level Langfuse scores",
-		"The scores do not make extra LLM calls.",
-		"`langfuse.environment`",
-		"`repository-folder--branch-<hash>`",
+		"deterministic turn summaries",
+		"repository folder and export-time branch",
 		"first six lowercase hexadecimal SHA-256",
-		"export-time branch",
-		"detached HEAD uses `detached`",
-		"Non-Git, missing, unreadable, or timed-out working directories use `default`",
-		"`langfuse.user.id`",
+		"A detached Git checkout uses `detached`",
+		"uses `default`",
 		"Linux runtime hostname",
-		"Identity fields are not configurable",
-		"version 3",
-		"systemctl --user stop codex-langfuse-watch.service",
-		"rm -- ~/.codex/langfuse-export-state.json",
-		"This reset does **not** apply to the version 3 lock-protocol upgrade.",
-		"Keep the version 3 state JSON and its `.lock` sidecar",
-		"The installer is the only required service-start step",
+		"not configurable through command-line flags",
+		"version 3 export-state file",
+		"Keep both in place during upgrades",
+		"Never delete or rename the `.lock` sidecar",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+			t.Fatalf("README missing workspace or state contract %q", required)
 		}
 	}
-	stopIndex := strings.Index(readme, "systemctl --user stop codex-langfuse-watch.service")
-	removeIndex := strings.Index(readme, "rm -- ~/.codex/langfuse-export-state.json")
-	installIndex := strings.Index(readme, "./install.sh")
-	if stopIndex >= removeIndex || removeIndex >= installIndex {
-		t.Fatal("README must document the pre-version-3 state reset as stop, remove state, then install")
-	}
-	if strings.Contains(readme, "systemctl --user start codex-langfuse-watch.service") {
-		t.Fatal("README must use install.sh as the only service-start path")
-	}
-	for _, required := range []string{
-		"TestDoctorMode",
-		"TestManualExportCLIJSONOutput",
-		"TestDeterministicScores",
-		"TestCreateDeterministicScores",
-		"TestDocsWorkspaceIdentity",
-		"TestWorkspaceIdentity",
-		"TestManualWorkspaceIdentity",
-		"TestWatchEnvironmentPersistsOnlyAfterSuccessfulSpanExport",
-		"LIVE_LANGFUSE_IDENTITY_TRACE_ID",
-		"LIVE_LANGFUSE_HOSTNAME",
-		"LIVE_LANGFUSE_ENVIRONMENT",
-		"TestLiveWorkspaceIdentityTrace",
-	} {
+	for _, required := range []string{"--doctor", "Collector health/metrics endpoints", "trace ID", "Laminar project UI"} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing %q", required)
+			t.Fatalf("TESTING missing live identity check %q", required)
 		}
 	}
 	if !strings.Contains(exampleConfig, "Workspace identity needs no configuration") {
 		t.Fatal("example config does not state the single identity path")
 	}
-	for _, document := range []struct {
-		name string
-		text string
-	}{
-		{name: "README", text: readme},
-		{name: "TESTING", text: testingDoc},
-		{name: "example config", text: exampleConfig},
-	} {
-		for _, forbidden := range []string{
-			strings.Join([]string{"LANGFUSE", "USER", "ID", "MODE"}, "_"),
-			strings.Join([]string{"--", "environment"}, ""),
-			"folder(branch)@hostname",
-			"path/to/repo(branch)@hostname",
-		} {
+	for _, document := range []struct{ name, text string }{{"README", readme}, {"TESTING", testingDoc}, {"example config", exampleConfig}} {
+		for _, forbidden := range []string{"LANGFUSE_USER_ID_MODE", "--environment", "folder(branch)@hostname", "path/to/repo(branch)@hostname"} {
 			if strings.Contains(document.text, forbidden) {
-				t.Fatalf("%s retains legacy identity surface %q", document.name, forbidden)
+				t.Fatalf("%s retains old identity override %q", document.name, forbidden)
 			}
 		}
 	}
@@ -222,41 +141,29 @@ func TestDocsWorkspaceIdentity(t *testing.T) {
 
 func TestDocsExportStateLockUpgrade(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	plan := readRepoDoc(t, filepath.Join("plans", "export-state-lock-recovery-plan.md"))
-	for _, required := range []string{
-		"older `O_EXCL` lock protocol",
-		"pause new Claude `Stop` hook invocations",
-		"The installer synchronously stops its loaded systemd watcher",
-		"persistent, empty advisory-lock file",
-		"Do not delete or rename the `.lock` sidecar",
-	} {
+	for _, required := range []string{"older `O_EXCL` lock protocol", "pause new Claude Stop-hook invocations", "Never delete or rename the `.lock` sidecar"} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+			t.Fatalf("README missing lock upgrade guidance %q", required)
 		}
 	}
 	for _, required := range []string{
 		"TestStateLockRecoversAfterKilledOwner",
 		"TestStateInterruptedWritePreservesCommittedJSON",
 		"TestStateWriteErrorsPreserveCommittedFile",
-		"TestWatchRetriesPendingCheckpointOnly",
+		"TestWatchRetriesPendingSpanCheckpointOnly",
 		"TestClaudeHookLockTimeoutIsNotAcknowledged",
 		"TestCLISignalCancelsStateWait",
 		"TestInstallReportsPostStopFailureState",
 		"go test -race ./internal/exportstate ./internal/claudehook ./internal/watch",
 	} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing %q", required)
+			t.Fatalf("TESTING missing lock regression %q", required)
 		}
 	}
-	for _, required := range []string{
-		"Legacy and new writers cannot safely coexist.",
-		"TestStateLoadOrCreatePreservesEnqueueInEitherOrder",
-		"TestWatchRetriesQueueRemovalAfterCheckpoint",
-		"forced-kill tests against disposable state",
-	} {
+	for _, required := range []string{"Legacy and new writers cannot safely coexist.", "TestStateLoadOrCreatePreservesEnqueueInEitherOrder", "TestWatchRetriesQueueRemovalAfterCheckpoint", "forced-kill tests against disposable state"} {
 		if !strings.Contains(plan, required) {
 			t.Fatalf("lock recovery plan missing %q", required)
 		}
@@ -265,24 +172,16 @@ func TestDocsExportStateLockUpgrade(t *testing.T) {
 
 func TestDocsLangfuseMCPVersionConstraint(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	exampleConfig := readRepoDoc(t, filepath.Join("examples", "codex-config.toml"))
-	for _, required := range []string{
-		`"mcp>=1.28,<2"`,
-		`"langfuse-mcp==0.10.0"`,
-	} {
+	for _, required := range []string{`"mcp>=1.28,<2"`, `"langfuse-mcp==0.10.0"`} {
 		if !strings.Contains(exampleConfig, required) {
 			t.Fatalf("example config missing %q", required)
 		}
 	}
-	for _, required := range []string{
-		"closed during `initialize`",
-		"`mcp>=1.28,<2`",
-		"incompatible MCP SDK v2",
-	} {
+	for _, required := range []string{"separately configured Langfuse MCP connection", "close during `initialize`", "incompatible MCP SDK v2"} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+			t.Fatalf("README missing independent MCP compatibility note %q", required)
 		}
 	}
 }
@@ -290,62 +189,34 @@ func TestDocsLangfuseMCPVersionConstraint(t *testing.T) {
 // TEST-204
 func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	for _, required := range []string{
 		"codex_insight.navigation",
 		"claude_insight.navigation",
-		"files:read_only",
 		"files:changed",
-		"command:search",
-		"command:read",
-		"command:network",
-		"command:install",
+		"command_kind",
 		"tool:command",
 		"tool:file_change",
 		"tool:web_search",
-		"verification:failed",
-		"langfuse.observation.model.name",
-		"langfuse.observation.usage_details",
-		"cost_details",
-		"command_kind",
-		"Trace tags are the primary reusable trace filters",
+		"verification:not_run",
+		"lmnr.association.properties.tags",
 		"mcp:<server>",
-		"Observations: command search",
+		"exact MCP tool names",
+		"gen_ai.*",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+			t.Fatalf("README missing Laminar filter/metadata contract %q", required)
 		}
 	}
-	for _, forbidden := range []string{
-		"Saved Views",
-		"saved views",
-		"Views -> Create Custom View",
-		"reusable view",
-	} {
+	for _, forbidden := range []string{"Saved Views", "saved views", "Views -> Create Custom View", "reusable view"} {
 		if strings.Contains(readme, forbidden) {
-			t.Fatalf("README still contains saved-view wording %q", forbidden)
+			t.Fatalf("README retains removed view guidance %q", forbidden)
 		}
 	}
-	for _, required := range []string{
-		"no observed local file changes",
-		"always-on",
-		"trace tags",
-		"observation filters",
-	} {
-		if !strings.Contains(strings.ToLower(readme), required) {
-			t.Fatalf("README missing %q", required)
-		}
-	}
-	for _, required := range []string{
-		"go test ./internal/agenttrace -run TestInsightCountMetadataSingleRepresentation -count=1",
-		"TestGoldenLangfuseSingleRepresentation",
-		"TestCountMetadataExportedOnAgent",
-		"TestDocsNavigationFacetsAndFilters",
-	} {
-		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing %q", required)
+	for _, required := range []string{"testdata/manifest.json", "raw OTLP fields", "Laminar span contract"} {
+		if !strings.Contains(testingDoc+readme, required) {
+			t.Fatalf("documentation missing contract detail %q", required)
 		}
 	}
 }
@@ -353,21 +224,17 @@ func TestDocsNavigationFacetsAndFilters(t *testing.T) {
 // TEST-405
 func TestDocsTagsAndMCPUsage(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	installScript := readRepoDoc(t, "install.sh")
 	for _, required := range []string{
-		"langfuse.trace.tags",
-		"active provider's insight navigation values plus observed `mcp:<server>` values",
-		"mcp_server",
-		"mcp_tool",
-		"codex.tool.mcp",
+		"lmnr.association.properties.tags",
+		"Navigation is emitted as",
+		"`mcp:<server>`",
 		"claude.tool.mcp",
-		"issues/list",
-		"internal/agenttrace/TAG_RULES.md",
-		"future watcher exports",
-		"Do not resend an old turn to add tags or MCP metadata",
+		"codex.tool.mcp",
+		"exact MCP tool names",
+		"internal/providers/providers.go",
 		"codex-langfuse-watch.service",
 		"~/.codex/bin/codex-langfuse-exporter --path",
 	} {
@@ -375,54 +242,28 @@ func TestDocsTagsAndMCPUsage(t *testing.T) {
 			t.Fatalf("README missing %q", required)
 		}
 	}
-	for _, required := range []string{
-		"TestDocsTagsAndMCPUsage",
-		"TestLangfuseTraceTagsExportedOnSpans",
-		"TestGoldenLangfuseTagsContract",
-		"TestInsightTagFacets",
-		"TestDocsNavigationFacetsAndFilters",
-	} {
+	for _, required := range []string{"TestLaminarSpanProjectionPreservesTraceContextAndMetadata", "TestFullAcceptanceLaminarTagsAndMCP", "TestInsightTagFacets"} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing %q", required)
+			t.Fatalf("TESTING missing Laminar tag coverage %q", required)
 		}
 	}
 	if !strings.Contains(installScript, "codex-langfuse-watch.service") {
-		t.Fatalf("install.sh missing service restart")
+		t.Fatal("install.sh missing watcher service restart")
 	}
 }
 
 // TEST-408
-func TestDocsLangfuseCostPricing(t *testing.T) {
+func TestDocsNoLocalLaminarCostCalculation(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
-	for _, required := range []string{
-		"--sync-model-pricing",
-		"https://openai.com/api/pricing/",
-		"2026-05-02",
-		"gpt-5.5",
-		"gpt-5.4",
-		"gpt-5.4-mini",
-		"gpt-5.3-codex-spark",
-		"claude-opus-4-7",
-		"claude-sonnet-4-6",
-		"claude-haiku-4-5-20251001",
-		"https://developers.openai.com/api/docs/models/gpt-5.3-codex",
-		"https://platform.claude.com/docs/en/about-claude/pricing",
-		"2026-05-05",
-		"input_cached_tokens",
-		"output_reasoning_tokens",
-		"cache_creation_input_tokens",
-		"cache_read_input_tokens",
-		"When provider pricing changes",
-		"internal/langfuse/models.go",
-		"Do not add fallback local cost multiplication",
-		"install.sh",
-		"Do not re-export an old turn to backfill its cost",
-		"~/.codex/bin/codex-langfuse-exporter --session-id",
-	} {
-		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+	for _, required := range []string{"calculate cost locally", "not submitted as native Laminar evaluator score records", "local Collector accepts the batch"} {
+		if !strings.Contains(strings.ToLower(readme), strings.ToLower(required)) {
+			t.Fatalf("README missing backend ownership boundary %q", required)
+		}
+	}
+	for _, forbidden := range []string{"--sync-model-pricing", "/api/public/otel", "/api/public/ingestion", "cost_details"} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("README retains removed direct-backend feature %q", forbidden)
 		}
 	}
 }
@@ -430,34 +271,25 @@ func TestDocsLangfuseCostPricing(t *testing.T) {
 // TEST-514
 func TestDocsCodingAgentIntegrationGuide(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	for _, required := range []string{
-		"### Adding A Coding Agent",
-		"Gemini CLI",
-		"OpenCode",
-		"Goose",
-		"source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitSpans",
+		"To add a provider",
+		"internal/<provider>trace",
+		"agenttrace.Turn",
 		"internal/providers/providers.go",
 		"testdata/sources/<provider>/*.jsonl",
 		"testdata/manifest.json",
-		"go test ./test -run TestGoldenTraceContract -count=1",
-		"exportstate.QueueRequest",
-		"`--watch` remains the only automatic exporter",
-		"Do not add provider wrapper execution",
-		"placeholder providers without real fixtures",
+		"Hooks should enqueue state only",
+		"watcher remains the single automatic export path",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing coding-agent integration text %q", required)
+			t.Fatalf("README missing provider integration text %q", required)
 		}
 	}
-	for _, required := range []string{
-		"go test ./internal/providers -count=1",
-		"go test ./test -run TestProviderParserDispatchHasOneOwner -count=1",
-	} {
+	for _, required := range []string{"go test ./... -count=1", "testdata/manifest.json", "Laminar span contract"} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing provider integration command %q", required)
+			t.Fatalf("TESTING missing provider contract %q", required)
 		}
 	}
 }
@@ -465,60 +297,22 @@ func TestDocsCodingAgentIntegrationGuide(t *testing.T) {
 // TEST-508
 func TestDocsClaudeSupportContract(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	agents := readRepoDoc(t, "AGENTS.md")
-	for _, required := range []string{
-		"Claude Code support",
-		"--provider claude --path",
-		"--claude-hook",
-		"claude.turn.transcript",
-		"claude.agent",
-		"claude.transcript",
-		"claude.tool.command",
-		"claude.tool.file_change",
-		"claude.tool.mcp",
-		"claude.tool.generic",
-		"Claude Code subscription billing is separate from Anthropic API token pricing",
-	} {
+	for _, required := range []string{"Claude Code's Stop hook", "--provider claude --path", "--claude-hook", "claude.agent", "claude.transcript", "claude.tool.command", "claude.tool.file_change", "claude.tool.mcp", "claude.tool.generic", "does not run Claude or modify its settings"} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing %q", required)
+			t.Fatalf("README missing Claude support contract %q", required)
 		}
 	}
-	for _, required := range []string{
-		"go test ./internal/claudetrace -count=1",
-		"go test ./internal/claudehook ./internal/exportstate ./internal/watch -run 'TestClaudeHookEnqueuesStopOnly|TestExportStateQueueDedupe|TestWatchDrainsClaudeQueue|TestWatchReloadsClaudeQueueFromHookState' -count=1",
-		"go test ./cmd/codex-langfuse-exporter -run 'TestCLIProviderSelection|TestManualProviderExportCLIIntegration' -count=1",
-		"TestLiveClaudeSmokeTrace",
-		"LIVE_LANGFUSE_CLAUDE_SMOKE_TRACE_ID",
-		"Full tool parity is a separate optional live check",
-		"A reply-only smoke trace cannot pass it",
-		"Do not manually export this transcript",
-		"CHECK-001",
-	} {
+	for _, required := range []string{"separate benign Claude Code turn", "already-installed Stop hook", "Do not manually export that transcript", "Laminar project"} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing %q", required)
+			t.Fatalf("TESTING missing Claude acceptance detail %q", required)
 		}
 	}
-	for _, required := range []string{
-		"Do not add Claude polling",
-		"Keep Claude pricing definitions source-backed",
-		"do not add local cost math",
-		"Do not mutate Claude settings automatically",
-	} {
+	for _, required := range []string{"Do not add Claude polling", "do not add local token-price multiplication", "Do not mutate Claude settings automatically"} {
 		if !strings.Contains(agents, required) {
-			t.Fatalf("AGENTS missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"native Claude OTEL forwarding",
-		"Claude transcript polling",
-		"automatic Claude settings mutation",
-		"Claude cost calculation",
-	} {
-		if strings.Contains(readme, forbidden) {
-			t.Fatalf("README contains unsupported Claude claim %q", forbidden)
+			t.Fatalf("AGENTS missing Claude boundary %q", required)
 		}
 	}
 }
@@ -526,26 +320,10 @@ func TestDocsClaudeSupportContract(t *testing.T) {
 // TEST-530
 func TestDocsCanonicalSemanticToolFamilies(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
-	for _, required := range []string{
-		"codex.tool.command",
-		"codex.tool.file_change",
-		"codex.tool.mcp",
-		"codex.tool.web_search",
-		"codex.tool.tool_search",
-		"claude.tool.command",
-		"claude.tool.file_change",
-		"claude.tool.mcp",
-		"claude.tool.generic",
-		"tool:command",
-		"tool:file_change",
-		"<provider>.tool.command",
-		"<provider>.tool.file_change",
-		"<provider>.tool.mcp",
-	} {
+	for _, required := range []string{"codex.tool.command", "codex.tool.file_change", "codex.tool.mcp", "codex.tool.web_search", "codex.tool.tool_search", "claude.tool.command", "claude.tool.file_change", "claude.tool.mcp", "claude.tool.generic", "Tool metadata includes observed command kind"} {
 		if !strings.Contains(readme, required) {
-			t.Fatalf("README missing canonical semantic family text %q", required)
+			t.Fatalf("README missing canonical tool family %q", required)
 		}
 	}
 	for _, forbidden := range []string{
@@ -553,11 +331,10 @@ func TestDocsCanonicalSemanticToolFamilies(t *testing.T) {
 		strings.Join([]string{"codex", "tool", "apply_patch"}, "."),
 		strings.Join([]string{"claude", "tool", "bash"}, "."),
 		strings.Join([]string{"tool", "bash"}, ":"),
-		"patch" + "_count",
-		strings.Join([]string{"Claude pricing", "deferred"}, " is "),
+		strings.Join([]string{"patch", "count"}, "_"),
 	} {
 		if strings.Contains(readme, forbidden) {
-			t.Fatalf("README contains legacy semantic family text %q", forbidden)
+			t.Fatalf("README contains provider-native semantic family %q", forbidden)
 		}
 	}
 }
@@ -565,18 +342,16 @@ func TestDocsCanonicalSemanticToolFamilies(t *testing.T) {
 // EVAL-008
 func TestEvalDocsClaudeContractCompleteness(t *testing.T) {
 	t.Parallel()
-
 	readme := readRepoDoc(t, "README.md")
-	for _, required := range []string{
-		"Rerun `CHECK-001` after Claude Code upgrades that change transcript shape",
-		"Stop hook",
-		"hook queues work only",
-		"watch service drains the queued transcript",
-		"thinking blocks are omitted",
-		"Langfuse calculates cost",
-	} {
+	testingDoc := readRepoDoc(t, "TESTING.md")
+	for _, required := range []string{"Claude Code's Stop hook", "hook queues the transcript path", "Hidden or encrypted reasoning blocks are omitted", "The exporter does not run Claude or modify its settings"} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing Claude completeness phrase %q", required)
+		}
+	}
+	for _, required := range []string{"For Claude acceptance", "Do not manually export that transcript", "Confirm the watcher drains the queued request"} {
+		if !strings.Contains(testingDoc, required) {
+			t.Fatalf("TESTING missing Claude acceptance phrase %q", required)
 		}
 	}
 }
@@ -584,41 +359,21 @@ func TestEvalDocsClaudeContractCompleteness(t *testing.T) {
 // TEST-620
 func TestDocsPerformanceGateSeparation(t *testing.T) {
 	t.Parallel()
-
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	handoff := readRepoDoc(t, filepath.Join("plans", "multi-machine-tracing-gateway-handoff.md"))
-	for _, required := range []string{
-		"Benchmark(InsightRollup|ClaudeParserCorpus)",
-		"TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency",
-		"performance-test-stability.md",
-	} {
+	for _, required := range []string{"Benchmark(InsightRollup|ClaudeParserCorpus)", "TestEvalWatchExportLatency|TestEvalHookQueueDrainLatency", "performance-test-stability.md", "memory matrix", "768 MiB"} {
 		if !strings.Contains(testingDoc, required) {
-			t.Fatalf("TESTING missing performance-gate contract %q", required)
+			t.Fatalf("TESTING missing performance/resource gate %q", required)
 		}
 	}
-	for _, retired := range []string{
-		"TestEvalInsightRollupLatency",
-		"TestEvalClaudeParserDeterminismAndLatency",
-	} {
+	for _, retired := range []string{"TestEvalInsightRollupLatency", "TestEvalClaudeParserDeterminismAndLatency"} {
 		if strings.Contains(testingDoc, retired) {
 			t.Fatalf("TESTING still references retired scheduler-sensitive test %q", retired)
 		}
 	}
-	for _, required := range []string{
-		"benchmarks are non-binding engineering evidence",
-		"binding watcher and Claude queue latency thresholds remain release-blocking",
-	} {
+	for _, required := range []string{"benchmarks are non-binding engineering evidence", "binding watcher and Claude queue latency thresholds remain release-blocking"} {
 		if !strings.Contains(handoff, required) {
 			t.Fatalf("gateway handoff missing performance closeout %q", required)
-		}
-	}
-	for _, stale := range []string{
-		"result remains failed",
-		"on a quiet host",
-		"Performance threshold failures are release-blocking",
-	} {
-		if strings.Contains(handoff, stale) {
-			t.Fatalf("gateway handoff contains superseded performance guidance %q", stale)
 		}
 	}
 }
@@ -626,34 +381,29 @@ func TestDocsPerformanceGateSeparation(t *testing.T) {
 // TEST-409
 func TestNoLocalCostDetailsOrDirectIngestionShortcut(t *testing.T) {
 	t.Parallel()
-
-	for _, pattern := range []string{
-		filepath.Join("..", "internal", "langfuse", "*.go"),
-		filepath.Join("..", "cmd", "codex-langfuse-exporter", "*.go"),
-	} {
-		paths, err := filepath.Glob(pattern)
+	for _, root := range []string{filepath.Join("..", "internal", "laminar"), filepath.Join("..", "cmd", "codex-langfuse-exporter")} {
+		entries, err := os.ReadDir(root)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, path := range paths {
-			if strings.HasSuffix(path, "_test.go") {
+		for _, entry := range entries {
+			if entry.IsDir() || strings.HasSuffix(entry.Name(), "_test.go") || !strings.HasSuffix(entry.Name(), ".go") {
 				continue
 			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := string(raw)
-			if strings.Contains(text, "cost_details") {
-				t.Fatalf("%s emits local cost_details", path)
-			}
-			if strings.Contains(text, "/api/public/ingestion") && filepath.Base(path) != "scores.go" {
-				t.Fatalf("%s uses direct ingestion export path", path)
+			path := filepath.Join(root, entry.Name())
+			text := readRepoDoc(t, filepath.Join(strings.TrimPrefix(root, "../"), entry.Name()))
+			for _, forbidden := range []string{"cost_details", "/api/public/ingestion", "/api/public/otel"} {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("%s uses removed backend-specific path %q", path, forbidden)
+				}
 			}
 		}
 	}
-	if !strings.Contains(readRepoDoc(t, "README.md"), "/api/public/otel/v1/traces") {
-		t.Fatal("README must keep OTLP as the trace export path")
+	readme := readRepoDoc(t, "README.md")
+	for _, forbidden := range []string{"/api/public/otel", "/api/public/ingestion", "cost_details"} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("README includes a direct backend path %q", forbidden)
+		}
 	}
 }
 

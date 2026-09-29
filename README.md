@@ -1,212 +1,117 @@
-# Codex Langfuse Tracer
+# Codex and Claude Code Tracer for Laminar
 
-[![Codex Langfuse Tracer showcase](https://img.youtube.com/vi/Y6XycKR0Z0I/hqdefault.jpg)](https://youtu.be/Y6XycKR0Z0I)
+This Go service exports completed Codex CLI and Claude Code turns as OpenTelemetry spans through the authenticated, host-local Laminar receiver. It watches Codex rollout files, drains Claude Stop-hook requests, and sends one OTLP batch per completed turn.
 
-Export completed Codex CLI turns and completed Claude Code turns to Langfuse.
-
-This is a small machine-level companion for people using Codex heavily across many repositories. Install it once on a Linux workstation and it watches Codex's local rollout files, then sends one clean Langfuse batch for each completed turn with the prompt, final answer, tool calls, command output, patch diffs, token usage, timing, and file-change metadata.
-
-It is intentionally not a wrapper around `codex`. Codex runs normally; a `systemd --user` service exports completed observations and finalizes completed turns in the background.
+The repository, executable, systemd unit, and state filenames retain their historical `codex-langfuse-*` names so existing installs and hooks keep working. The exporter now targets Laminar only.
 
 ## Status
 
-- Tested with Codex CLI `0.146.0`.
-- Claude Code support is implemented for explicit transcript export and Stop hook queueing.
-- Built with Go `1.26.0`.
-- Uses Codex rollout JSONL files under `~/.codex/sessions/`.
-- Uses explicit Claude Code transcript JSONL paths supplied by `--provider claude --path` or Claude Code hook input.
-- Uses Langfuse OTLP ingestion at `/api/public/otel/v1/traces`.
-- Supports Linux user services through `systemd --user`.
-- Licensed under Apache-2.0.
+- Supports Codex CLI rollout JSONL and explicit Claude Code transcript JSONL exports.
+- Supports one Linux `systemd --user` watcher for Codex polling and queued Claude exports.
+- Uses the transcript-specific local Laminar OTLP/HTTP receiver at
+  `127.0.0.1:14320` by default.
+- Sends only completed turns with non-empty canonical input and output.
+- Requires the official host-local Laminar receiver and persistent Collector to be installed and running separately.
 
-Codex rollout JSONL and Claude Code transcript JSONL are not stable public APIs. Codex and Claude export are production-ready for workstation use after the local live checks in `TESTING.md` pass. Rerun `CHECK-001` after Claude Code upgrades that change transcript shape.
+Codex and Claude transcript formats are not stable public APIs. Run the focused parser and local receiver tests after upgrading either client.
 
-## Why Use It
+## Quick start
 
-Codex already records useful local session data. This exporter turns that data into Langfuse traces that are easier to review, search, and audit.
-
-You can inspect:
-
-- what prompt was given
-- what final answer came back
-- which shell commands ran
-- command status, exit code, duration, and output
-- patches and changed files
-- MCP, web search, and deferred tool-search calls when Codex records them
-- whether verification commands ran and whether any failed
-- token usage when Codex records it
-
-This is useful for reviewing LLM coding sessions, debugging failed agent work, sharing traces with a team, and keeping an operational record of important Codex turns.
-
-## Quick Start
-
-### 1. Clone
+Clone and build with Go 1.26 or a compatible release:
 
 ```sh
 git clone https://github.com/kirilligum/codex-langfuse-tracer.git
 cd codex-langfuse-tracer
 ```
 
-### 2. Configure Langfuse
+Install the official Laminar Codex/CLI forwarder first. It owns both local
+authenticated OTLP receivers and the persistent queues. `make provision`
+creates separate projects and receiver credentials for the official plugin and
+this transcript exporter. The plugin keeps
+`~/.config/lmnr/codex-plugin.json` on port 14318; this exporter reads
+`~/.config/lmnr/codex-tracer.json` on port 14320. It does not read either
+forwarder's backend API key or send traces directly to the Laminar service.
 
-The exporter reads one Langfuse project key pair from `~/.codex/config.toml`. Use one of these two setups.
+The transcript config must contain `projectApiKey` and `baseUrl`, where
+`projectApiKey` is the local receiver token and `baseUrl` is a loopback HTTP
+URL. The default is `http://127.0.0.1:14320`. Keep the file private (mode
+`0600`) and its `lmnr` directory private (mode `0700`). If `XDG_CONFIG_HOME` is
+set, it is read from `$XDG_CONFIG_HOME/lmnr/codex-tracer.json`.
 
-#### Option A: Local-only Langfuse
-
-Use this when Langfuse only listens on your workstation, for example `http://localhost:3000`. Langfuse still expects a project public key and secret key for ingestion, but they do not need to protect a hosted service. For a fresh local self-hosted instance, add fixed local-only keys to the Langfuse service environment before first startup:
-
-```dotenv
-LANGFUSE_INIT_ORG_ID=local
-LANGFUSE_INIT_ORG_NAME=Local
-LANGFUSE_INIT_PROJECT_ID=codex-local
-LANGFUSE_INIT_PROJECT_NAME=Codex-Local
-LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-local-codex-tracer
-LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-local-codex-tracer
-```
-
-Set the same local-only values in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "http://localhost:3000"
-LANGFUSE_PUBLIC_KEY = "pk-lf-local-codex-tracer"
-LANGFUSE_SECRET_KEY = "sk-lf-local-codex-tracer"
-```
-
-Do not use these fixed values for a shared, public, or remotely reachable Langfuse instance. If your local Langfuse project already exists, create or copy a project API key in the local Langfuse UI instead of relying on first-start initialization.
-
-If the local Langfuse UI should be reachable from another device on a private network such as Tailscale, generate unique project keys instead of using the fixed local-only defaults above. Set Langfuse's `NEXTAUTH_URL` to the URL users open in the browser, for example `http://100.x.y.z:3000`. Leaving `NEXTAUTH_URL` at `http://localhost:3000` can make sign-in redirect to the wrong machine.
-
-For a private single-user local instance, create the initial UI user through Langfuse's init environment and disable future signups:
-
-```dotenv
-NEXTAUTH_URL=http://100.x.y.z:3000
-LANGFUSE_INIT_USER_EMAIL=admin@local.langfuse
-LANGFUSE_INIT_USER_NAME=Local Admin
-LANGFUSE_INIT_USER_PASSWORD=<strong-local-password>
-AUTH_DISABLE_SIGNUP=true
-```
-
-If your Langfuse Docker Compose file does not pass `AUTH_DISABLE_SIGNUP` through to the `langfuse-web` container, add it to that service's environment or to a local Compose override. `AUTH_DISABLE_SIGNUP=true` prevents new accounts; it does not remove users that already exist.
-
-#### Option B: Hosted or shared Langfuse
-
-Use this for Langfuse Cloud or any self-hosted Langfuse instance reachable by other machines. Create a real project API key pair in the target Langfuse project: open the project, go to **Project Settings -> API Keys**, create a new API key, and copy both the public key and secret key. Langfuse documents project API keys in [project settings](https://langfuse.com/faq/all/where-are-langfuse-api-keys) and self-hosted first-start key seeding through [`LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY`](https://langfuse.com/self-hosting/administration/headless-initialization).
-
-For hosted self-hosted deployments that need deterministic first-start provisioning, generate unique keys instead of using the local-only defaults:
-
-```sh
-printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-%s\n' "$(openssl rand -hex 16)"
-printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-%s\n' "$(openssl rand -hex 32)"
-```
-
-Then add the hosted credentials to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "https://cloud.langfuse.com"
-LANGFUSE_PUBLIC_KEY = "pk-lf-..."
-LANGFUSE_SECRET_KEY = "sk-lf-..."
-```
-
-Host examples:
-
-- Langfuse Cloud US: `https://us.cloud.langfuse.com`
-- Langfuse Cloud EU/default: `https://cloud.langfuse.com`
-- Local self-hosted Langfuse: `http://localhost:3000`
-
-If your config already has a `[mcp_servers.langfuse]` block for Langfuse MCP, keep it. The exporter only reads the `env` values.
-
-Workspace identity needs no additional configuration. The exporter always maps the repository and export-time branch to Langfuse Environment and the Linux runtime hostname to Langfuse User, as described in [How It Works](#how-it-works). Identity fields are not configurable.
-
-Protect the config file if it contains hosted or shared-instance API keys:
-
-```sh
-chmod 600 ~/.codex/config.toml
-```
-
-### 3. Install
-
-State files from releases before schema version 3 are incompatible. Only when upgrading from one of those older schemas, stop the watcher and perform this destructive reset before installing:
-
-```sh
-systemctl --user stop codex-langfuse-watch.service
-rm -- ~/.codex/langfuse-export-state.json
-```
-
-Removing the file discards processed IDs, queued requests, the scan watermark, and pending score retries. There is no compatibility state, backup path, or migration command.
-
-This reset does **not** apply to the version 3 lock-protocol upgrade. Keep the version 3 state JSON and its `.lock` sidecar; they contain processed IDs, queued hook requests, pending score retries, and the scan watermark. The update changes locking only and preserves the state schema.
-
-For the first update from the older `O_EXCL` lock protocol, pause new Claude `Stop` hook invocations and any other independently launched state writers. Let in-flight writers finish, and stop any manually launched legacy watchers. The installer synchronously stops its loaded systemd watcher after its staged build and Langfuse pricing preflight pass, then promotes the staged binary and unit. It cannot pause Claude hooks or find independent exporters for you. Resume those producers after the installer succeeds so every writer uses the new lock protocol. Do not delete or rename the `.lock` sidecar during normal installation, restart, or uninstall; keeping one inode prevents concurrent processes from splitting across different locks.
+Install the watcher:
 
 ```sh
 ./install.sh
 ```
 
-The installer builds into a temporary directory beside the installed binary and syncs Langfuse model pricing with that staged binary before changing the installed executable or stopping the watcher. If systemd reports an existing watcher, it stops and waits for it before atomically promoting the staged binary; then it installs the unit, reloads systemd, enables the service, and restarts it. A pricing or stop failure leaves the old executable in place. A failure during promotion reports the service's current state and directs you to rerun the installer. The installer is the only required service-start step. Langfuse must already be reachable at `LANGFUSE_HOST`, and the project key pair in `~/.codex/config.toml` must already authenticate to that Langfuse instance.
+For a new forwarder, run `make provision` and `make up` in
+`cli-llm-laminar-trace` first. When adding the transcript route to an existing
+forwarder, verify the original queue is empty before `make up`; the managed
+update recreates the Collector once and preserves its mounted queue directory.
 
-Useful preflight checks after setting equivalent shell variables:
+The executable and user service keep their legacy `codex-langfuse-*` names so
+existing installations can upgrade in place; the watcher now sends traces only
+through the dedicated Laminar project.
 
-```sh
-curl -fsS "$LANGFUSE_HOST/api/public/health"
-curl -fsS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" "$LANGFUSE_HOST/api/public/models?page=1&limit=1" >/dev/null
-```
+The installer builds a staged executable and checks the authenticated local receiver with an empty OTLP request before it changes the installed binary or stops an existing watcher. It preserves the version 3 export-state file and its `.lock` sidecar, then installs/enables/restarts `codex-langfuse-watch.service`.
 
-Installed files:
-
-```text
-~/.codex/bin/codex-langfuse-exporter
-~/.config/systemd/user/codex-langfuse-watch.service
-~/.codex/langfuse-export-state.json
-~/.codex/langfuse-export-state.json.lock
-```
-
-The version 3 state file records processed trace IDs, score retries, and queued hook requests so normal watcher runs do not resend successful observation batches. The watcher creates initial state only when the file is absent; otherwise it preserves valid state. The lock sidecar is a persistent, empty advisory-lock file and is not evidence of a stale lock. A fresh install with no state starts at the configured initial lookback watermark; a lock-only upgrade retains the existing watermark and checkpoints.
-
-If you want the user service to run even when you are logged out, enable lingering for your Linux user:
-
-```sh
-loginctl enable-linger "$USER"
-```
-
-### 4. Verify
-
-Check the service:
-
-```sh
-systemctl --user status codex-langfuse-watch.service
-```
-
-Run the built-in diagnostics:
+Check local health:
 
 ```sh
 ~/.codex/bin/codex-langfuse-exporter --doctor
+systemctl --user status codex-langfuse-watch.service
 ```
 
-Run a tiny Codex turn:
+A successful receiver check proves that the local endpoint accepted the authenticated request. It does not prove that the Collector has delivered a span to the Laminar backend. Confirm an actual trace in the Laminar project after a new completed turn.
+
+## How exports work
+
+`codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`. The watcher scans `~/.codex/sessions/` for eligible Codex rollout files, retains only bounded parsed-file metadata in memory, and processes completed turns. Claude Code's Stop hook queues the transcript path and does not export it directly; the watcher performs the export.
+
+Each turn becomes one parent `PIPELINE` span, one `LLM` transcript span, and child observation spans. The spans share a stable trace ID and deterministic span IDs. The exporter sends canonical redacted input/output, tool activity, model and token usage, workspace identity, tags, and provider insight metadata through OTLP/HTTP. Laminar attributes use `lmnr.span.type`, `lmnr.span.input`, `lmnr.span.output`, `lmnr.association.properties.*`, and OpenTelemetry `gen_ai.*` conventions, including `gen_ai.usage.*` token fields.
+
+Codex span names include `codex.agent`, `codex.transcript`, `codex.tool.command`, `codex.tool.file_change`, `codex.tool.mcp`, `codex.tool.web_search`, and `codex.tool.tool_search` when those events are present. The transcript span carries model and token usage. Tool spans preserve inputs, outputs, command status, and file-change metadata after shared redaction and truncation.
+
+Incomplete turns remain local until the client records completion. The watcher does not stream tokens or partial assistant text and does not export partial tool observations.
+
+Deterministic turn summaries (`verification_run`, `verification_passed`, `had_failed_command`, `had_file_changes`, `changed_tests`, `docs_only`, `changed_file_count`, and `outcome`) are carried as typed span metadata with a data type and explanation. They are not submitted as native Laminar evaluator score records. They do not make additional model calls or calculate cost locally.
+
+The repository maps the turn's export-time Git worktree and branch into Laminar environment metadata. The Linux runtime hostname is sent as the Laminar user association. The branch, repository, and hostname are identity metadata; they are not configurable through command-line flags.
+
+Workspace environments use the repository folder and export-time branch, normalized to lowercase safe characters and capped at 40 characters with the first six lowercase hexadecimal SHA-256 characters as a suffix. A detached Git checkout uses `detached`; a missing, non-Git, unreadable, or timed-out workspace uses `default`. The user association is the non-empty Linux runtime hostname. Hidden or encrypted reasoning blocks are omitted.
+
+Root metadata includes deterministic turn summaries and compact provider insight fields such as `verification_status`, `verification_command_count`, `changed_file_count`, `changed_extensions`, `touched_test_files`, `command_kind`, `duration_ms`, and `failure_type`. Navigation is emitted as `codex_insight.navigation` or `claude_insight.navigation`; reusable low-cardinality tags such as `files:changed`, `verification:not_run`, `tool:command`, `tool:file_change`, `tool:web_search`, and `mcp:<server>` use `lmnr.association.properties.tags`. The exact MCP tool names, prompt text, output text, paths, and session IDs are not used as tags.
+
+## Delivery and state
+
+The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, and a legacy `pending_scores[trace_id]` map. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
+
+Older version 3 installations may have `pending_scores` entries from the previous Langfuse exporter. On upgrade, the watcher re-exports that turn as one full Laminar trace using its persisted environment. It clears the legacy entry only after the local Collector accepts the batch and the processed checkpoint is saved. Do not edit or reset the state file to force a retry.
+
+Delivery is at-least-once. A timeout after Collector acceptance, or process termination between acceptance and local checkpoint persistence, can cause a repeated OTLP submission with the same span identities. The exporter does not claim exactly-once delivery or prove backend visibility from a local receiver acknowledgement. The Laminar Collector's persistent queue and backend metrics govern downstream retry and delivery.
+
+An incomplete discovery, unreadable source, source change during a scan, or failed export keeps the scan watermark in place. Healthy turns in the same scan can still be checkpointed. The watcher prints an `ERROR: watch_scan_incomplete ... watermark_advanced=false` diagnostic even in quiet mode. The doctor reports a queued hook request, a pending legacy checkpoint, an unavailable receiver/Collector endpoint, an inactive watcher, or recent watcher errors as unhealthy.
+
+`span_export_succeeded ... checkpoint=pending` means the local receiver accepted a batch and the processed checkpoint is not yet durable. `span_checkpoint_unconfirmed` means checkpoint persistence failed after receiver acceptance, so replay is possible. These local diagnostics do not prove the backend has indexed the trace.
+
+Discovery uses visible paths and modification time. A source file restored after its mtime falls behind an advanced watermark is outside automatic recovery. A rewrite that preserves file identity, size, and mtime is also not detectable. Keep source transcripts intact and use the normal watcher recovery path; do not delete state to clear a warning.
+
+## Manual export
+
+Manual exports are explicit sends. A manual export does not read or update watcher checkpoints, so it can duplicate a turn already queued or processed by the watcher. Only export a transcript when you have established that no automatic path will send it.
 
 ```sh
-codex exec -c model_reasoning_effort=low --sandbox read-only --skip-git-repo-check "Reply exactly: langfuse-smoke-test"
-```
-
-Open Langfuse, go to Tracing, and search for `langfuse-smoke-test` or `codex.turn.transcript`.
-
-Expected trace shape:
-
-- root observation: `codex.agent`
-- main generation: `codex.transcript`
-- tool calls: `codex.tool.*`
-
-Manual Claude export is an explicit send. It does not read the watcher queue or processed state and can repeat a trace the hook already queued. Do not manually export the transcript used by an automatic hook check. For manual validation, use a different session with no queued automatic export. If you cannot establish that separation, skip the manual live check.
-
-Claude Code manual export uses an explicit transcript path:
-
-```sh
+~/.codex/bin/codex-langfuse-exporter --latest
+~/.codex/bin/codex-langfuse-exporter --session-id <SESSION_ID>
+~/.codex/bin/codex-langfuse-exporter --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
 ~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>
 ```
 
-Claude Code hooks can call the same binary in hook mode. The hook queues work only; the existing watch service drains the queued transcript and performs the Langfuse export.
+Use `--turn-id <TURN_ID>` to select one turn from a manually selected source. The CLI prints `collector_accepted` after the local receiver accepts an OTLP batch; that status does not prove the backend has indexed the trace. `--json` emits the provider, source path, turn ID, trace ID, and local Collector status.
+
+## Claude Code hook
+
+Configure the hook in Claude Code yourself; the installer does not edit Claude settings. The hook queues work and the systemd watcher sends it:
 
 ```json
 {
@@ -226,390 +131,40 @@ Claude Code hooks can call the same binary in hook mode. The hook queues work on
 }
 ```
 
-## Requirements
+Manual Claude export is separate from the hook queue. Do not manually export a transcript that the hook has queued.
 
-- Linux with `systemd --user`
-- Go `1.26.0` or compatible
-- Codex CLI installed and writing rollout files under `~/.codex/sessions/`
-- A Langfuse project with public and secret API keys
-- Network access from your workstation to the Langfuse host
+Claude spans use `claude.agent`, `claude.transcript`, `claude.tool.command`, `claude.tool.file_change`, `claude.tool.mcp`, and `claude.tool.generic` names when those observations exist. The exporter does not run Claude or modify its settings.
 
-This repo does not install Codex or Langfuse.
+A separately configured Langfuse MCP connection is not used by this exporter. If another workflow still uses it, keep its configuration independent. The example pins `langfuse-mcp==0.10.0` with `mcp>=1.28,<2`; an unconstrained install can resolve the incompatible MCP SDK v2 and close during `initialize` rather than producing the tested MCP SDK v1 startup.
 
-## How It Works
+## Privacy
 
-There is one automatic export path:
-
-1. `codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`.
-2. The exporter recursively polls `~/.codex/sessions/` for `rollout-*.jsonl` at the configured interval (five seconds by default).
-3. The watcher considers only completed turns with non-empty canonical input and output from Codex `response_item` messages.
-4. One export sends `codex.agent`, `codex.transcript`, and all child observations in a single batch, then creates deterministic trace-level scores.
-5. Processed traces, score retries, and queue requests are saved in `~/.codex/langfuse-export-state.json`.
-
-Incomplete turns remain local until Codex records completion. It does not stream tokens or partial assistant text, and it does not export partial tool observations.
-
-The version 3 state document uses `processed_trace_ids`, `pending_scores[trace_id]` for a successful span export awaiting scores, and `queue`. A successful span batch stores its resolved environment before score submission. A score failure retries scores with that environment and does not re-export the trace. Successful scores move the trace to `processed_trace_ids` and remove its pending entry.
-
-Delivery is at-least-once to the currently configured Langfuse target. Known OTLP and score failures do not advance their checkpoints and retry on a later scan. A timeout after remote acceptance, or process termination between remote acceptance and local checkpoint persistence, can produce a duplicate on retry. The exporter does not query Langfuse to reconcile ambiguous acknowledgements and does not synchronize targets.
-
-During catch-up after an outage, the watcher waits one configured poll interval between turn export attempts so the Langfuse ingestion and score queues receive bounded load.
-
-An incomplete filesystem discovery, rollout stat/read error, source change during a scan, or failed export keeps the global scan watermark in place. The watcher can still checkpoint healthy turns found in the same scan. It prints an `ERROR: watch_scan_incomplete ... watermark_advanced=false` summary even in quiet mode; doctor treats that error as unhealthy during its 15-minute journal window. A missing `~/.codex/sessions/` directory is also reported as incomplete discovery, including before Codex has created it.
-
-The running watcher keeps a bounded in-memory cache of stable, successfully parsed file metadata, not transcript content. It avoids reparsing unchanged healthy files while another source holds the watermark. An unchanged corrupt rollout is retried at most once every 30 seconds; a changed source is retried on the next scan while its mtime remains eligible. A service restart clears this cache and may reread files, while persisted per-turn checkpoints prevent already completed traces from being resent.
-
-Discovery uses modification time and currently visible paths. If a source disappears from the watched tree and is later restored with an mtime older than an already advanced watermark, it is outside automatic recovery; rewriting a file while preserving its identity, size, and mtime is also not detectable. Keep source files intact, and do not delete or edit export state to clear a warning. The doctor reports pending score checkpoints and an unreadable journal as failures rather than a healthy result.
-
-When `span_export_succeeded ... checkpoint=pending` appears, the export callback returned successfully and the watcher has not yet recorded its pending-score checkpoint. The existing `exported` line appears only after that checkpoint operation succeeds. If `span_checkpoint_unconfirmed` appears, the checkpoint operation returned an error after a successful export callback, so a later retry may repeat the send. These lines distinguish local steps; they do not prove complete or lasting remote visibility. They contain trace IDs, status, and fixed labels only.
-
-The service is independent of the shell and Codex launch path. It covers `codex`, `co`, `codex exec`, and `codex resume` as long as Codex writes rollout files under `~/.codex/sessions/`.
-
-### Multi-Machine Deployment
-
-Install one watcher on every workstation and configure every watcher with the same shared Langfuse URL and project key pair. A stable URL lets the machine serving Langfuse change without rewriting producer configuration. Each workstation keeps its own watcher state and source transcripts; do not copy or merge watcher state files between machines.
-
-The released exporter does not move Cloudflare tunnels, synchronize Langfuse databases, or reconcile traces between different Langfuse backends. Do not rsync live PostgreSQL, ClickHouse, object-store, or Docker volume data as a substitute. The accepted design is a single external gateway-promotion command plus deterministic trace-level reconciliation from each producer's local source corpus.
-
-Gateway promotion and reconciliation are planned but are not supported commands in the current release. The current state, ownership boundaries, exact intended UX, implementation phases, release gates, and recovery limitations are recorded in [the multi-machine tracing gateway handoff](plans/multi-machine-tracing-gateway-handoff.md). In particular, an offline producer's unsent traces cannot be reconstructed until its local source files are available again.
-
-Claude Code support uses one automatic trigger path:
-
-1. Claude Code sends a Stop hook payload containing `session_id`, `transcript_path`, `cwd`, and `hook_event_name`.
-2. `codex-langfuse-exporter --claude-hook` validates the hook JSON and appends one queue request to `~/.codex/langfuse-export-state.json`.
-3. `codex-langfuse-watch.service` drains the queue, parses the explicit transcript path, exports completed Claude turns, and records processed trace IDs in the same state file.
-
-There is no Claude directory discovery in this release. The exporter does not edit Claude settings; add the hook command yourself when you want automatic Claude exports.
-
-Native Codex OTEL is intentionally not part of this setup. It emits low-level runtime spans such as streaming, socket, dispatch, and server internals that are not useful for reviewing prompts, answers, terminal output, tool calls, token usage, or file changes.
-
-If your `~/.codex/config.toml` has a native `[otel]` section and Langfuse shows noisy spans such as `handle_responses`, `receiving`, `socket reader`, or `serve_inner`, remove that section so this exporter is the single tracing path.
-
-## What Appears In Langfuse
-
-The exporter sends these observations when Codex records the data locally:
-
-- `codex.agent`: logical root observation with canonical input and output.
-- `codex.transcript`: generation observation with the same canonical input and output, model name, and token usage.
-- `codex.message.commentary`: assistant progress updates shown in the CLI.
-- `codex.reasoning.summary`: visible reasoning summaries when Codex records a non-empty summary.
-- `codex.tool.command`: shell command input and terminal output.
-- `codex.tool.file_change`: patch input, changed files, and unified diffs.
-- `codex.tool.mcp`: MCP invocation and result.
-- `codex.tool.web_search`: web search query/action metadata.
-- `codex.tool.tool_search`: deferred-tool discovery calls and results.
-
-Tool observations use Langfuse's `tool` observation type. The transcript uses `generation`.
-
-Claude Code support emits:
-
-- trace name: `claude.turn.transcript`
-- `claude.agent`: logical root observation with canonical input and output.
-- `claude.transcript`: generation observation with the same canonical input and output, model name, and token usage when Claude records it.
-- `claude.tool.command`: Bash tool input, output, status, and command metadata.
-- `claude.tool.file_change`: file-writing tool metadata when Claude records structured path fields.
-- `claude.tool.mcp`: MCP invocation and result when Claude records structured MCP tool names.
-- `claude.tool.generic`: bounded metadata and redacted input/output for other Claude tools.
-
-Claude thinking blocks are omitted, including redacted or encrypted thinking-like blocks. Visible assistant text, final answers, tool input, tool output, and metadata strings use the shared redaction and truncation path.
-
-`<provider>.tool.file_change` metadata includes:
-
-- `changed_files`
-- `added_files`
-- `modified_files`
-- `deleted_files`
-- `moved_files`
-- `file_change_types`
-- `changed_file_count`
-
-The root trace carries compact provider insight metadata for table scanning. Codex writes `codex_insight`; Claude writes `claude_insight`.
-
-- `tool_count`
-- `command_count`
-- `failed_command_count`
-- `file_change_tool_count`
-- `changed_file_count`
-- `changed_extensions`
-- `touched_test_files`
-- `verification_command_count`
-- `verification_status`
-- `last_verification_command`
-- `last_verification_status`
-- `outcome`
-- `outcomes`
-- `navigation`
-- `<kind>_command_count` for each command kind
-- `<tool_family>_tool_count` for each tool family
-
-`verification_status` is one of `not_applicable`, `not_run`, `passed`, or `failed`. Full `changed_files` stays on `<provider>.tool.file_change`; root metadata only carries compact file-impact summaries.
-
-`outcome` and `outcomes` are deterministic, code-derived labels such as `no_changes`, `changed_files`, `docs_only`, `tests_touched`, `verification_not_run`, `verification_passed`, `verification_failed`, `failed_command`, and `install_or_network_used`. They do not use LLM judgment and do not claim the task was semantically solved.
-
-Workspace metadata includes the exact `cwd` and, when `cwd` is inside an attached Git worktree, the export-time branch as `git_branch`. The exporter maps the worktree-root folder and export-time branch to `langfuse.environment` in the form `repository-folder--branch-<hash>`. Repository and branch text is normalized to lowercase Langfuse-safe characters, the value is capped at 40 characters, and every Git environment ends with the first six lowercase hexadecimal SHA-256 characters of the raw repository folder, a NUL separator, and raw branch. A detached HEAD uses `detached`; its `git_branch` metadata remains omitted. Non-Git, missing, unreadable, or timed-out working directories use `default`.
-
-Every exported span sets `langfuse.user.id` to the trimmed, non-empty Linux runtime hostname captured once when the export process starts. This is machine identity, not a human account or workspace path. The same persisted Environment is used for the span export and deterministic scores even if the checked-out branch changes before a score retry.
-
-Navigation metadata is always-on. A read-only trace means `navigation contains files:read_only`, which only means no observed local file changes in the exported turn. It does not mean no network activity, no install command, or no external API call. Counts remain the metric representation. `<provider>_insight.navigation`, for example `codex_insight.navigation` or `claude_insight.navigation`, is the canonical low-cardinality navigation field that trace tags project into Langfuse's tag UI.
-
-Cost tracking uses Langfuse's model and usage handling. The exporter sends `langfuse.observation.model.name` and `langfuse.observation.usage_details` on provider transcript observations; it does not multiply tokens locally or emit `cost_details`. Configure pricing in Langfuse model definitions so Langfuse calculates input, output, total, and cost columns from the canonical model and usage values.
-
-Langfuse calculates cost. The built-in pricing sync creates source-backed model definitions for supported Codex/OpenAI models and current Claude models: Opus 4.7, Sonnet 4.6, and Haiku 4.5. Claude Code subscription billing is separate from Anthropic API token pricing; these definitions are for Langfuse trace cost columns when Claude records compatible model and usage details.
-
-`install.sh` runs its staged exporter with `--sync-model-pricing --quiet` before replacing the installed executable and restarting `codex-langfuse-watch.service`. The same setup can be run directly:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --sync-model-pricing
-```
-
-The built-in pricing catalog is source-dated from https://openai.com/api/pricing/ on 2026-05-02 and covers `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`. It also covers `gpt-5.3-codex-spark` using the official `gpt-5.3-codex` pricing from https://developers.openai.com/api/docs/models/gpt-5.3-codex on 2026-05-02. It covers `claude-opus-4-7`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` using Claude Opus 4.7, Claude Sonnet 4.6, and Claude Haiku 4.5 pricing from https://platform.claude.com/docs/en/about-claude/pricing on 2026-05-05. OpenAI/Codex usage keys are `input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`, and `total`; Claude usage keys are `input`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output`, and `total`. Child token buckets are subtracted from parent input/output buckets to avoid double counting. For Claude Code traces, a small `input` count can be correct when most prompt context is reported in `cache_creation_input_tokens` and `cache_read_input_tokens`.
-
-When provider pricing changes or a supported coding agent emits a new model name, update `internal/langfuse/models.go` and its catalog tests in the same change. Do not add fallback local cost multiplication.
-
-Langfuse calculates cost during ingestion. Changing model pricing does not make this exporter update observations that were already sent. Do not re-export an old turn to backfill its cost; Langfuse observations are immutable and another send can create duplicate rows. Historical corrections need a separately reviewed, Langfuse-supported procedure.
-
-`<provider>.tool.command` metadata includes:
-
-- `command_kind`
-- `status`
-- `exit_code`
-- `duration_ms`
-- `failure_type`
-
-`command_kind` uses a fixed enum: `test`, `build`, `lint`, `format`, `git`, `read`, `search`, `install`, `systemd`, `network`, or `other`.
-
-`<provider>.tool.mcp` metadata includes:
-
-- `mcp_server`
-- `mcp_tool`
-
-MCP metadata is derived only from observed structured MCP events. Configured but unused MCP servers are not exported as usage. Exact MCP tools such as `issues/list` stay in observation metadata and are not trace tags.
-
-Trace tags are emitted through `langfuse.trace.tags`. The built-in tag contract is the active provider's insight navigation values plus observed `mcp:<server>` values. That means every navigation value, including `files:changed`, `command:other`, `tool:command`, `tool:file_change`, `tool:mcp`, and `verification:not_run`, is available as a trace tag, and an observed MCP server such as GitHub also adds `mcp:github`. Tags are sorted, unique, lowercase, and never contain exact MCP tool names, prompts, outputs, cwd, file paths, session IDs, or trace IDs.
-
-Source-level custom tags can be added as compiled Go rules in `internal/agenttrace/tagrules.go`; see `internal/agenttrace/TAG_RULES.md` for examples such as emitting a fixed tag when the user's request contains a known string. Custom tags are code changes, not runtime configuration.
-
-The exporter also creates deterministic trace-level Langfuse scores after each successful trace export:
-
-- `verification_run`
-- `verification_passed`
-- `had_failed_command`
-- `had_file_changes`
-- `changed_tests`
-- `docs_only`
-- `changed_file_count`
-- `outcome`
-
-These scores use deterministic IDs and parsed trace metadata. Their current event timestamp is assigned when the score batch is sent, so a resend on another UTC date may create another score instead of overwriting the first. Do not use manual re-export as a score repair mechanism. The scores do not make extra LLM calls. The eight score events are submitted in one Langfuse ingestion batch; trace export continues to use only the OTLP trace endpoint.
-
-## Filtering
-
-Use trace tags for turn-level navigation and observation filters for individual tool calls.
-
-Trace tags are the primary reusable trace filters:
-
-- `files:changed`
-- `files:read_only`
-- `command:<kind>` for each observed `command_kind`
-- `tool:<family>` for each observed tool family
-- `verification:<status>`
-- `mcp:<server>` for each observed MCP server
-
-Common tag filters include `command:search`, `command:read`, `command:network`, `command:install`, `tool:web_search`, and `verification:failed`.
-
-Outcome filters include `outcome:no_changes`, `outcome:changed_files`, `outcome:docs_only`, `outcome:verification_not_run`, `outcome:verification_passed`, `outcome:verification_failed`, `outcome:failed_command`, and `outcome:install_or_network_used`.
-
-Use `mcp_server` and `mcp_tool` on `<provider>.tool.mcp` observations when you need exact MCP call details.
-
-Observation filters use observation metadata:
-
-- `Observations: command search`: `Name equals codex.tool.command` and `Metadata command_kind equals search`
-- `Observations: command read`: `Name equals codex.tool.command` and `Metadata command_kind equals read`
-- `Observations: command network`: `Name equals codex.tool.command` and `Metadata command_kind equals network`
-- `Observations: command install`: `Name equals codex.tool.command` and `Metadata command_kind equals install`
-- `Observations: failed commands`: `Name equals codex.tool.command` and `Metadata failure_type equals nonzero_exit`
-- `Observations: file changes`: `Name equals codex.tool.file_change`
-- `Observations: web search`: `Name equals codex.tool.web_search`
-
-After `install.sh` restarts `codex-langfuse-watch.service`, future watcher exports include these tags and MCP metadata automatically. Existing Langfuse observations are not updated by this exporter. Do not resend an old turn to add tags or MCP metadata; another send can create duplicate rows. Historical corrections need a separately reviewed, Langfuse-supported procedure.
-
-## Manual Export
-
-The watcher is the normal production path. Manual export does not read or update watcher state and does not check whether the trace was already sent. A manual send and a queued watcher send can both export the same turn.
-
-`--latest`, `--session-id`, and `--path` select a source. Unless `--turn-id` is supplied, the command exports every completed exportable turn in that source. It does not select only missing or unprocessed turns. Repeating an export can create duplicate observations.
-
-To restrict an intentional send to one turn in a known session:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --session-id <SESSION_ID> --turn-id <TURN_ID>
-```
-
-`--turn-id` restricts the local input only. It does not query Langfuse, deduplicate, or mark the watcher state. A turn that looks missing may still be waiting in the watcher queue or be discovered by the watcher. Before a manual send, establish that no automatic path is scheduled to send that turn. Do not edit watcher state to force an export.
-
-Export the latest local Codex session:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --latest
-```
-
-Export a known Codex session:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --session-id <SESSION_ID>
-```
-
-Export a specific rollout file:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --path ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl
-```
-
-`--no-verify` only skips the post-export check. It does not check for an existing trace or prevent duplicate writes.
-
-Manual exports print a trace URL when the Langfuse project can be resolved:
-
-```text
-exported trace=<trace-id> status=200
-verified trace=<trace-id> input=true output=true
-trace_url=http://localhost:3000/project/<project-id>/traces/<trace-id>
-```
-
-Use JSON output when another Codex turn, script, or CI job needs to consume the result:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --latest --json
-```
-
-The command emits one JSON object per exported turn:
-
-```json
-{"provider":"codex","session_file":"...","turn_id":"...","trace_id":"...","trace_url":"...","status":200,"verified_input":true,"verified_output":true}
-```
-
-Codex can use `trace_url` in final summaries, issue comments, or handoff notes without scraping human-readable logs.
-
-## Doctor
-
-Run the doctor command when exports do not appear in Langfuse or before sharing a demo:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --doctor
-```
-
-It checks:
-
-- config loading and configured host
-- Langfuse health endpoint
-- Langfuse API authentication
-- project id lookup for trace URLs
-- watch state queue length
-- `codex-langfuse-watch.service` activity
-- recent watcher export errors
-- loopback host binding problems such as `localhost:3000` refusing connections
-
-Machine-readable output is available for scripts:
-
-```sh
-~/.codex/bin/codex-langfuse-exporter --doctor --json
-```
-
-## Safety And Privacy
-
-This exporter can send prompt text, assistant text, tool inputs, command output, and diffs to Langfuse. Do not enable it where Codex sessions may contain secrets, customer data, tax data, banking data, card data, private legal data, or other sensitive material unless exporting that data is intentionally approved.
-
-The exporter redacts several common token/key patterns, but redaction is a last line of defense, not a security boundary.
-
-Do not pass API keys directly in process command-line arguments. Process-list commands can expose those arguments, and their output can then appear in a trace. Prefer private environment files, credential files, or the owning tool's secret store.
-
-The exporter does not emit:
-
-- hidden chain-of-thought or encrypted reasoning content
-- native Codex runtime spans
-- byte-for-byte TUI recordings
-- per-file observation fanout
-- inferred "model context" observations
-- local cost calculations or `cost_details`
-
-Input and output are stored on the root and generation observations using Langfuse v4 observation fields: `langfuse.observation.input` and `langfuse.observation.output`. Empty observation input/output fields are omitted. Deprecated trace-level input/output fields are not emitted.
-
-Verification reads Langfuse's `/api/public/v2/observations` endpoint, selects the single logical root observation, and compares its raw input/output values with the sanitized turn. It does not read deprecated trace objects or v1 observation rows.
+The exporter can send prompt text, assistant text, tool inputs, command output, diffs, paths, and metadata to the configured Laminar project. Shared redaction and truncation run before export, but that does not guarantee every sensitive value is removed. Do not enable it for sessions containing secrets or regulated data unless sending those records is approved. Never paste receiver or backend credentials into chat, issue comments, logs, or source control.
 
 ## Troubleshooting
 
-Check the service:
-
-```sh
-systemctl --user status codex-langfuse-watch.service
-```
-
-Check service logs:
-
-```sh
-journalctl --user -u codex-langfuse-watch.service -n 100 --no-pager
-```
-
-Confirm the exporter binary exists:
-
-```sh
-test -x ~/.codex/bin/codex-langfuse-exporter
-```
-
-Find a local session file for a prompt:
-
-```sh
-rg -l "some prompt text" ~/.codex/sessions
-```
-
-Common failure modes:
-
-- Missing Langfuse credentials in `~/.codex/config.toml`.
-- Wrong Langfuse host for the project keys.
-- Codex reports that the `langfuse` MCP server closed during `initialize`: `langfuse-mcp==0.10.0` still uses the MCP Python SDK v1 API, so launch it with the tested `mcp>=1.28,<2` constraint shown in `examples/codex-config.toml`. An unconstrained `uvx langfuse-mcp` can resolve the incompatible MCP SDK v2.
-- `./install.sh` fails with `connect: connection refused`: Langfuse is not running at `LANGFUSE_HOST`, or the host URL points at the wrong machine or port.
-- `./install.sh` fails with `Langfuse model list /api/public/models failed with HTTP 401`: the configured public/secret key pair is not valid for the Langfuse instance at `LANGFUSE_HOST`. Seed the same `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and `LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, or create/copy a project key pair from the Langfuse UI and update `~/.codex/config.toml`.
-- The journal shows `ERROR: export state lock busy path=... waited=2s retry_in=...`: the watcher is waiting for a state transaction and retries that same checkpoint in place. It logs at most once per minute while the lock remains busy. Check for another exporter using the same state path and inspect fresh logs for a recovery message; do not delete the sidecar to clear contention. `--doctor` may continue to show the recent error during its existing 15-minute journal window after recovery.
-- `--claude-hook` exits nonzero with an export state lock error: the request was not acknowledged or queued. Once contention clears, retry the existing hook invocation or explicitly export its transcript with `~/.codex/bin/codex-langfuse-exporter --provider claude --path <transcript.jsonl>`.
-- The journal shows `ERROR: watch_scan_incomplete ...`: the scan did not establish a complete source inventory or finish all eligible work, so its watermark stayed put. Read the surrounding watcher messages, restore access or repair the source, and let the service retry. Healthy turns from the same scan may already be checkpointed; do not reset state or manually resend them. Doctor can continue failing for up to 15 minutes after the last incomplete scan.
-- `--doctor` reports `state_pending_scores fail`: score submission or its checkpoint is still pending. Let the watcher retry and rerun doctor; do not delete the pending entry or resend spans manually.
-- `--doctor` reports `recent_errors fail journal unavailable`: doctor could not read watcher history, so it cannot certify recent scan health. Restore the user's journal access/service and rerun doctor.
-- `systemctl --user status codex-langfuse-watch.service` says the unit is not found after `./install.sh`: the installer likely failed before the service install step. Fix the Langfuse reachability or authentication error and rerun `./install.sh`.
-- Browser sign-in redirects to `localhost`: the Langfuse server's `NEXTAUTH_URL` is still set to `http://localhost:3000`. Set it to the actual browser URL, such as a Tailscale URL, and recreate the `langfuse-web` container.
-- A browser on Windows cannot reach a Tailscale IP that works from WSL: Tailscale may be running only inside WSL. Run Tailscale on the Windows host too, or open the browser inside the same WSL network environment.
-- Native Codex OTEL still enabled, causing noisy duplicate traces.
-- Claude Code transcript exists but no trace appears because the `Stop` hook is not installed in Claude settings. Add the documented `--claude-hook --quiet` command to Claude's `Stop` hook for future automatic exports. The explicit `--provider claude --path <transcript.jsonl>` mode sends the transcript again if used; first confirm its trace is missing.
-- Watch state already marked a historical turn as processed.
-- Langfuse ingestion delay. Wait a few seconds and refresh the UI.
-- Empty Input/Output on unrelated observations. Select `codex.transcript`.
-
-### Optional ccgram Process
-
-ccgram is not required by this exporter. If ccgram is installed separately and its bot uses the `__main__` window in a tmux session named `ccgram`, it can remain stopped to conserve workstation memory and be started only when needed.
-
-Start the bot in its existing control window:
-
-```sh
-tmux send-keys -t ccgram:@0 'ccgram run' Enter
-```
-
-Stop the bot without closing the tmux session or its other windows:
-
-```sh
-tmux send-keys -t ccgram:@0 C-c
-```
-
-Use `tmux list-windows -t ccgram` first if the control window might not be `@0`.
+- `--doctor` reports receiver authentication failure: confirm the transcript
+  forwarder route is running and `~/.config/lmnr/codex-tracer.json` contains its
+  current receiver `projectApiKey` and loopback `baseUrl`; do not use either
+  backend API key.
+- The installer fails before service promotion: fix the local receiver/configuration problem and rerun `./install.sh`. The old binary and unit remain in place on a preflight failure.
+- The receiver accepts a manual trace but no trace appears in Laminar: inspect the forwarder service, persistent Collector queue, Collector delivery metrics, and backend availability. A local HTTP success is only the queue acceptance boundary.
+- `watch_scan_incomplete` appears: inspect the bounded error counts and watcher journal, then let the eligible source retry. Do not remove the source, state file, or lock sidecar.
+- The doctor reports `state_legacy_pending_traces`: leave the watcher active so it can re-export and checkpoint the affected traces. A source missing from disk or outside the scan watermark requires separate recovery.
+- The unit is missing or inactive: check the installer output and rerun it after the receiver preflight succeeds.
 
 ## Development
 
-Run the local suite:
+Run the local suite and focused integration checks:
 
 ```sh
 go test ./... -count=1
+go test -race ./internal/exportstate ./internal/claudehook ./internal/watch ./cmd/codex-langfuse-exporter -count=1
 ```
 
-Run focused parser, contract, watcher, exporter, and fuzz checks from [TESTING.md](TESTING.md).
+See [TESTING.md](TESTING.md) for the watcher resource gate, delivery replay tests, local receiver integration tests, and production acceptance boundaries.
 
-The repo uses a manifest-driven contract corpus:
+The normalized provider contract uses one fixture inventory:
 
 ```text
 testdata/manifest.json
@@ -617,28 +172,9 @@ testdata/sources/<provider>/*.jsonl
 testdata/golden/*.normalized.json
 ```
 
-Keep that as the single behavioral contract. Do not add a second fixture registry.
+To add a provider, implement its transcript parser under `internal/<provider>trace`, return `agenttrace.Turn`, register it in `internal/providers/providers.go`, and extend the existing fixtures and Laminar span contract. Keep provider-specific parsing separate from shared redaction, trace identity, tags, insight summaries, and Laminar projection. Hooks should enqueue state only; the watcher remains the single automatic export path.
 
-### Adding A Coding Agent
-
-This exporter is provider-neutral after parsing. Codex, Claude Code, and future coding agents such as Gemini CLI, OpenCode, Goose, or another local agent must converge on the same internal contract:
-
-```text
-source transcript/log -> internal/<provider>trace -> agenttrace.Turn -> tracecontract.Trace -> langfuse.EmitSpans
-```
-
-Add a new coding agent by extending the existing path:
-
-1. Add a parser package named `internal/<provider>trace` that reads that agent's local transcript or log format and returns `[]agenttrace.Turn`.
-2. Keep provider-specific logic in that parser only. Shared redaction, token usage, trace IDs, insight rollups, trace tags, and Langfuse projection stay in `internal/agenttrace`, `internal/tracecontract`, and `internal/langfuse`.
-3. Add the provider constant in `internal/agenttrace/model.go` and profile names in `internal/agenttrace/profile.go`, including trace name, observation names, metadata prefix, and insight metadata key.
-4. Register the parser once in `internal/providers/providers.go`. `cmd/codex-langfuse-exporter`, `internal/watch`, and contract tests must call the provider registry instead of importing the provider parser directly.
-5. Add sanitized fixtures under `testdata/sources/<provider>/*.jsonl`, add entries to `testdata/manifest.json`, and add normalized expectations under `testdata/golden`.
-6. Run `go test ./test -run TestGoldenTraceContract -count=1` so the new provider is held to the same normalized Langfuse contract as Codex and Claude.
-7. If the provider has a stable completion hook, add a small hook package that validates the hook payload and enqueues `exportstate.QueueRequest`. The hook process must not load Langfuse config or export directly. `--watch` remains the only automatic exporter.
-8. If the provider does not have a stable hook or session discovery contract, support explicit path export first: `codex-langfuse-exporter --provider <provider> --path <transcript>`.
-
-Do not add provider wrapper execution, a second fixture manifest, a second Langfuse projection, direct hook export, transcript directory polling, compatibility shims, or placeholder providers without real fixtures. New agents should make the shared tests broader, not create parallel Codex-shaped and provider-shaped test suites.
+Codex and Claude tool families use stable semantic names such as `codex.tool.command`, `codex.tool.file_change`, `codex.tool.mcp`, `codex.tool.web_search`, `codex.tool.tool_search`, and the corresponding `claude.tool.*` names. Tool metadata includes observed command kind, status, exit code, duration, and failure type where available.
 
 ## Remove
 
@@ -646,10 +182,4 @@ Do not add provider wrapper execution, a second fixture manifest, a second Langf
 ./uninstall.sh
 ```
 
-Uninstall removes the state JSON but leaves the empty `.lock` sidecar. Leaving it in place preserves the lock inode for any process already using the state path; there is no routine sidecar cleanup step.
-
-If Langfuse MCP was added only for this setup, remove the optional `[mcp_servers.langfuse]` block from `~/.codex/config.toml`.
-
-## Social Summary
-
-Codex Langfuse Tracer is a small Go exporter that watches local Codex CLI rollout files and turns completed coding-agent turns into clean Langfuse traces with canonical observation input/output, tool activity, token usage, and verification metadata. Install once per workstation; Codex keeps running normally.
+Uninstall removes the state JSON but leaves its empty `.lock` sidecar. This preserves the lock inode for processes that may still be using the state path.

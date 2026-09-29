@@ -19,4 +19,4 @@ systemctl --user daemon-reload >/dev/null 2>&1 || true
 echo "removed service: $service_dst"
 echo "removed exporter: $exporter_dst"
 echo "removed state: $state_file"
-echo "edit ~/.codex/config.toml to remove the optional [mcp_servers.langfuse] block."
+echo "Codex MCP settings were not changed; keep any independent Langfuse MCP configuration used by other workflows."

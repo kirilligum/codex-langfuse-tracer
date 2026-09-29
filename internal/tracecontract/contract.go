@@ -49,7 +49,7 @@ func FromTurn(turn agenttrace.Turn) Trace {
 		},
 	}
 	if turn.TokenUsage != nil {
-		if usage := turn.TokenUsage.LangfuseUsageDetails(); len(usage) > 0 {
+		if usage := turn.TokenUsage.CanonicalUsageDetails(); len(usage) > 0 {
 			trace.TokenUsage = usage
 		}
 	}
