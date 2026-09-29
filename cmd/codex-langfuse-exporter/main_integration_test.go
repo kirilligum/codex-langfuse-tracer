@@ -14,11 +14,13 @@ import (
 	"testing"
 
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
+
+const testReceiverToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 // TEST-704
 func TestManualWorkspaceIdentity(t *testing.T) {
@@ -45,7 +47,7 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 	if err := os.WriteFile(rolloutPath, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, wantEnvironment, err := langfuse.ResolveWorkspace(context.Background(), agenttrace.Turn{CWD: nested})
+	_, wantEnvironment, err := laminar.ResolveWorkspace(context.Background(), agenttrace.Turn{CWD: nested})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,69 +63,47 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 
 	var spanEnvironments []string
 	var spanUserIDs []string
-	var scoreEnvironments []string
+	var scoreCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/public/otel/v1/traces":
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var request collectortrace.ExportTraceServiceRequest
-			if err := proto.Unmarshal(body, &request); err != nil {
-				t.Fatal(err)
-			}
-			for _, resourceSpans := range request.ResourceSpans {
-				environment := testOTLPString(resourceSpans.Resource.Attributes, "langfuse.environment")
-				for _, scopeSpans := range resourceSpans.ScopeSpans {
-					for _, span := range scopeSpans.Spans {
-						spanEnvironments = append(spanEnvironments, environment)
-						spanUserIDs = append(spanUserIDs, testOTLPString(span.Attributes, "langfuse.user.id"))
+		if r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer "+testReceiverToken {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request collectortrace.ExportTraceServiceRequest
+		if err := proto.Unmarshal(body, &request); err != nil {
+			t.Fatal(err)
+		}
+		for _, resourceSpans := range request.ResourceSpans {
+			for _, scopeSpans := range resourceSpans.ScopeSpans {
+				for _, span := range scopeSpans.Spans {
+					spanEnvironments = append(spanEnvironments, testOTLPString(span.Attributes, "lmnr.association.properties.metadata.environment"))
+					spanUserIDs = append(spanUserIDs, testOTLPString(span.Attributes, "lmnr.association.properties.user_id"))
+					if span.Name == "codex.agent" && testOTLPBool(span.Attributes, "lmnr.association.properties.metadata.codex_score_had_file_changes") {
+						scoreCount++
 					}
 				}
 			}
-			w.WriteHeader(http.StatusOK)
-		case "/api/public/ingestion":
-			var batch struct {
-				Batch []struct {
-					Body struct {
-						Environment string `json:"environment"`
-					} `json:"body"`
-				} `json:"batch"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
-				t.Fatal(err)
-			}
-			for _, event := range batch.Batch {
-				scoreEnvironments = append(scoreEnvironments, event.Body.Environment)
-			}
-			successes := make([]map[string]any, len(batch.Batch))
-			for index := range successes {
-				successes[index] = map[string]any{"id": "accepted", "status": http.StatusCreated}
-			}
-			w.WriteHeader(http.StatusMultiStatus)
-			_ = json.NewEncoder(w).Encode(map[string]any{"successes": successes, "errors": []any{}})
-		case "/api/public/projects":
-			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
-		default:
-			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	configPath := writeLangfuseConfig(t, home, server.URL)
+	configPath := writeLaminarConfig(t, home, server.URL)
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--no-verify"}, &stdout, &stderr)
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if hostnameCalls != 1 {
 		t.Fatalf("hostname calls = %d, want 1", hostnameCalls)
 	}
-	if len(spanEnvironments) == 0 || len(scoreEnvironments) == 0 {
-		t.Fatalf("missing identity payloads spans=%v scores=%v", spanEnvironments, scoreEnvironments)
+	if len(spanEnvironments) == 0 || scoreCount != 1 {
+		t.Fatalf("missing environment or deterministic score metadata: environments=%v score_count=%d", spanEnvironments, scoreCount)
 	}
-	for _, environment := range append(spanEnvironments, scoreEnvironments...) {
+	for _, environment := range spanEnvironments {
 		if environment != wantEnvironment {
 			t.Fatalf("environment = %q, want %q", environment, wantEnvironment)
 		}
@@ -133,22 +113,8 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 			t.Fatalf("user id = %q, want %q", userID, wantHostname)
 		}
 	}
-}
-
-func testOTLPString(attributes []*commonv1.KeyValue, key string) string {
-	for _, attribute := range attributes {
-		if attribute.Key == key {
-			return attribute.Value.GetStringValue()
-		}
-	}
-	return ""
-}
-
-func runTestGit(t *testing.T, directory string, args ...string) {
-	t.Helper()
-	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	if !strings.Contains(stdout.String(), "collector_accepted trace=") {
+		t.Fatalf("manual export did not state the actual acceptance boundary: %s", stdout.String())
 	}
 }
 
@@ -158,57 +124,64 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name       string
-		provider   string
-		fixture    string
-		extraArgs  []string
-		wantOutput []byte
+		name      string
+		provider  string
+		fixture   string
+		wantTrace string
 	}{
-		{name: "codex", provider: "codex", fixture: "complete-tools.jsonl", extraArgs: []string{"--turn-id", "turn-1"}, wantOutput: []byte("exported trace=1e087e4ea8aa8d8e29e604d2cd8704d9 status=200")},
-		{name: "claude", provider: "claude", fixture: "no-tools.jsonl", wantOutput: []byte("exported trace=")},
+		{name: "codex", provider: "codex", fixture: "complete-tools.jsonl", wantTrace: "codex.agent"},
+		{name: "claude", provider: "claude", fixture: "no-tools.jsonl", wantTrace: "claude.agent"},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
 			home := t.TempDir()
 			sourcePath := copyProviderSourceFixture(t, home, tc.provider, tc.fixture)
 			postCount := 0
-			scoreBatchCount := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/public/otel/v1/traces":
-					postCount++
-					w.WriteHeader(http.StatusOK)
-					return
-				case "/api/public/ingestion":
-					scoreBatchCount++
-					writeTestIngestionSuccess(t, w, r)
-					return
-				case "/api/public/projects":
-					_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
-					return
+				if r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer "+testReceiverToken {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-				t.Fatalf("unexpected request %s", r.URL.Path)
+				postCount++
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var request collectortrace.ExportTraceServiceRequest
+				if err := proto.Unmarshal(body, &request); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, resourceSpans := range request.ResourceSpans {
+					for _, scopeSpans := range resourceSpans.ScopeSpans {
+						for _, span := range scopeSpans.Spans {
+							if span.Name == tc.wantTrace {
+								found = true
+								if testOTLPString(span.Attributes, "lmnr.association.properties.metadata.provider") != tc.provider {
+									t.Fatalf("%s root provider metadata missing", tc.name)
+								}
+							}
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("%s root span missing", tc.name)
+				}
+				w.WriteHeader(http.StatusOK)
 			}))
 			defer server.Close()
 
-			configPath := writeLangfuseConfig(t, home, server.URL)
-			args := []string{"--provider", tc.provider, "--path", sourcePath, "--config", configPath, "--no-verify"}
-			args = append(args, tc.extraArgs...)
+			configPath := writeLaminarConfig(t, home, server.URL)
 			var stdout, stderr bytes.Buffer
-			code := run(context.Background(), args, &stdout, &stderr)
+			code := run(context.Background(), []string{"--provider", tc.provider, "--path", sourcePath, "--config", configPath}, &stdout, &stderr)
 			if code != 0 {
 				t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 			}
-			if postCount != 1 {
-				t.Fatalf("postCount = %d, want 1", postCount)
+			if postCount != 1 || !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), []byte("collector_accepted trace=")) {
+				t.Fatalf("provider export request_count=%d stdout=%s stderr=%s", postCount, stdout.String(), stderr.String())
 			}
-			if scoreBatchCount != 1 {
-				t.Fatalf("scoreBatchCount = %d, want 1", scoreBatchCount)
-			}
-			if !bytes.Contains(stdout.Bytes(), []byte("session_file="+sourcePath)) || !bytes.Contains(stdout.Bytes(), tc.wantOutput) || !bytes.Contains(stdout.Bytes(), []byte("trace_url="+server.URL+"/project/project-test/traces/")) {
-				t.Fatalf("missing provider export stdout=%s", stdout.String())
+			if bytes.Contains(stdout.Bytes(), []byte("verified=")) || bytes.Contains(stdout.Bytes(), []byte("trace_url=")) {
+				t.Fatalf("CLI overstated Collector acceptance as backend visibility: %s", stdout.String())
 			}
 		})
 	}
@@ -220,22 +193,16 @@ func TestManualExportCLIJSONOutput(t *testing.T) {
 	home := t.TempDir()
 	rolloutPath := copyCodexSourceFixture(t, home, "complete-tools.jsonl")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/public/otel/v1/traces":
-			w.WriteHeader(http.StatusOK)
-		case "/api/public/ingestion":
-			writeTestIngestionSuccess(t, w, r)
-		case "/api/public/projects":
-			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
-		default:
+		if r.URL.Path != "/v1/traces" {
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	configPath := writeLangfuseConfig(t, home, server.URL)
+	configPath := writeLaminarConfig(t, home, server.URL)
 
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--no-verify", "--json"}, &stdout, &stderr)
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -246,31 +213,13 @@ func TestManualExportCLIJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
 		t.Fatalf("parse json output: %v\n%s", err, stdout.String())
 	}
-	if result.TraceID == "" || result.Status != http.StatusOK || result.TraceURL != server.URL+"/project/project-test/traces/"+result.TraceID {
+	if result.TraceID == "" || result.CollectorStatus != http.StatusOK {
 		t.Fatalf("json result = %+v", result)
 	}
-}
-
-func writeTestIngestionSuccess(t *testing.T, w http.ResponseWriter, r *http.Request) {
-	t.Helper()
-	var body struct {
-		Batch []struct {
-			ID string `json:"id"`
-		} `json:"batch"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		t.Fatalf("decode ingestion batch: %v", err)
-	}
-	if len(body.Batch) == 0 {
-		t.Fatal("empty ingestion batch")
-	}
-	successes := make([]map[string]any, 0, len(body.Batch))
-	for _, event := range body.Batch {
-		successes = append(successes, map[string]any{"id": event.ID, "status": http.StatusCreated})
-	}
-	w.WriteHeader(http.StatusMultiStatus)
-	if err := json.NewEncoder(w).Encode(map[string]any{"successes": successes, "errors": []any{}}); err != nil {
-		t.Fatalf("encode ingestion response: %v", err)
+	for _, retiredField := range []string{"trace_url", "verified_input", "verified_output"} {
+		if strings.Contains(stdout.String(), retiredField) {
+			t.Fatalf("JSON claims retired backend verification field %q: %s", retiredField, stdout.String())
+		}
 	}
 }
 
@@ -279,10 +228,10 @@ func TestManualExportCLINoExportableTurns(t *testing.T) {
 
 	home := t.TempDir()
 	rolloutPath := copyCodexSourceFixture(t, home, "incomplete-turn.jsonl")
-	configPath := writeLangfuseConfig(t, home, "http://127.0.0.1")
+	configPath := writeLaminarConfig(t, home, "http://127.0.0.1:14318")
 
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath, "--no-verify"}, &stdout, &stderr)
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatalf("run succeeded for incomplete rollout stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
@@ -291,47 +240,28 @@ func TestManualExportCLINoExportableTurns(t *testing.T) {
 	}
 }
 
-func TestManualExportCLIVerificationFailure(t *testing.T) {
+func TestManualExportFailsWhenCollectorRejectsBatch(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
 	rolloutPath := copyCodexSourceFixture(t, home, "complete-no-tools.jsonl")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/public/otel/v1/traces":
-			w.WriteHeader(http.StatusOK)
-		case "/api/public/ingestion":
-			writeTestIngestionSuccess(t, w, r)
-		case "/api/public/projects":
-			_, _ = w.Write([]byte(`{"data":[{"id":"project-test"}]}`))
-		case "/api/public/v2/observations":
-			_, _ = w.Write([]byte(`{"data":[{"id":"root","traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","isRootObservation":true,"input":"","output":""}],"meta":{}}`))
-		default:
-			t.Fatalf("unexpected request %s", r.URL.Path)
-		}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rejected", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	configPath := writeLangfuseConfig(t, home, server.URL)
+	configPath := writeLaminarConfig(t, home, server.URL)
 
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{
-		"--path", rolloutPath,
-		"--config", configPath,
-		"--verify-wait-seconds", "0",
-		"--verify-interval-seconds", "0",
-	}, &stdout, &stderr)
-	if code == 0 {
-		t.Fatalf("run succeeded despite verification miss stdout=%s stderr=%s", stdout.String(), stderr.String())
-	}
-	if !bytes.Contains(stderr.Bytes(), []byte("did not show exported input/output before timeout")) {
-		t.Fatalf("missing verification failure stderr=%s", stderr.String())
+	code := run(context.Background(), []string{"--path", rolloutPath, "--config", configPath}, &stdout, &stderr)
+	if code == 0 || strings.Contains(stdout.String(), "collector_accepted") {
+		t.Fatalf("rejected Collector batch was reported successful: exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
 func TestRunWatchCanceled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
-	configPath := writeLangfuseConfig(t, home, "http://127.0.0.1")
+	configPath := writeLaminarConfig(t, home, "http://127.0.0.1:14318")
 	statePath := filepath.Join(home, "state.json")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -353,15 +283,7 @@ func TestRunWatchCanceled(t *testing.T) {
 
 func copyCodexSourceFixture(t *testing.T, dir, name string) string {
 	t.Helper()
-	rolloutPath := filepath.Join(dir, name)
-	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "sources", "codex", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(rolloutPath, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return rolloutPath
+	return copyProviderSourceFixture(t, dir, "codex", name)
 }
 
 func copyClaudeSourceFixture(t *testing.T, dir, name string) string {
@@ -382,16 +304,51 @@ func copyProviderSourceFixture(t *testing.T, dir, provider, name string) string 
 	return sourcePath
 }
 
-func writeLangfuseConfig(t *testing.T, dir, host string) string {
+func writeLaminarConfig(t *testing.T, dir, baseURL string) string {
 	t.Helper()
-	configPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(configPath, []byte(`
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "`+host+`"
-LANGFUSE_PUBLIC_KEY = "pk-lf-test"
-LANGFUSE_SECRET_KEY = "sk-lf-test"
-`), 0o600); err != nil {
+	configDir := filepath.Join(dir, ".config", "lmnr")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(configDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "codex-tracer.json")
+	contents, err := json.Marshal(map[string]string{"projectApiKey": testReceiverToken, "baseUrl": baseURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, append(contents, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return configPath
+}
+
+func testOTLPString(attributes []*commonv1.KeyValue, key string) string {
+	for _, attribute := range attributes {
+		if attribute.Key == key {
+			return attribute.Value.GetStringValue()
+		}
+	}
+	return ""
+}
+
+func testOTLPBool(attributes []*commonv1.KeyValue, key string) bool {
+	for _, attribute := range attributes {
+		if attribute.Key == key {
+			return attribute.Value.GetBoolValue()
+		}
+	}
+	return false
+}
+
+func runTestGit(t *testing.T, directory string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
 }

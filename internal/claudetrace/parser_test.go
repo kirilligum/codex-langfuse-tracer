@@ -208,7 +208,7 @@ func TestClaudeUsageDetailsPreserveCacheCategories(t *testing.T) {
 		"output":                      3,
 		"total":                       25,
 	}
-	if got := turn.TokenUsage.LangfuseUsageDetails(); !reflect.DeepEqual(got, want) {
+	if got := turn.TokenUsage.CanonicalUsageDetails(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage details = %#v, want %#v", got, want)
 	}
 }

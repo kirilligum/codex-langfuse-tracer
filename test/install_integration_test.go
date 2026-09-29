@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"context"
 	"debug/buildinfo"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,9 +19,8 @@ import (
 
 // TEST-013
 // TEST-407
-// Run the actual installer, Go compiler, and exporter. Only systemd is stubbed.
-// TLS with explicit trust isolates the mock API from plain HTTP port probes;
-// every HTTP request reaching the handler must satisfy the exporter contract.
+// Run the actual installer, Go compiler, and authenticated receiver preflight.
+// Only systemd is stubbed.
 func TestInstallUninstallScripts(t *testing.T) {
 	cacheOutput, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
 	if err != nil {
@@ -33,12 +31,12 @@ func TestInstallUninstallScripts(t *testing.T) {
 		t.Fatalf("unexpected Go cache paths: %q", cacheOutput)
 	}
 	for _, tc := range []struct {
-		name                  string
-		existing, failPricing bool
+		name                   string
+		existing, failReceiver bool
 	}{
 		{"fresh install", false, false},
 		{"existing install", true, false},
-		{"pricing failure", true, true},
+		{"receiver preflight failure", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -75,25 +73,33 @@ func TestInstallUninstallScripts(t *testing.T) {
 			writeFakeSystemctl(t, filepath.Join(binDir, "systemctl"))
 			eventPath := filepath.Join(home, "events")
 			var mu sync.Mutex
-			gets, posts := 0, 0
-			models := map[string]bool{}
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				user, password, ok := r.BasicAuth()
-				if !ok || user != "pk-lf-test" || password != "sk-lf-test" {
-					t.Error("model request missing expected BasicAuth")
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
+				// A local Moshi health probe periodically sends an unauthenticated
+				// GET / to ephemeral loopback listeners. It is not an exporter
+				// request; the required authenticated OTLP POST is still counted
+				// exactly once below.
+				if r.Method == http.MethodGet && r.URL.Path == "/" && r.Header.Get("Authorization") == "" {
+					http.NotFound(w, r)
 					return
 				}
-				if r.URL.Path != "/api/public/models" || (r.Method != http.MethodGet && r.Method != http.MethodPost) {
-					t.Errorf("unexpected model API request: %s %s", r.Method, r.URL)
-					http.Error(w, "unexpected request", http.StatusBadRequest)
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer "+strings.Repeat("a", 64) {
+					t.Errorf("invalid receiver preflight request: %s %s from %s user_agent=%q referer=%q", r.Method, r.URL, r.RemoteAddr, r.UserAgent(), r.Referer())
+					http.Error(w, "invalid request", http.StatusBadRequest)
 					return
 				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil || len(body) != 0 {
+					t.Errorf("receiver preflight included span data: bytes=%d err=%v", len(body), err)
+					http.Error(w, "unexpected payload", http.StatusBadRequest)
+					return
+				}
+				requests++
 				if tc.existing {
 					if raw, err := os.ReadFile(binary); err != nil || !bytes.Equal(raw, oldBinary) {
-						t.Error("installer replaced executable before pricing preflight completed")
+						t.Error("installer replaced executable before receiver preflight completed")
 					}
 				}
 				log, err := os.OpenFile(eventPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -102,47 +108,22 @@ func TestInstallUninstallScripts(t *testing.T) {
 					http.Error(w, "log failure", http.StatusInternalServerError)
 					return
 				}
-				_, err = fmt.Fprintln(log, "pricing", r.Method)
+				_, err = fmt.Fprintln(log, "receiver POST")
 				closeErr := log.Close()
 				if err != nil || closeErr != nil {
-					t.Errorf("pricing log: write=%v close=%v", err, closeErr)
+					t.Errorf("receiver log: write=%v close=%v", err, closeErr)
 				}
-				w.Header().Set("Content-Type", "application/json")
-				if r.Method == http.MethodGet {
-					gets++
-					if r.URL.RawQuery != "page=1&limit=100" {
-						t.Errorf("model list query = %q", r.URL.RawQuery)
-					}
-					fmt.Fprint(w, `{"data":[],"meta":{}}`)
+				if tc.failReceiver {
+					http.Error(w, "receiver unavailable", http.StatusServiceUnavailable)
 					return
 				}
-				posts++
-				var model struct {
-					Name  string           `json:"modelName"`
-					Unit  string           `json:"unit"`
-					Tiers []map[string]any `json:"pricingTiers"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&model); err != nil || model.Name == "" || model.Unit != "TOKENS" || len(model.Tiers) == 0 || models[model.Name] {
-					t.Errorf("invalid or duplicate model payload: %+v err=%v", model, err)
-					http.Error(w, "invalid payload", http.StatusBadRequest)
-					return
-				}
-				models[model.Name] = true
-				if tc.failPricing {
-					http.Error(w, "pricing unavailable", http.StatusServiceUnavailable)
-					return
-				}
-				fmt.Fprint(w, `{}`)
+				w.WriteHeader(http.StatusOK)
 			}))
 			defer server.Close()
-			certPath := filepath.Join(home, "pricing-ca.pem")
-			if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			writeInstallLangfuseConfig(t, codexHome, server.URL)
+			writeInstallLaminarConfig(t, codexHome, server.URL)
 			env := append(os.Environ(), "HOME="+home, "CODEX_HOME="+codexHome, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "SYSTEMCTL_LOG="+filepath.Join(home, "systemctl.log"),
-				"INSTALL_EVENT_LOG="+eventPath, "GOMODCACHE="+caches[0], "GOCACHE="+caches[1], "SSL_CERT_FILE="+certPath,
+				"INSTALL_EVENT_LOG="+eventPath, "GOMODCACHE="+caches[0], "GOCACHE="+caches[1],
 				"SYSTEMCTL_LOAD_STATE=not-found", "SYSTEMCTL_EXPECT_OLD_BINARY=")
 			if tc.existing {
 				env = replaceEnvValue(env, "SYSTEMCTL_LOAD_STATE", "loaded")
@@ -153,15 +134,11 @@ func TestInstallUninstallScripts(t *testing.T) {
 			install := exec.CommandContext(ctx, "bash", "../install.sh")
 			install.Env = env
 			output, installErr := install.CombinedOutput()
-			server.Close()
 			mu.Lock()
-			defer mu.Unlock()
-			wantPosts := 7 // The full catalogue; exact pricing is checked in internal/langfuse.
-			if tc.failPricing {
-				wantPosts = 1
-			}
-			if gets != 1 || posts != wantPosts {
-				t.Fatalf("real pricing requests: GET=%d POST=%d, want 1/%d; install=%v\n%s", gets, posts, wantPosts, installErr, output)
+			requestCount := requests
+			mu.Unlock()
+			if requestCount != 1 {
+				t.Fatalf("receiver preflight requests=%d want=1; install=%v\n%s", requestCount, installErr, output)
 			}
 			events, err := os.ReadFile(eventPath)
 			if err != nil {
@@ -174,13 +151,13 @@ func TestInstallUninstallScripts(t *testing.T) {
 			if lockAfter, err := os.Stat(statePath + ".lock"); err != nil || !os.SameFile(lockBefore, lockAfter) {
 				t.Fatalf("installer replaced lock sidecar: err=%v", err)
 			}
-			if tc.failPricing {
+			if tc.failReceiver {
 				if installErr == nil || !strings.Contains(string(output), "HTTP 503") || strings.Contains(string(events), "systemctl ") {
-					t.Fatalf("pricing failure did not stop installation before systemd: err=%v events=%s\n%s", installErr, events, output)
+					t.Fatalf("receiver failure did not stop installation before systemd: err=%v events=%s\n%s", installErr, events, output)
 				}
 				for path, want := range map[string][]byte{binary: oldBinary, service: oldService} {
 					if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
-						t.Fatalf("pricing failure changed %s: err=%v", path, err)
+						t.Fatalf("receiver failure changed %s: err=%v", path, err)
 					}
 				}
 				return
@@ -193,12 +170,12 @@ func TestInstallUninstallScripts(t *testing.T) {
 				t.Fatalf("installed Go executable: info=%v err=%v", info, err)
 			}
 			text := string(events)
-			lastPricing := strings.LastIndex(text, "pricing POST")
+			receiver := strings.Index(text, "receiver POST")
 			show := strings.Index(text, "systemctl --user show ")
 			stop := strings.Index(text, "systemctl --user stop ")
 			restart := strings.Index(text, "systemctl --user restart ")
-			if !(lastPricing >= 0 && show > lastPricing && restart > show) || (tc.existing && !(stop > show && restart > stop)) || (!tc.existing && stop >= 0) {
-				t.Fatalf("wrong real pricing/cutover ordering:\n%s", events)
+			if !(receiver >= 0 && show > receiver && restart > show) || (tc.existing && !(stop > show && restart > stop)) || (!tc.existing && stop >= 0) {
+				t.Fatalf("wrong real receiver preflight/cutover ordering:\n%s", events)
 			}
 			uninstall := exec.CommandContext(ctx, "bash", "../uninstall.sh")
 			uninstall.Env = env

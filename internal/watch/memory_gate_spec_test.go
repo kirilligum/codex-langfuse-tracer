@@ -17,6 +17,7 @@ type memoryGateSpec struct {
 	TargetBytes           int64  `json:"target_bytes"`
 	MaxRecordBytes        int64  `json:"max_record_bytes,omitempty"`
 	ExpectedSpanCalls     int    `json:"expected_span_calls"`
+	ExpectedLaminarCalls  int    `json:"expected_laminar_calls"`
 	ExpectedScoreCalls    int    `json:"expected_score_calls"`
 	ExpectedSourceTurns   int    `json:"expected_source_turns"`
 	ExpectedSelectedTurns int    `json:"expected_selected_turns"`

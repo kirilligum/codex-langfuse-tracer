@@ -73,7 +73,7 @@ func TestClaudeHookNoLangfuseOrConfigImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, forbidden := range []string{"/internal/langfuse", "/internal/config"} {
+	for _, forbidden := range []string{"/internal/laminar", "/internal/config"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("hook imports forbidden runtime package %s", forbidden)
 		}

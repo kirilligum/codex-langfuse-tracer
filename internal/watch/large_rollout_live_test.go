@@ -211,34 +211,29 @@ func TestLiveCodexLargeRolloutFilteredScan(t *testing.T) {
 	}
 
 	spanCalls := 0
-	scoreCalls := 0
-	seenPendingScores := make(map[string]bool, len(pendingOverlap))
+	seenPendingTraces := make(map[string]bool, len(pendingOverlap))
 	opts := ScanOptions{
 		Root:  privateDir,
 		Now:   now,
 		Quiet: true,
 		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
+			if environment, ok := pendingOverlap[turn.TraceID]; ok {
+				return turn, environment, nil
+			}
 			return turn, "large-rollout-probe", nil
 		},
 		ExportSpans: func(_ context.Context, turn agenttrace.Turn, environment string) (int, error) {
-			if turn.TraceID != markerTraceID || environment != "large-rollout-probe" || turn.InputText() != "large rollout probe input" || turn.OutputText() != "large rollout probe output" {
-				t.Errorf("unexpected span in local probe: trace=%q environment=%q", turn.TraceID, environment)
+			if turn.TraceID == markerTraceID {
+				if environment != "large-rollout-probe" || turn.InputText() != "large rollout probe input" || turn.OutputText() != "large rollout probe output" {
+					t.Errorf("unexpected marker span in local probe: trace=%q environment=%q", turn.TraceID, environment)
+				}
+			} else if expected, ok := pendingOverlap[turn.TraceID]; !ok || expected != environment {
+				t.Errorf("unexpected legacy checkpoint migration: trace=%q environment=%q", turn.TraceID, environment)
+			} else {
+				seenPendingTraces[turn.TraceID] = true
 			}
 			spanCalls++
 			return 200, nil
-		},
-		ExportScores: func(_ context.Context, turn agenttrace.Turn, environment string) error {
-			if turn.TraceID == markerTraceID {
-				if environment != "large-rollout-probe" {
-					t.Errorf("marker score environment=%q", environment)
-				}
-			} else if expected, ok := pendingOverlap[turn.TraceID]; !ok || expected != environment {
-				t.Errorf("unexpected pending score trace=%q environment=%q", turn.TraceID, environment)
-			} else {
-				seenPendingScores[turn.TraceID] = true
-			}
-			scoreCalls++
-			return nil
 		},
 	}
 	state, exported, err := scanOnce(context.Background(), opts, state, newScanRuntime(), deps)
@@ -251,11 +246,11 @@ func TestLiveCodexLargeRolloutFilteredScan(t *testing.T) {
 	if err := assertTargetConsumed(targetParseCalls, sourceTraceIDs, visited, markerVisits); err != nil {
 		t.Fatal(err)
 	}
-	if spanCalls != 1 || scoreCalls != len(pendingOverlap)+1 || exported != 1 {
-		t.Fatalf("probe callbacks: exported=%d spans=%d scores=%d pending_source_scores=%d", exported, spanCalls, scoreCalls, len(pendingOverlap))
+	if spanCalls != len(pendingOverlap)+1 || exported != len(pendingOverlap)+1 {
+		t.Fatalf("probe collector deliveries: exported=%d spans=%d pending_source_checkpoints=%d", exported, spanCalls, len(pendingOverlap))
 	}
-	if !state.HasProcessed(markerTraceID) || state.ScanWatermarkNS != now.UnixNano() || len(state.PendingScores) != 0 || len(seenPendingScores) != len(pendingOverlap) {
-		t.Fatalf("probe state did not reach expected completion: watermark=%d processed_marker=%t pending=%d expected_pending_scores=%d", state.ScanWatermarkNS, state.HasProcessed(markerTraceID), len(state.PendingScores), len(pendingOverlap))
+	if !state.HasProcessed(markerTraceID) || state.ScanWatermarkNS != now.UnixNano() || len(state.PendingScores) != 0 || len(seenPendingTraces) != len(pendingOverlap) {
+		t.Fatalf("probe state did not reach expected completion: watermark=%d processed_marker=%t pending=%d expected_migrations=%d", state.ScanWatermarkNS, state.HasProcessed(markerTraceID), len(state.PendingScores), len(pendingOverlap))
 	}
 
 	sourceAfter, err := os.Stat(rolloutPath)
@@ -265,7 +260,7 @@ func TestLiveCodexLargeRolloutFilteredScan(t *testing.T) {
 	if !os.SameFile(sourceBefore, sourceAfter) || sourceBefore.Size() != sourceAfter.Size() || sourceBefore.ModTime() != sourceAfter.ModTime() {
 		t.Fatal("original rollout changed during read-only probe")
 	}
-	t.Logf("source_bytes=%d source_traces=%d original_processed_overlap=%d pending_source_scores=%d parser_calls=%d include_visits=%d exported=%d span_calls=%d score_calls=%d", sourceBefore.Size(), len(sourceTraceIDs), processedOverlap, len(pendingOverlap), targetParseCalls, len(visited)+markerVisits, exported, spanCalls, scoreCalls)
+	t.Logf("source_bytes=%d source_traces=%d original_processed_overlap=%d legacy_checkpoints_migrated=%d parser_calls=%d include_visits=%d exported=%d span_calls=%d", sourceBefore.Size(), len(sourceTraceIDs), processedOverlap, len(pendingOverlap), targetParseCalls, len(visited)+markerVisits, exported, spanCalls)
 }
 
 func largeProbeScratchParent(t *testing.T) string {
@@ -382,7 +377,6 @@ func TestLargeRolloutProbeRejectsMalformedTail(t *testing.T) {
 			spanCalls++
 			return 200, nil
 		},
-		ExportScores: successfulScores,
 	}, state)
 	if err != nil {
 		t.Fatalf("ScanOnce: %v", err)

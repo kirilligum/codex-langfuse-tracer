@@ -1,4 +1,4 @@
-package langfuse
+package laminar
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,6 +157,15 @@ func initWorkspaceRepository(t *testing.T) string {
 		"commit", "--allow-empty", "-m", "initial",
 	)
 	return root
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
 }
 
 func assertEnvironment(t *testing.T, environment string) {

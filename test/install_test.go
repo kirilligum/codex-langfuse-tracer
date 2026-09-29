@@ -11,7 +11,7 @@ import (
 )
 
 // Stubbed commands let this test exercise each installer failure boundary.
-// TestInstallUninstallScripts separately runs real builds and pricing preflight.
+// TestInstallUninstallScripts separately runs a real authenticated receiver preflight.
 func TestInstallOrderingAndFailures(t *testing.T) {
 	t.Parallel()
 
@@ -38,7 +38,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 		"SYSTEMCTL_LOAD_STATE=not-found",
 	)
 
-	writeInstallLangfuseConfig(t, codexHome, "https://langfuse.invalid")
+	writeInstallLaminarConfig(t, codexHome, "http://127.0.0.1:14318")
 
 	install := exec.Command("bash", "../install.sh")
 	install.Env = env
@@ -77,7 +77,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 	}
 	eventText := string(eventRaw)
 	buildIndex := strings.Index(eventText, "go build output=")
-	syncIndex := strings.Index(eventText, "exporter --sync-model-pricing --quiet")
+	syncIndex := strings.Index(eventText, "exporter --check-receiver --quiet")
 	loadIndex := strings.Index(eventText, "systemctl --user show --property=LoadState --value codex-langfuse-watch.service")
 	restartIndex := strings.Index(eventText, "systemctl --user restart codex-langfuse-watch.service")
 	if buildIndex < 0 || syncIndex < buildIndex || loadIndex < syncIndex || restartIndex < loadIndex {
@@ -115,7 +115,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventText = string(eventRaw)
-	syncIndex = strings.LastIndex(eventText, "exporter --sync-model-pricing --quiet")
+	syncIndex = strings.LastIndex(eventText, "exporter --check-receiver --quiet")
 	stopIndex := strings.LastIndex(eventText, "systemctl --user stop codex-langfuse-watch.service")
 	restartIndex = strings.LastIndex(eventText, "systemctl --user restart codex-langfuse-watch.service")
 	if syncIndex < 0 || stopIndex < 0 || restartIndex < 0 || !(syncIndex < stopIndex && stopIndex < restartIndex) {
@@ -154,7 +154,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 	writeFakeSystemctl(t, failingSystemctl)
 	writeFakeGo(t, filepath.Join(failingBinDir, "go"))
 	failingCodexHome := filepath.Join(failingHome, ".codex")
-	oldFailingBinary := []byte("preserve old binary after pricing failure")
+	oldFailingBinary := []byte("preserve old binary after receiver preflight failure")
 	if err := os.MkdirAll(filepath.Join(failingCodexHome, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 	if err := os.WriteFile(failingService, []byte("old service"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallLangfuseConfig(t, failingCodexHome, "https://langfuse.invalid")
+	writeInstallLaminarConfig(t, failingCodexHome, "http://127.0.0.1:14318")
 	failingEnv := append(os.Environ(),
 		"HOME="+failingHome,
 		"CODEX_HOME="+failingCodexHome,
@@ -178,23 +178,23 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 		"SYSTEMCTL_LOG="+failingLog,
 		"INSTALL_EVENT_LOG="+filepath.Join(failingHome, "install.events"),
 		"SYSTEMCTL_LOAD_STATE=loaded",
-		"FAKE_EXPORTER_SYNC_FAIL=1",
+		"FAKE_EXPORTER_RECEIVER_FAIL=1",
 	)
 	failingInstall := exec.Command("bash", "../install.sh")
 	failingInstall.Env = failingEnv
 	output, err = failingInstall.CombinedOutput()
 	if err == nil {
-		t.Fatalf("failing install succeeded:\n%s", output)
+		t.Fatalf("failing receiver preflight succeeded:\n%s", output)
 	}
 	if got, readErr := os.ReadFile(failingBinary); readErr != nil || !bytes.Equal(got, oldFailingBinary) {
-		t.Fatalf("pricing failure changed installed binary: bytes_equal=%v err=%v", bytes.Equal(got, oldFailingBinary), readErr)
+		t.Fatalf("receiver preflight failure changed installed binary: bytes_equal=%v err=%v", bytes.Equal(got, oldFailingBinary), readErr)
 	}
 	assertInstallStagesClean(t, failingBinary, failingService)
 	failingRaw, readErr := os.ReadFile(failingLog)
 	if readErr == nil && (strings.Contains(string(failingRaw), "--user stop codex-langfuse-watch.service") || strings.Contains(string(failingRaw), "restart codex-langfuse-watch.service")) {
-		t.Fatalf("install touched the service before pricing preflight passed:\n%s", string(failingRaw))
+		t.Fatalf("install touched the service before receiver preflight passed:\n%s", string(failingRaw))
 	}
-	if !strings.Contains(string(output), "simulated pricing preflight failure") {
+	if !strings.Contains(string(output), "simulated receiver preflight failure") {
 		t.Fatalf("install failed for a reason other than the staged preflight:\n%s", output)
 	}
 
@@ -215,7 +215,7 @@ func TestInstallOrderingAndFailures(t *testing.T) {
 	if err := os.WriteFile(stopFailureBinary, oldStopFailureBinary, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallLangfuseConfig(t, stopFailureCodexHome, "https://langfuse.invalid")
+	writeInstallLaminarConfig(t, stopFailureCodexHome, "http://127.0.0.1:14318")
 	stopFailureLog := filepath.Join(stopFailureHome, "systemctl.log")
 	stopFailureEventLog := filepath.Join(stopFailureHome, "install.events")
 	stopFailureEnv := append(os.Environ(),
@@ -264,7 +264,7 @@ func TestInstallReportsPostStopFailureState(t *testing.T) {
 	if err := os.WriteFile(binary, oldBinary, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallLangfuseConfig(t, codexHome, "https://langfuse.invalid")
+	writeInstallLaminarConfig(t, codexHome, "http://127.0.0.1:14318")
 	env := append(os.Environ(),
 		"HOME="+home,
 		"CODEX_HOME="+codexHome,
@@ -308,18 +308,21 @@ func TestEvalInstallRuntimeSurface(t *testing.T) {
 	}
 }
 
-func writeInstallLangfuseConfig(t *testing.T, codexHome, host string) {
+func writeInstallLaminarConfig(t *testing.T, codexHome, baseURL string) {
 	t.Helper()
-	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+	configHome := filepath.Join(filepath.Dir(codexHome), ".config")
+	configDir := filepath.Join(configHome, "lmnr")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw := fmt.Sprintf(`
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = %q
-LANGFUSE_PUBLIC_KEY = "pk-lf-test"
-LANGFUSE_SECRET_KEY = "sk-lf-test"
-`, host)
-	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(raw), 0o600); err != nil {
+	if err := os.Chmod(configHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"projectApiKey":%q,"baseUrl":%q}`+"\n", strings.Repeat("a", 64), baseURL)
+	if err := os.WriteFile(filepath.Join(configDir, "codex-tracer.json"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -381,8 +384,8 @@ cat > "$output" <<'FAKE_EXPORTER'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'exporter %s\n' "$*" >> "$INSTALL_EVENT_LOG"
-if [ "${FAKE_EXPORTER_SYNC_FAIL:-0}" = "1" ]; then
-    echo "simulated pricing preflight failure" >&2
+if [ "${FAKE_EXPORTER_RECEIVER_FAIL:-0}" = "1" ]; then
+    echo "simulated receiver preflight failure" >&2
     exit 1
 fi
 FAKE_EXPORTER

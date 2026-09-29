@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -11,74 +10,66 @@ import (
 )
 
 // TEST-003
-func TestLoadConfig(t *testing.T) {
+func TestLoadLaminarConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex-custom"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config-custom"))
 	if got := CodexHome(); got != filepath.Join(home, ".codex-custom") {
 		t.Fatalf("CodexHome() = %q", got)
 	}
 	if got := DefaultStatePath(); got != filepath.Join(home, ".codex-custom", buildinfo.DefaultStateFileName) {
 		t.Fatalf("DefaultStatePath() = %q", got)
 	}
-	if got := DefaultConfigPath(); got != filepath.Join(home, ".codex-custom", "config.toml") {
-		t.Fatalf("DefaultConfigPath() = %q", got)
+	if got := DefaultLaminarConfigPath(); got != filepath.Join(home, ".config-custom", "lmnr", "codex-tracer.json") {
+		t.Fatalf("DefaultLaminarConfigPath() = %q", got)
 	}
 
-	configPath := filepath.Join(home, "config.toml")
-	err := os.WriteFile(configPath, []byte(`
-[mcp_servers.langfuse]
-command = "uvx"
-
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "http://localhost:3000/"
-LANGFUSE_PUBLIC_KEY = "pk-lf-test"
-LANGFUSE_SECRET_KEY = "sk-lf-test"
-LANGFUSE_USER_ID_MODE = "invalid-stale-value"
-`), 0o600)
-	if err != nil {
+	configDir := filepath.Join(home, ".config-custom", "lmnr")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	configPath := filepath.Join(configDir, "codex-tracer.json")
+	writeConfig := func(t *testing.T, body string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(configPath, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(configPath, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	cfg, err := Load(configPath)
+	writeConfig(t, `{"projectApiKey":"`+strings.Repeat("a", 64)+`","baseUrl":"http://127.0.0.1:14320"}`+"\n", 0o600)
+	cfg, err := LoadLaminar(configPath)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatalf("LoadLaminar() error: %v", err)
 	}
-	if cfg.Host != "http://localhost:3000" {
-		t.Fatalf("host = %q", cfg.Host)
-	}
-	if cfg.PublicKey != "pk-lf-test" || cfg.SecretKey != "sk-lf-test" {
-		t.Fatalf("keys not parsed: %+v", cfg)
-	}
-	if _, ok := reflect.TypeOf(cfg).FieldByName("UserIDMode"); ok {
-		t.Fatalf("LangfuseConfig retains UserIDMode: %+v", cfg)
+	if cfg.BaseURL != "http://127.0.0.1:14320" || len(cfg.Token) != 64 {
+		t.Fatalf("unexpected config shape: baseURL=%q token_length=%d", cfg.BaseURL, len(cfg.Token))
 	}
 
-	missingPath := filepath.Join(home, "missing.toml")
-	_, err = Load(missingPath)
-	if err == nil {
-		t.Fatal("Load(missing) succeeded, want error")
+	tests := []struct {
+		name string
+		body string
+		mode os.FileMode
+	}{
+		{name: "missing token", body: `{"baseUrl":"http://127.0.0.1:14320"}`, mode: 0o600},
+		{name: "malformed token", body: `{"projectApiKey":"bad","baseUrl":"http://127.0.0.1:14320"}`, mode: 0o600},
+		{name: "remote target rejected", body: `{"projectApiKey":"` + strings.Repeat("a", 64) + `","baseUrl":"https://example.invalid"}`, mode: 0o600},
+		{name: "unknown secret fields rejected", body: `{"projectApiKey":"` + strings.Repeat("a", 64) + `","baseUrl":"http://127.0.0.1:14320","secret":"hidden"}`, mode: 0o600},
+		{name: "trailing JSON rejected", body: `{"projectApiKey":"` + strings.Repeat("a", 64) + `","baseUrl":"http://127.0.0.1:14320"}{}`, mode: 0o600},
+		{name: "permissions rejected", body: `{"projectApiKey":"` + strings.Repeat("a", 64) + `","baseUrl":"http://127.0.0.1:14320"}`, mode: 0o644},
 	}
-	if !strings.Contains(err.Error(), "[mcp_servers.langfuse.env]") {
-		t.Fatalf("missing error lacks config path hint: %v", err)
-	}
-
-	incompletePath := filepath.Join(home, "incomplete.toml")
-	if err := os.WriteFile(incompletePath, []byte(`
-[mcp_servers.langfuse.env]
-LANGFUSE_HOST = "http://localhost:3000"
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Load(incompletePath)
-	if err == nil {
-		t.Fatal("Load(incomplete) succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "public key/secret key") {
-		t.Fatalf("incomplete error = %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writeConfig(t, test.body, test.mode)
+			if _, err := LoadLaminar(configPath); err == nil {
+				t.Fatal("LoadLaminar() succeeded, want error")
+			}
+		})
 	}
 
-	t.Setenv("CODEX_HOME", "")
-	if got := CodexHome(); !strings.HasSuffix(got, ".codex") {
-		t.Fatalf("CodexHome() with no CODEX_HOME = %q", got)
+	if _, err := LoadLaminar(filepath.Join(home, "missing.json")); err == nil {
+		t.Fatal("LoadLaminar(missing) succeeded, want error")
 	}
 }

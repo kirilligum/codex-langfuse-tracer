@@ -1,4 +1,4 @@
-package langfuse
+package laminar
 
 import (
 	"context"

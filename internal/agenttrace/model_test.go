@@ -6,7 +6,7 @@ import (
 )
 
 // TEST-401
-func TestTokenUsageLangfuseUsageDetails(t *testing.T) {
+func TestTokenUsageCanonicalUsageDetails(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -86,16 +86,16 @@ func TestTokenUsageLangfuseUsageDetails(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := test.usage.LangfuseUsageDetails()
+			got := test.usage.CanonicalUsageDetails()
 			if !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("LangfuseUsageDetails() = %#v, want %#v", got, test.want)
+				t.Fatalf("CanonicalUsageDetails() = %#v, want %#v", got, test.want)
 			}
 		})
 	}
 }
 
 // TEST-529
-func TestTokenUsageLangfuseDetailsPreserveCacheCategories(t *testing.T) {
+func TestTokenUsageCanonicalDetailsPreserveCacheCategories(t *testing.T) {
 	t.Parallel()
 
 	usage := TokenUsage{
@@ -112,7 +112,7 @@ func TestTokenUsageLangfuseDetailsPreserveCacheCategories(t *testing.T) {
 		"output":                      3,
 		"total":                       25,
 	}
-	if got := usage.LangfuseUsageDetails(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("LangfuseUsageDetails() = %#v, want %#v", got, want)
+	if got := usage.CanonicalUsageDetails(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("CanonicalUsageDetails() = %#v, want %#v", got, want)
 	}
 }

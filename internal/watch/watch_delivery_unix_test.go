@@ -21,7 +21,7 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/buildinfo"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/config"
 	"github.com/kirilligum/codex-langfuse-tracer/internal/exportstate"
-	"github.com/kirilligum/codex-langfuse-tracer/internal/langfuse"
+	"github.com/kirilligum/codex-langfuse-tracer/internal/laminar"
 )
 
 type deliveryChild struct {
@@ -160,13 +160,9 @@ func TestWatchDeliveryProcessHelper(t *testing.T) {
 		Root: root, StatePath: statePath, Now: now, Stdout: stdout, Stderr: os.Stderr,
 		ResolveWorkspace: testWorkspace,
 		ExportSpans: func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
-			return langfuse.ExportSpans(ctx, config.LangfuseConfig{
-				Host: host, PublicKey: "pk-lf-delivery-test", SecretKey: "sk-lf-delivery-test",
+			return laminar.ExportSpans(ctx, config.LaminarConfig{
+				BaseURL: host, Token: "test-local-receiver-token",
 			}, turn, environment, "delivery-test-host", buildinfo.DefaultServiceName)
-		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error {
-			_, writeErr := fmt.Fprintln(os.Stdout, "test_score_callback_called")
-			return writeErr
 		},
 	}, *state)
 	if err != nil {
@@ -215,7 +211,7 @@ func TestWatchRestartAfterSpanSuccessBeforeCheckpoint(t *testing.T) {
 	}
 	mock.checkErrors(t)
 	firstOutput := strings.Join(firstLines, "\n")
-	if strings.Count(firstOutput, "span_export_succeeded") != 1 || strings.Contains(firstOutput, "exported trace=") || strings.Contains(firstOutput, "scored trace=") || strings.Contains(firstOutput, "test_score_callback_called") {
+	if strings.Count(firstOutput, "span_export_succeeded") != 1 || strings.Contains(firstOutput, "processed trace=") {
 		t.Fatalf("child did not stop between export and checkpoint: %s", firstOutput)
 	}
 	afterKill, err := os.ReadFile(statePath)
@@ -236,7 +232,7 @@ func TestWatchRestartAfterSpanSuccessBeforeCheckpoint(t *testing.T) {
 	}
 	mock.checkErrors(t)
 	resumeOutput := strings.Join(resumeLines, "\n")
-	if strings.Count(resumeOutput, "span_export_succeeded") != 1 || !strings.Contains(resumeOutput, "exported trace=") || !strings.Contains(resumeOutput, "scored trace=") || strings.Count(resumeOutput, "test_score_callback_called") != 1 {
+	if strings.Count(resumeOutput, "span_export_succeeded") != 1 || !strings.Contains(resumeOutput, "processed trace=") {
 		t.Fatalf("resume child logs do not show one complete retry: %s", resumeOutput)
 	}
 	traceID := completeTraceID(t, rolloutPath)
@@ -249,19 +245,15 @@ func TestWatchRestartAfterSpanSuccessBeforeCheckpoint(t *testing.T) {
 		t.Fatalf("restart submissions = %v; want two copies with identical span identities", requests)
 	}
 
-	var spanCalls, scoreCalls int
+	var spanCalls int
 	_, exported, err := ScanOnce(context.Background(), ScanOptions{
 		Root: root, StatePath: statePath, Now: now.Add(time.Second), ResolveWorkspace: testWorkspace,
 		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
 			spanCalls++
 			return http.StatusOK, nil
 		},
-		ExportScores: func(context.Context, agenttrace.Turn, string) error {
-			scoreCalls++
-			return nil
-		},
 	}, *persisted)
-	if err != nil || exported != 0 || spanCalls != 0 || scoreCalls != 0 || len(mock.requestSnapshot()) != 2 {
-		t.Fatalf("processed follow-up scan repeated work: exported=%d spans=%d scores=%d requests=%d err=%v", exported, spanCalls, scoreCalls, len(mock.requestSnapshot()), err)
+	if err != nil || exported != 0 || spanCalls != 0 || len(mock.requestSnapshot()) != 2 {
+		t.Fatalf("processed follow-up scan repeated work: exported=%d spans=%d requests=%d err=%v", exported, spanCalls, len(mock.requestSnapshot()), err)
 	}
 }

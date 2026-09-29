@@ -18,7 +18,6 @@ import (
 
 type ResolveWorkspaceFunc func(context.Context, agenttrace.Turn) (agenttrace.Turn, string, error)
 type ExportSpansFunc func(context.Context, agenttrace.Turn, string) (int, error)
-type ExportScoresFunc func(context.Context, agenttrace.Turn, string) error
 
 type ScanOptions struct {
 	Root                string
@@ -29,7 +28,6 @@ type ScanOptions struct {
 	Quiet               bool
 	ResolveWorkspace    ResolveWorkspaceFunc
 	ExportSpans         ExportSpansFunc
-	ExportScores        ExportScoresFunc
 	PollIntervalSeconds float64
 	InitialLookbackSecs int
 }
@@ -314,74 +312,55 @@ func hasPendingScore(turns []agenttrace.Turn, processed map[string]struct{}, sta
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
 	traceID := turn.TraceID
 	environment := state.PendingScoreEnvironment(traceID)
-	needsSpans := environment == ""
-	if needsSpans && !isExportable(turn) {
+	if !isExportable(turn) {
 		return state, 0, false, nil
 	}
 
-	if needsSpans {
-		if opts.ResolveWorkspace == nil {
-			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", traceID, sourcePath)
-			return state, 0, true, nil
-		}
-		resolvedTurn, resolvedEnvironment, err := opts.ResolveWorkspace(ctx, turn)
-		if err != nil {
-			return state, 0, false, err
-		}
-		turn = resolvedTurn
+	if opts.ResolveWorkspace == nil {
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", traceID, sourcePath)
+		return state, 0, true, nil
+	}
+	resolvedTurn, resolvedEnvironment, err := opts.ResolveWorkspace(ctx, turn)
+	if err != nil {
+		return state, 0, false, err
+	}
+	turn = resolvedTurn
+	if environment == "" {
 		environment = resolvedEnvironment
-		if environment == "" {
-			return state, 0, false, fmt.Errorf("workspace resolver returned empty environment for trace %s", traceID)
-		}
-		if *attemptedExport {
-			if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
-				return state, 0, false, err
-			}
-		}
-		*attemptedExport = true
-
-		if opts.ExportSpans == nil {
-			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceID, sourcePath)
-			return state, 0, true, nil
-		}
-		status, err := opts.ExportSpans(ctx, turn, environment)
-		if err != nil {
-			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
-			return state, 0, true, nil
-		}
-		if !opts.Quiet {
-			fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceID, status)
-		}
-		state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
-			current.SetPendingScore(traceID, environment)
-		})
-		if err != nil {
-			fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceID)
+	}
+	if environment == "" {
+		return state, 0, false, fmt.Errorf("workspace resolver returned empty environment for trace %s", traceID)
+	}
+	if *attemptedExport {
+		if err := waitBetweenExports(ctx, opts.PollIntervalSeconds); err != nil {
 			return state, 0, false, err
 		}
-		if !opts.Quiet {
-			fmt.Fprintf(writerOrDiscard(opts.Stdout), "exported trace=%s status=%d path=%s\n", traceID, status, sourcePath)
-		}
 	}
+	*attemptedExport = true
 
-	if opts.ExportScores == nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to score trace=%s path=%s: missing score export callback\n", traceID, sourcePath)
-		return state, boolToInt(needsSpans), true, nil
+	if opts.ExportSpans == nil {
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceID, sourcePath)
+		return state, 0, true, nil
 	}
-	if err := opts.ExportScores(ctx, turn, environment); err != nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to score trace=%s path=%s: %v\n", traceID, sourcePath, err)
-		return state, boolToInt(needsSpans), true, nil
+	status, err := opts.ExportSpans(ctx, turn, environment)
+	if err != nil {
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
+		return state, 0, true, nil
 	}
-	state, err := mutateState(ctx, opts, state, func(current *exportstate.State) {
+	if !opts.Quiet {
+		fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceID, status)
+	}
+	state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
 		current.AddProcessed(traceID)
 	})
 	if err != nil {
-		return state, boolToInt(needsSpans), false, err
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceID)
+		return state, 1, false, err
 	}
 	if !opts.Quiet {
-		fmt.Fprintf(writerOrDiscard(opts.Stdout), "scored trace=%s path=%s\n", traceID, sourcePath)
+		fmt.Fprintf(writerOrDiscard(opts.Stdout), "processed trace=%s path=%s\n", traceID, sourcePath)
 	}
-	return state, boolToInt(needsSpans), false, nil
+	return state, 1, false, nil
 }
 
 func isExportable(turn agenttrace.Turn) bool {

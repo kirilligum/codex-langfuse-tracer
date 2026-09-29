@@ -40,7 +40,6 @@ func TestWatchWaitsForStateWithoutRestarting(t *testing.T) {
 				spanCalls <- struct{}{}
 				return 200, nil
 			},
-			ExportScores: successfulScores,
 		})
 	}()
 
@@ -104,7 +103,7 @@ func TestWatchWaitsForStateWithoutRestarting(t *testing.T) {
 	}
 }
 
-func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
+func TestWatchRetriesPendingSpanCheckpointOnly(t *testing.T) {
 	root, statePath, rolloutPath := watchFixture(t)
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	setMTime(t, rolloutPath, now.Add(-time.Second))
@@ -115,7 +114,7 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 	busyWriter := &watchLockLogWriter{lines: make(chan string, 16)}
 	stdoutLines := watchEventLogWriter(make(chan string, 32))
 	locked := make(chan *os.File, 1)
-	var spanCount, scoreCount atomic.Int32
+	var spanCount atomic.Int32
 	type result struct {
 		state    exportstate.State
 		exported int
@@ -130,10 +129,6 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 				spanCount.Add(1)
 				locked <- holdWatchStateLock(t, statePath)
 				return 202, nil
-			},
-			ExportScores: func(context.Context, agenttrace.Turn, string) error {
-				scoreCount.Add(1)
-				return nil
 			},
 		}, initial)
 		resultCh <- result{state: state, exported: exported, err: err}
@@ -152,8 +147,8 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 	if got := drainWatchEvents(stdoutLines); len(got) != 0 {
 		t.Fatalf("checkpoint pending unexpectedly emitted completion logs: %v", got)
 	}
-	if spanCount.Load() != 1 || scoreCount.Load() != 0 {
-		t.Fatalf("callbacks while checkpoint waits: spans=%d scores=%d", spanCount.Load(), scoreCount.Load())
+	if spanCount.Load() != 1 {
+		t.Fatalf("span exports while checkpoint waits: %d", spanCount.Load())
 	}
 	releaseWatchStateLock(t, lockFile)
 	var got result
@@ -166,8 +161,8 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 		t.Fatal(got.err)
 	}
 	traceID := completeTraceID(t, rolloutPath)
-	if got.exported != 1 || spanCount.Load() != 1 || scoreCount.Load() != 1 || !got.state.HasProcessed(traceID) || got.state.PendingScoreEnvironment(traceID) != "" {
-		t.Fatalf("checkpoint retry repeated or lost work: exported=%d spans=%d scores=%d state=%+v", got.exported, spanCount.Load(), scoreCount.Load(), got.state)
+	if got.exported != 1 || spanCount.Load() != 1 || !got.state.HasProcessed(traceID) || got.state.PendingScoreEnvironment(traceID) != "" {
+		t.Fatalf("checkpoint retry repeated or lost work: exported=%d spans=%d state=%+v", got.exported, spanCount.Load(), got.state)
 	}
 	persisted, err := exportstate.Load(statePath)
 	if err != nil || persisted == nil || !persisted.HasProcessed(traceID) {
@@ -179,9 +174,8 @@ func TestWatchRetriesPendingCheckpointOnly(t *testing.T) {
 		t.Fatalf("checkpoint contention emitted multiple export-success diagnostics: %v", logLines)
 	}
 	spanIndex := strings.Index(joined, "span_export_succeeded")
-	exportedIndex := strings.Index(joined, "exported trace="+traceID)
-	scoredIndex := strings.Index(joined, "scored trace="+traceID)
-	if exportedIndex < 0 || scoredIndex < 0 || spanIndex >= exportedIndex || exportedIndex >= scoredIndex {
+	processedIndex := strings.Index(joined, "processed trace="+traceID)
+	if processedIndex < 0 || spanIndex >= processedIndex {
 		t.Fatalf("success logs out of order after checkpoint recovery: %v", logLines)
 	}
 }
@@ -203,9 +197,9 @@ func TestWatchRetriesQueueRemovalAfterCheckpoint(t *testing.T) {
 	if err := exportstate.Save(context.Background(), statePath, initial); err != nil {
 		t.Fatal(err)
 	}
-	stdout := &watchScoredLockWriter{lockPath: statePath + ".lock", acquired: make(chan *os.File, 1)}
+	stdout := &watchProcessedLockWriter{lockPath: statePath + ".lock", acquired: make(chan *os.File, 1)}
 	stderr := &watchLockLogWriter{lines: make(chan string, 16)}
-	var spanCount, scoreCount atomic.Int32
+	var spanCount atomic.Int32
 	type result struct {
 		state    exportstate.State
 		exported int
@@ -220,10 +214,6 @@ func TestWatchRetriesQueueRemovalAfterCheckpoint(t *testing.T) {
 				spanCount.Add(1)
 				return 202, nil
 			},
-			ExportScores: func(context.Context, agenttrace.Turn, string) error {
-				scoreCount.Add(1)
-				return nil
-			},
 		}, initial)
 		resultCh <- result{state: state, exported: exported, err: err}
 	}()
@@ -231,11 +221,11 @@ func TestWatchRetriesQueueRemovalAfterCheckpoint(t *testing.T) {
 	select {
 	case lockFile = <-stdout.acquired:
 	case <-time.After(6 * time.Second):
-		t.Fatal("scored callback did not reach the queue-removal contention barrier")
+		t.Fatal("processed checkpoint log did not reach the queue-removal contention barrier")
 	}
 	waitForWatchLockLog(t, stderr.lines, "ERROR: export state lock busy")
-	if spanCount.Load() != 1 || scoreCount.Load() != 1 {
-		t.Fatalf("callbacks while queue removal waits: spans=%d scores=%d", spanCount.Load(), scoreCount.Load())
+	if spanCount.Load() != 1 {
+		t.Fatalf("span exports while queue removal waits: %d", spanCount.Load())
 	}
 	pending, err := exportstate.Load(statePath)
 	if err != nil {
@@ -255,8 +245,8 @@ func TestWatchRetriesQueueRemovalAfterCheckpoint(t *testing.T) {
 	if got.err != nil {
 		t.Fatal(got.err)
 	}
-	if got.exported != 1 || spanCount.Load() != 1 || scoreCount.Load() != 1 || !got.state.HasProcessed(traceID) || len(got.state.Queue) != 0 || got.state.ScanWatermarkNS != now.UnixNano() {
-		t.Fatalf("queue retry lost or repeated work: exported=%d spans=%d scores=%d state=%+v", got.exported, spanCount.Load(), scoreCount.Load(), got.state)
+	if got.exported != 1 || spanCount.Load() != 1 || !got.state.HasProcessed(traceID) || len(got.state.Queue) != 0 || got.state.ScanWatermarkNS != now.UnixNano() {
+		t.Fatalf("queue retry lost or repeated work: exported=%d spans=%d state=%+v", got.exported, spanCount.Load(), got.state)
 	}
 }
 
@@ -273,21 +263,21 @@ func (writer *watchLockLogWriter) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-type watchScoredLockWriter struct {
+type watchProcessedLockWriter struct {
 	lockPath string
 	acquired chan *os.File
 	started  atomic.Bool
 }
 
-func (writer *watchScoredLockWriter) Write(data []byte) (int, error) {
-	if bytes.Contains(data, []byte("scored trace=")) && writer.started.CompareAndSwap(false, true) {
+func (writer *watchProcessedLockWriter) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte("processed trace=")) && writer.started.CompareAndSwap(false, true) {
 		file, err := os.OpenFile(writer.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			return 0, err
 		}
 		if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 			_ = file.Close()
-			return 0, fmt.Errorf("hold state lock after scoring: %w", err)
+			return 0, fmt.Errorf("hold state lock after processing: %w", err)
 		}
 		writer.acquired <- file
 	}

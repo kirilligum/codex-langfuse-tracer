@@ -71,7 +71,7 @@ type TokenUsage struct {
 	ReasoningOutputTokens    int
 }
 
-func (u TokenUsage) LangfuseUsageDetails() map[string]int {
+func (u TokenUsage) CanonicalUsageDetails() map[string]int {
 	usage := map[string]int{}
 	cacheRead := u.CachedInputTokens + u.CacheReadInputTokens
 	input := u.InputTokens - cacheRead - u.CacheCreationInputTokens

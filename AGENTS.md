@@ -12,7 +12,7 @@ Use these files as the source of truth:
 
 Do not add a second fixture registry, wrapper export path, native Codex OTEL path, include/exclude config surface, or per-file observation fanout unless real usage proves it is necessary.
 
-Do not add Claude polling, Claude wrapper execution, native Claude telemetry forwarding, alternate state files, or direct hook export. Keep Claude pricing definitions source-backed in `internal/langfuse/models.go`; do not add local cost math. Do not mutate Claude settings automatically; document the hook command and let users install it.
+Do not add Claude polling, Claude wrapper execution, native Claude telemetry forwarding, alternate state files, or direct hook export. Keep cost calculation in the Laminar backend; do not add local token-price multiplication. Do not mutate Claude settings automatically; document the hook command and let users install it.
 
 Default verification before handing off changes:
 

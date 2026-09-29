@@ -152,7 +152,7 @@ func TestCLISignalCancelsStateWait(t *testing.T) {
 	if err := os.MkdirAll(codexHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configPath := writeLangfuseConfig(t, codexHome, "http://127.0.0.1")
+	configPath := writeLaminarConfig(t, codexHome, "http://127.0.0.1:14318")
 	lockFile, err := os.OpenFile(statePath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
