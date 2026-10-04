@@ -30,6 +30,7 @@ type ScanOptions struct {
 	ExportSpans         ExportSpansFunc
 	PollIntervalSeconds float64
 	InitialLookbackSecs int
+	CaptureRollout      func(context.Context, string, string) error
 }
 
 const (
@@ -222,6 +223,18 @@ func scanOnce(ctx context.Context, opts ScanOptions, state exportstate.State, ru
 			return state, exportedCount, err
 		}
 		sourceDeliveryFailed := false
+		if opts.CaptureRollout != nil {
+			sessionID := ""
+			if len(turns) > 0 {
+				sessionID = turns[0].SessionID
+			}
+			if err := opts.CaptureRollout(ctx, sessionPath, sessionID); err != nil {
+				fmt.Fprintf(stderr, "ERROR: official_plugin_capture_failed path=%s: %v\n", sessionPath, err)
+				scanFailed = true
+				sourceDeliveryFailed = true
+				deliveryErrors++
+			}
+		}
 		for _, turn := range turns {
 			if err := ctx.Err(); err != nil {
 				return state, exportedCount, err
@@ -312,8 +325,18 @@ func hasPendingScore(turns []agenttrace.Turn, processed map[string]struct{}, sta
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
 	traceID := turn.TraceID
 	environment := state.PendingScoreEnvironment(traceID)
-	if !isExportable(turn) {
+	progress := state.TurnProgress[traceID]
+	if turn.Completed && !isExportable(turn) {
 		return state, 0, false, nil
+	}
+	if !isExportable(turn) && (turn.TraceID == "" || turn.InputText() == "" || (len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount)) {
+		return state, 0, false, nil
+	}
+	if progress.ObservationCount < 0 || progress.ModelCallCount < 0 || progress.ObservationCount > len(turn.Observations) || progress.ModelCallCount > len(turn.ModelCalls) {
+		return state, 0, false, fmt.Errorf("observation prefix shrank for trace %s", traceID)
+	}
+	if progress.Environment != "" {
+		environment = progress.Environment
 	}
 
 	if opts.ResolveWorkspace == nil {
@@ -342,6 +365,9 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceID, sourcePath)
 		return state, 0, true, nil
 	}
+	turn.ExportDelta = true
+	turn.FirstObservation = progress.ObservationCount
+	turn.FirstModelCall = progress.ModelCallCount
 	status, err := opts.ExportSpans(ctx, turn, environment)
 	if err != nil {
 		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
@@ -351,16 +377,27 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 		fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceID, status)
 	}
 	state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
-		current.AddProcessed(traceID)
+		if turn.Completed {
+			current.AddProcessed(traceID)
+		} else {
+			if current.TurnProgress == nil {
+				current.TurnProgress = map[string]exportstate.TurnProgress{}
+			}
+			current.TurnProgress[traceID] = exportstate.TurnProgress{ObservationCount: len(turn.Observations), ModelCallCount: len(turn.ModelCalls), Environment: environment}
+		}
 	})
 	if err != nil {
 		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceID)
 		return state, 1, false, err
 	}
 	if !opts.Quiet {
-		fmt.Fprintf(writerOrDiscard(opts.Stdout), "processed trace=%s path=%s\n", traceID, sourcePath)
+		if turn.Completed {
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "processed trace=%s path=%s\n", traceID, sourcePath)
+		} else {
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "progress trace=%s observations=%d model_calls=%d\n", traceID, len(turn.Observations), len(turn.ModelCalls))
+		}
 	}
-	return state, 1, false, nil
+	return state, boolToInt(turn.Completed), false, nil
 }
 
 func isExportable(turn agenttrace.Turn) bool {
@@ -390,7 +427,10 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, 
 		}
 		requestComplete := true
 		hasExportableTurn := false
-		for _, turn := range agenttrace.ExportableTurns(turns) {
+		for _, turn := range turns {
+			if turn.TraceID == "" || turn.InputText() == "" {
+				continue
+			}
 			hasExportableTurn = true
 			if state.HasProcessed(turn.TraceID) {
 				continue
@@ -402,7 +442,7 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, 
 				return state, exportedCount + emitted, err
 			}
 			exportedCount += emitted
-			if failed || !state.HasProcessed(turn.TraceID) {
+			if failed || (turn.Completed && !state.HasProcessed(turn.TraceID)) || (!turn.Completed && len(turn.Observations) == 0 && len(turn.ModelCalls) == 0) {
 				requestComplete = false
 			}
 		}

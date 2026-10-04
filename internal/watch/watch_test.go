@@ -42,9 +42,6 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 		StatePath: statePath,
 		Quiet:     true,
 		ResolveWorkspace: func(_ context.Context, turn agenttrace.Turn) (agenttrace.Turn, string, error) {
-			if !turn.Completed {
-				t.Fatal("incomplete turn resolved before completion")
-			}
 			return turn, "default", nil
 		},
 		ExportSpans: func(context.Context, agenttrace.Turn, string) (int, error) {
@@ -57,7 +54,7 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	traceID := incompleteTraceID(t)
-	if exported != 0 || exportCalls != 0 || state.HasProcessed(traceID) || state.PendingScoreEnvironment(traceID) != "" {
+	if exported != 0 || exportCalls != 1 || state.HasProcessed(traceID) || state.TurnProgress[traceID].ObservationCount != 1 {
 		t.Fatalf("incomplete turn changed export state: exported=%d exports=%d state=%+v", exported, exportCalls, state)
 	}
 	if state.ScanWatermarkNS != now.UnixNano() {
@@ -70,7 +67,7 @@ func TestIncompleteTurnWaitsForCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exported != 1 || exportCalls != 1 || !state.HasProcessed(traceID) {
+	if exported != 1 || exportCalls != 2 || !state.HasProcessed(traceID) {
 		t.Fatalf("completed turn was not exported once: exported=%d exports=%d state=%+v", exported, exportCalls, state)
 	}
 }
@@ -581,7 +578,7 @@ func TestWatchCachedIncompleteTurnCompletesAfterAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completion scan: %v", err)
 	}
-	if parseCalls != 2 || exported != 1 || spanCalls != 1 || !state.HasProcessed(incompleteTraceID(t)) {
+	if parseCalls != 2 || exported != 1 || spanCalls != 2 || !state.HasProcessed(incompleteTraceID(t)) {
 		t.Fatalf("append did not invalidate successful cache: parses=%d exported=%d spans=%d state=%+v", parseCalls, exported, spanCalls, state)
 	}
 }

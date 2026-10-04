@@ -39,6 +39,7 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 	skippedTurnIDs := map[string]bool{}
 	pendingCalls := map[string]map[string]any{}
 	coveredCallIDs := map[string]bool{}
+	modelSteps := map[string]*modelStep{}
 
 	reader := bufio.NewReader(file)
 	lineNumber := 0
@@ -149,6 +150,12 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 		case "response_item":
 			parseResponseItem(turn, payload, timestamp, pendingCalls, coveredCallIDs)
 		}
+		step := modelSteps[currentTurnID]
+		if step == nil {
+			step = &modelStep{}
+			modelSteps[currentTurnID] = step
+		}
+		step.consume(turn, itemType, payload, timestamp)
 
 	}
 

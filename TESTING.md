@@ -107,3 +107,29 @@ git diff --check
 ```
 
 A green source suite, successful GitHub checks, published release, installed binary, running service, Collector delivery, and a trace visible in Laminar are separate gates. Report each separately. The earlier Langfuse API probes and model-pricing tests do not apply to this Laminar-only exporter; the repository does not query a tracing backend API or calculate token cost locally.
+
+## Completed steps during a running turn
+
+`TestProgressiveStepsResolveUnderFinalRootWithoutDuplicateSpans` verifies stable
+child identities, native pending-parent path metadata, and one final root.
+`TestProgressiveCheckpointSurvivesRetryRestartAndCompletion` verifies that failed
+exports do not advance progress, accepted prefixes survive restart, and completion
+sends only the remaining spans. `TestClaudeToolHookExportsStepsAndStopFinalizesWithoutPolling`
+uses the existing Claude fixture and queue to cover completed-tool events and
+Stop finalization without directory polling. `TestAcknowledgingSnapshotKeepsHookQueuedDuringExport`
+checks that a newer hook survives acknowledgement of an older snapshot. Per-call token usage tests reject
+reuse of cumulative turn counters, and span projection checks that transcript
+usage does not duplicate model-call usage.
+
+For live acceptance, run a benign Codex turn with a short completed tool followed
+by a longer tool. While it is running, verify completed model/tool spans in both
+projects and inspect the pending turn tree in the native dashboard. Let the same
+turn finish; verify one root per project, unchanged span identities, full output,
+and no duplicated token accounting. Enable the Traces table's Realtime toggle
+when checking newly arriving table rows. Do not manually export the test turn.
+
+Claude requires an installed client and explicitly configured completed-tool
+hooks in addition to Stop. Unit coverage is not native live Claude acceptance.
+The live metadata fixture includes Claude Code 2.1.285 `atis-latch` and
+`cost-state` records. They must not block capture, expose metadata content or
+replace per-call usage with the CLI's cumulative cost totals.

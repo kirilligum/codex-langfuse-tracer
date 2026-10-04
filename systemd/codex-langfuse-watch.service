@@ -1,5 +1,5 @@
 [Unit]
-Description=Export completed Codex and Claude turns through the local Laminar Collector
+Description=Export completed Codex and Claude steps through the local Laminar Collector
 After=default.target
 
 [Service]

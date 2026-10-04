@@ -14,11 +14,18 @@ import (
 const Version = 3
 
 type State struct {
-	Version           int               `json:"version"`
-	ScanWatermarkNS   int64             `json:"scan_watermark_ns"`
-	ProcessedTraceIDs []string          `json:"processed_trace_ids"`
-	PendingScores     map[string]string `json:"pending_scores,omitempty"`
-	Queue             []QueueRequest    `json:"queue,omitempty"`
+	Version           int                     `json:"version"`
+	ScanWatermarkNS   int64                   `json:"scan_watermark_ns"`
+	ProcessedTraceIDs []string                `json:"processed_trace_ids"`
+	PendingScores     map[string]string       `json:"pending_scores,omitempty"`
+	Queue             []QueueRequest          `json:"queue,omitempty"`
+	TurnProgress      map[string]TurnProgress `json:"turn_progress,omitempty"`
+}
+
+type TurnProgress struct {
+	ObservationCount int    `json:"observation_count"`
+	ModelCallCount   int    `json:"model_call_count"`
+	Environment      string `json:"environment"`
 }
 
 type QueueRequest struct {
@@ -170,6 +177,7 @@ func (s *State) AddProcessed(traceID string) {
 	s.ProcessedTraceIDs = append(s.ProcessedTraceIDs, traceID)
 	s.ProcessedTraceIDs = uniqueSorted(s.ProcessedTraceIDs)
 	delete(s.PendingScores, traceID)
+	delete(s.TurnProgress, traceID)
 }
 
 func (s State) PendingScoreEnvironment(traceID string) string {
@@ -198,8 +206,11 @@ func Enqueue(ctx context.Context, path string, request QueueRequest) error {
 		if state.ScanWatermarkNS == 0 {
 			state.ScanWatermarkNS = enqueuedAt.UnixNano()
 		}
-		for _, existing := range state.Queue {
+		for index, existing := range state.Queue {
 			if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
+				// A hook may arrive while an earlier snapshot is being exported.
+				// Refresh its identity so acknowledging the old snapshot keeps this work.
+				state.Queue[index] = request
 				return nil
 			}
 		}
@@ -212,7 +223,7 @@ func Enqueue(ctx context.Context, path string, request QueueRequest) error {
 func (s *State) RemoveQueued(request QueueRequest) {
 	kept := s.Queue[:0]
 	for _, existing := range s.Queue {
-		if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
+		if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath && existing.EnqueuedAt == request.EnqueuedAt {
 			continue
 		}
 		kept = append(kept, existing)

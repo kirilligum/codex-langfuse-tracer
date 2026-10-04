@@ -27,21 +27,23 @@ import (
 )
 
 type options struct {
-	Provider            string
-	ClaudeHook          bool
-	SessionID           string
-	Path                string
-	Latest              bool
-	Watch               bool
-	Doctor              bool
-	CheckReceiver       bool
-	TurnID              string
-	ConfigPath          string
-	StateFile           string
-	ServiceName         string
-	PollIntervalSeconds float64
-	JSON                bool
-	Quiet               bool
+	Provider              string
+	ClaudeHook            bool
+	SessionID             string
+	Path                  string
+	Latest                bool
+	Watch                 bool
+	Doctor                bool
+	CheckReceiver         bool
+	TurnID                string
+	ConfigPath            string
+	StateFile             string
+	ServiceName           string
+	PollIntervalSeconds   float64
+	JSON                  bool
+	Quiet                 bool
+	CodexPluginHook       string
+	CodexPluginHookSHA256 string
 }
 
 var hostnameUserID = laminar.HostnameUserID
@@ -87,11 +89,11 @@ func parseArgs(args []string) (options, error) {
 	fs := flag.NewFlagSet(buildinfo.InstalledBinaryName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.Provider, "provider", opts.Provider, "Trace provider: codex or claude")
-	fs.BoolVar(&opts.ClaudeHook, "claude-hook", false, "Read a Claude Code hook payload from stdin and enqueue its transcript")
+	fs.BoolVar(&opts.ClaudeHook, "claude-hook", false, "Queue a Claude Code Stop or completed-tool hook payload from stdin")
 	fs.StringVar(&opts.SessionID, "session-id", "", "Codex session id from `codex resume <id>`")
 	fs.StringVar(&opts.Path, "path", "", "Path to a Codex rollout JSONL file")
 	fs.BoolVar(&opts.Latest, "latest", false, "Export the latest Codex rollout JSONL file")
-	fs.BoolVar(&opts.Watch, "watch", false, "Continuously export newly completed Codex turns")
+	fs.BoolVar(&opts.Watch, "watch", false, "Continuously export completed model/tool steps and finalize Codex turns")
 	fs.BoolVar(&opts.Doctor, "doctor", false, "Check Laminar receiver, Collector, watcher service, and export state")
 	fs.BoolVar(&opts.CheckReceiver, "check-receiver", false, "Validate the local authenticated Laminar receiver without exporting a span")
 	fs.StringVar(&opts.TurnID, "turn-id", "", "Only export one turn id from the selected session")
@@ -101,6 +103,8 @@ func parseArgs(args []string) (options, error) {
 	fs.Float64Var(&opts.PollIntervalSeconds, "poll-interval-seconds", opts.PollIntervalSeconds, "Watch poll interval")
 	fs.BoolVar(&opts.JSON, "json", false, "Emit machine-readable JSON for manual exports and doctor")
 	fs.BoolVar(&opts.Quiet, "quiet", false, "Only print errors")
+	fs.StringVar(&opts.CodexPluginHook, "codex-plugin-hook", "", "Pinned official Codex plugin bundle for live capture")
+	fs.StringVar(&opts.CodexPluginHookSHA256, "codex-plugin-hook-sha256", "", "Expected SHA256 of the reviewed Codex plugin bundle")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -185,6 +189,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Quiet:               opts.Quiet,
 			PollIntervalSeconds: opts.PollIntervalSeconds,
 			ResolveWorkspace:    laminar.ResolveWorkspace,
+			CaptureRollout:      officialPluginCapture(opts),
 			ExportSpans: func(ctx context.Context, turn agenttrace.Turn, environment string) (int, error) {
 				return laminar.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 			},

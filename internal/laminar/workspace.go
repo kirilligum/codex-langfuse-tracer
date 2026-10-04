@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +59,30 @@ func ResolveWorkspace(ctx context.Context, turn agenttrace.Turn) (agenttrace.Tur
 	if err != nil {
 		return turn, "", err
 	}
+	remote, remoteErr := exec.CommandContext(gitCtx, "git", "-C", turn.CWD, "config", "--get", "remote.origin.url").Output()
+	if remoteErr == nil {
+		turn.Repository = repositoryName(strings.TrimSpace(string(remote)))
+	}
 	return turn, environment, nil
+}
+
+func repositoryName(remote string) string {
+	var path string
+	if parsed, err := url.Parse(remote); err == nil && parsed.Host != "" {
+		switch parsed.Scheme {
+		case "https", "http", "ssh", "git":
+			path = parsed.Path
+		default:
+			return ""
+		}
+	} else if colon := strings.Index(remote, ":"); colon >= 0 {
+		path = strings.SplitN(strings.SplitN(remote[colon+1:], "?", 2)[0], "#", 2)[0]
+	}
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	if !strings.Contains(path, "/") || strings.ContainsAny(path, "@ \t\r\n") {
+		return ""
+	}
+	return path
 }
 
 func workspaceEnvironment(repository, branch string) (string, error) {

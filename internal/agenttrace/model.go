@@ -7,20 +7,37 @@ import (
 )
 
 type Turn struct {
-	Provider       string
-	SessionID      string
-	TurnID         string
-	TraceID        string
-	StartTS        string
-	EndTS          string
-	CWD            string
-	GitBranch      string
-	Model          string
-	UserMessages   []string
-	AssistantTexts []string
-	TokenUsage     *TokenUsage
-	Completed      bool
-	Observations   []Observation
+	Provider         string
+	SessionID        string
+	TurnID           string
+	TraceID          string
+	StartTS          string
+	EndTS            string
+	CWD              string
+	GitBranch        string
+	Model            string
+	UserMessages     []string
+	AssistantTexts   []string
+	TokenUsage       *TokenUsage
+	Completed        bool
+	Observations     []Observation
+	ModelCalls       []ModelCall `json:"-"`
+	Repository       string      `json:"-"`
+	ExportDelta      bool        `json:"-"`
+	FirstObservation int         `json:"-"`
+	FirstModelCall   int         `json:"-"`
+}
+
+// ModelCall describes a model step reconstructed from the visible transcript.
+// It is separate from the turn transcript so aggregate usage is not counted twice.
+type ModelCall struct {
+	ID      string
+	StartTS string
+	EndTS   string
+	Model   string
+	Input   string
+	Output  string
+	Usage   *TokenUsage
 }
 
 const (

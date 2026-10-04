@@ -14,7 +14,7 @@ import (
 )
 
 // TEST-507
-func TestClaudeHookEnqueuesStopOnly(t *testing.T) {
+func TestClaudeHookEnqueuesCompletionAndToolSteps(t *testing.T) {
 	t.Parallel()
 
 	statePath := filepath.Join(t.TempDir(), "state.json")
@@ -53,6 +53,12 @@ func TestClaudeHookEnqueuesStopOnly(t *testing.T) {
 	}
 	if len(state.Queue) != 1 {
 		t.Fatalf("queue after notification = %+v", state.Queue)
+	}
+	for _, event := range []string{"PostToolUse", "PostToolUseFailure"} {
+		payload := strings.Replace(stop, `"Stop"`, `"`+event+`"`, 1)
+		if queued, err := Handle(context.Background(), strings.NewReader(payload), statePath, now); err != nil || !queued {
+			t.Fatalf("Handle %s: queued=%v err=%v", event, queued, err)
+		}
 	}
 }
 
