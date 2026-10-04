@@ -130,3 +130,6 @@ when checking newly arriving table rows. Do not manually export the test turn.
 
 Claude requires an installed client and explicitly configured completed-tool
 hooks in addition to Stop. Unit coverage is not native live Claude acceptance.
+The live metadata fixture includes Claude Code 2.1.285 `atis-latch` and
+`cost-state` records. They must not block capture, expose metadata content or
+replace per-call usage with the CLI's cumulative cost totals.

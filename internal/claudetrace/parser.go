@@ -62,7 +62,7 @@ func ParseTurns(path string) ([]agenttrace.Turn, error) {
 		}
 
 		switch record.Type {
-		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title", "mode", "pr-link":
+		case "summary", "queue-operation", "attachment", "last-prompt", "permission-mode", "file-history-snapshot", "ai-title", "mode", "pr-link", "atis-latch", "cost-state":
 			continue
 		case "system":
 			if isKnownSystemMetadata(record.Subtype) {

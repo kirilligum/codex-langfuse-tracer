@@ -183,6 +183,10 @@ func TestClaudeParserLiveMetadataRecords(t *testing.T) {
 		"SECRET_AWAY_SUMMARY_DO_NOT_EXPORT",
 		"SECRET_API_ERROR_DO_NOT_EXPORT",
 		"SECRET_LOCAL_COMMAND_DO_NOT_EXPORT",
+		"SECRET_ATIS_DO_NOT_EXPORT",
+		"atis-latch",
+		"cost-state",
+		"totalCostUSD",
 	} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("live metadata leaked %q in %s", forbidden, string(raw))
