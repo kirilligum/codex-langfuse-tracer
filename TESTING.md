@@ -116,7 +116,8 @@ child identities, native pending-parent path metadata, and one final root.
 exports do not advance progress, accepted prefixes survive restart, and completion
 sends only the remaining spans. `TestClaudeToolHookExportsStepsAndStopFinalizesWithoutPolling`
 uses the existing Claude fixture and queue to cover completed-tool events and
-Stop finalization without directory polling. Per-call token usage tests reject
+Stop finalization without directory polling. `TestAcknowledgingSnapshotKeepsHookQueuedDuringExport`
+checks that a newer hook survives acknowledgement of an older snapshot. Per-call token usage tests reject
 reuse of cumulative turn counters, and span projection checks that transcript
 usage does not duplicate model-call usage.
 

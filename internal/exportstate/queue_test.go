@@ -9,6 +9,27 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/agenttrace"
 )
 
+func TestAcknowledgingSnapshotKeepsHookQueuedDuringExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	old := QueueRequest{Provider: agenttrace.ProviderClaude, SourcePath: "/tmp/claude.jsonl", EnqueuedAt: "2026-10-04T12:00:00Z"}
+	if err := Enqueue(context.Background(), path, old); err != nil {
+		t.Fatal(err)
+	}
+	newer := old
+	newer.EnqueuedAt = "2026-10-04T12:00:01Z"
+	if err := Enqueue(context.Background(), path, newer); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Update(context.Background(), path, func(state *State) error { state.RemoveQueued(old); return nil })
+	if err != nil || len(state.Queue) != 1 || state.Queue[0].EnqueuedAt != newer.EnqueuedAt {
+		t.Fatalf("new hook lost after old acknowledgement: %+v err=%v", state, err)
+	}
+	state, err = Update(context.Background(), path, func(state *State) error { state.RemoveQueued(newer); return nil })
+	if err != nil || len(state.Queue) != 0 {
+		t.Fatalf("new snapshot not acknowledged: %+v err=%v", state, err)
+	}
+}
+
 // TEST-507
 func TestExportStateQueueDedupe(t *testing.T) {
 	t.Parallel()

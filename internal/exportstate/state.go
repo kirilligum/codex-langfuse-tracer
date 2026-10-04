@@ -206,8 +206,11 @@ func Enqueue(ctx context.Context, path string, request QueueRequest) error {
 		if state.ScanWatermarkNS == 0 {
 			state.ScanWatermarkNS = enqueuedAt.UnixNano()
 		}
-		for _, existing := range state.Queue {
+		for index, existing := range state.Queue {
 			if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
+				// A hook may arrive while an earlier snapshot is being exported.
+				// Refresh its identity so acknowledging the old snapshot keeps this work.
+				state.Queue[index] = request
 				return nil
 			}
 		}
@@ -220,7 +223,7 @@ func Enqueue(ctx context.Context, path string, request QueueRequest) error {
 func (s *State) RemoveQueued(request QueueRequest) {
 	kept := s.Queue[:0]
 	for _, existing := range s.Queue {
-		if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath {
+		if existing.Provider == request.Provider && existing.SourcePath == request.SourcePath && existing.EnqueuedAt == request.EnqueuedAt {
 			continue
 		}
 		kept = append(kept, existing)
