@@ -28,8 +28,8 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	for _, required := range []string{
-		"completed turns with non-empty canonical input and output",
-		"one OTLP batch per completed turn",
+		"finalizes turns with non-empty canonical input and output",
+		"finalizes each turn with its full transcript",
 		"does not read or update watcher checkpoints",
 		"`processed_trace_ids`",
 		"`pending_scores[trace_id]`",
@@ -37,7 +37,7 @@ func TestDocsCompletedCodexVisibility(t *testing.T) {
 		"span_export_succeeded ... checkpoint=pending",
 		"span_checkpoint_unconfirmed",
 		"does not prove the backend has indexed the trace",
-		"does not stream tokens or partial assistant text",
+		"does not stream token deltas or unfinished tool observations",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing completed-turn contract %q", required)
@@ -300,7 +300,7 @@ func TestDocsClaudeSupportContract(t *testing.T) {
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
 	agents := readRepoDoc(t, "AGENTS.md")
-	for _, required := range []string{"Claude Code's Stop hook", "--provider claude --path", "--claude-hook", "claude.agent", "claude.transcript", "claude.tool.command", "claude.tool.file_change", "claude.tool.mcp", "claude.tool.generic", "does not run Claude or modify its settings"} {
+	for _, required := range []string{"Claude Code's Stop and completed-tool hooks", "--provider claude --path", "--claude-hook", "claude.agent", "claude.transcript", "claude.tool.command", "claude.tool.file_change", "claude.tool.mcp", "claude.tool.generic", "does not run Claude or modify its settings"} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing Claude support contract %q", required)
 		}
@@ -344,7 +344,7 @@ func TestEvalDocsClaudeContractCompleteness(t *testing.T) {
 	t.Parallel()
 	readme := readRepoDoc(t, "README.md")
 	testingDoc := readRepoDoc(t, "TESTING.md")
-	for _, required := range []string{"Claude Code's Stop hook", "hook queues the transcript path", "Hidden or encrypted reasoning blocks are omitted", "The exporter does not run Claude or modify its settings"} {
+	for _, required := range []string{"Claude Code's Stop and completed-tool hooks", "hooks queue the transcript path", "Hidden or encrypted reasoning blocks are omitted", "The exporter does not run Claude or modify its settings"} {
 		if !strings.Contains(readme, required) {
 			t.Fatalf("README missing Claude completeness phrase %q", required)
 		}

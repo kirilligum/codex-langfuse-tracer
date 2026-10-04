@@ -23,14 +23,14 @@ func Handle(ctx context.Context, input io.Reader, statePath string, now time.Tim
 	if err := json.NewDecoder(input).Decode(&hook); err != nil {
 		return false, fmt.Errorf("invalid Claude hook JSON: %w", err)
 	}
-	if hook.HookEventName != "Stop" {
+	if hook.HookEventName != "Stop" && hook.HookEventName != "PostToolUse" && hook.HookEventName != "PostToolUseFailure" {
 		return false, nil
 	}
 	if hook.TranscriptPath == "" {
-		return false, fmt.Errorf("Claude Stop hook missing transcript_path")
+		return false, fmt.Errorf("Claude %s hook missing transcript_path", hook.HookEventName)
 	}
 	if hook.SessionID == "" {
-		return false, fmt.Errorf("Claude Stop hook missing session_id")
+		return false, fmt.Errorf("Claude %s hook missing session_id", hook.HookEventName)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()

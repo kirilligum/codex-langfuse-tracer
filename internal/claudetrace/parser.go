@@ -22,6 +22,7 @@ type transcriptRecord struct {
 }
 
 type transcriptMsg struct {
+	ID         string         `json:"id"`
 	Role       string         `json:"role"`
 	Model      string         `json:"model"`
 	Content    any            `json:"content"`
@@ -138,6 +139,30 @@ func handleAssistantRecord(turns *[]agenttrace.Turn, current **agenttrace.Turn, 
 	}
 	if len(record.Message.Usage) > 0 {
 		(*current).TokenUsage = parseUsage(record.Message.Usage)
+	}
+	var modelOutput []string
+	for _, part := range contentParts(record.Message.Content) {
+		switch agenttrace.StringValue(part["type"]) {
+		case "text":
+			modelOutput = append(modelOutput, agenttrace.StringValue(part["text"]))
+		case "tool_use":
+			modelOutput = append(modelOutput, agenttrace.StableJSON(part))
+		}
+	}
+	if len(modelOutput) > 0 {
+		id := agenttrace.StringOr(record.Message.ID, record.UUID)
+		call := agenttrace.ModelCall{ID: id, StartTS: record.Timestamp, EndTS: record.Timestamp, Model: record.Message.Model, Input: (*current).InputText(), Output: strings.Join(modelOutput, "\n\n"), Usage: parseUsage(record.Message.Usage)}
+		found := false
+		for index := range (*current).ModelCalls {
+			if id != "" && (*current).ModelCalls[index].ID == id {
+				(*current).ModelCalls[index] = call
+				found = true
+				break
+			}
+		}
+		if !found {
+			(*current).ModelCalls = append((*current).ModelCalls, call)
+		}
 	}
 	for _, part := range contentParts(record.Message.Content) {
 		switch agenttrace.StringValue(part["type"]) {

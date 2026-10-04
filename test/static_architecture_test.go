@@ -100,7 +100,6 @@ func TestCanonicalLaminarSpanArchitecture(t *testing.T) {
 			"langfuse.trace.output",
 			"/api/public/",
 			"firstObservationIndex",
-			"TurnProgress",
 			"FinalSpansExported",
 			"ExportedObservationCount",
 			"futureAgentParentContext",

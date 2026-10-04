@@ -1,6 +1,6 @@
 # Codex and Claude Code Tracer for Laminar
 
-This Go service exports completed Codex CLI and Claude Code turns as OpenTelemetry spans through the authenticated, host-local Laminar receiver. It watches Codex rollout files, drains Claude Stop-hook requests, and sends one OTLP batch per completed turn.
+This Go service exports completed Codex CLI and Claude Code model/tool steps as OpenTelemetry spans through the authenticated, host-local Laminar receiver. It watches Codex rollout files, drains Claude hook requests, and finalizes each turn with its full transcript.
 
 The repository, executable, systemd unit, and state filenames retain their historical `codex-langfuse-*` names so existing installs and hooks keep working. The exporter now targets Laminar only.
 
@@ -10,7 +10,7 @@ The repository, executable, systemd unit, and state filenames retain their histo
 - Supports one Linux `systemd --user` watcher for Codex polling and queued Claude exports.
 - Uses the transcript-specific local Laminar OTLP/HTTP receiver at
   `127.0.0.1:14320` by default.
-- Sends only completed turns with non-empty canonical input and output.
+- Sends completed steps during an active turn and finalizes turns with non-empty canonical input and output.
 - Requires the official host-local Laminar receiver and persistent Collector to be installed and running separately.
 
 Codex and Claude transcript formats are not stable public APIs. Run the focused parser and local receiver tests after upgrading either client.
@@ -66,17 +66,19 @@ A successful receiver check proves that the local endpoint accepted the authenti
 
 ## How exports work
 
-`codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`. The watcher scans `~/.codex/sessions/` for eligible Codex rollout files, retains only bounded parsed-file metadata in memory, and processes completed turns. Claude Code's Stop hook queues the transcript path and does not export it directly; the watcher performs the export.
+`codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`. The watcher scans `~/.codex/sessions/` for eligible Codex rollout files, retains only bounded parsed-file metadata in memory, and exports completed steps. Claude Code's Stop and completed-tool hooks queue the transcript path and do not export it directly; the watcher performs the export.
 
-Each turn becomes one parent `PIPELINE` span, one `LLM` transcript span, and child observation spans. The spans share a stable trace ID and deterministic span IDs. The exporter sends canonical redacted input/output, tool activity, model and token usage, workspace identity, tags, and provider insight metadata through OTLP/HTTP. Laminar attributes use `lmnr.span.type`, `lmnr.span.input`, `lmnr.span.output`, `lmnr.association.properties.*`, and OpenTelemetry `gen_ai.*` conventions, including `gen_ai.usage.*` token fields.
+Each completed turn has a parent `DEFAULT` span, a canonical transcript span, per-model-call `LLM` spans, and child observation spans. The transcript is `DEFAULT` when model calls exist, and carries legacy aggregate LLM usage only when no per-call data exists. The spans share a stable trace ID and deterministic span IDs. The exporter sends canonical redacted input/output, tool activity, model and token usage, workspace identity, tags, and provider insight metadata through OTLP/HTTP. Laminar attributes use `lmnr.span.type`, `lmnr.span.input`, `lmnr.span.output`, `lmnr.association.properties.*`, and OpenTelemetry `gen_ai.*` conventions, including `gen_ai.usage.*` token fields.
 
-Codex span names include `codex.agent`, `codex.transcript`, `codex.tool.command`, `codex.tool.file_change`, `codex.tool.mcp`, `codex.tool.web_search`, and `codex.tool.tool_search` when those events are present. The transcript span carries model and token usage. Tool spans preserve inputs, outputs, command status, and file-change metadata after shared redaction and truncation.
+Codex span names include `codex.agent`, `codex.transcript`, `codex.tool.command`, `codex.tool.file_change`, `codex.tool.mcp`, `codex.tool.web_search`, and `codex.tool.tool_search` when those events are present. Per-model-call spans carry model and recorded call usage. Cumulative turn usage is not repeated on the transcript when these spans exist; missing call usage remains unknown. Tool spans preserve inputs, outputs, command status, and file-change metadata after shared redaction and truncation.
 
-Incomplete turns remain local until the client records completion. The watcher does not stream tokens or partial assistant text and does not export partial tool observations.
+Finished model/tool steps are sent during incomplete turns, with a stable remote parent ID. At completion, the root and transcript arrive under the same trace ID, without resending accepted steps. The watcher does not stream token deltas or unfinished tool observations.
+
+To also drive the pinned official Codex parser, install the reviewed patch and run `make live-capture` in `cli-llm-laminar-trace`. Its service drop-in supplies `--codex-plugin-hook` and `--codex-plugin-hook-sha256`. The bundle is verified before each invocation. Both projects retain separate parsers, checkpoints and Collector queues; no second watcher is created.
 
 Deterministic turn summaries (`verification_run`, `verification_passed`, `had_failed_command`, `had_file_changes`, `changed_tests`, `docs_only`, `changed_file_count`, and `outcome`) are carried as typed span metadata with a data type and explanation. They are not submitted as native Laminar evaluator score records. They do not make additional model calls or calculate cost locally.
 
-The repository maps the turn's export-time Git worktree and branch into Laminar environment metadata. The Linux runtime hostname is sent as the Laminar user association. The branch, repository, and hostname are identity metadata; they are not configurable through command-line flags.
+The repository maps the turn's export-time Git worktree and branch into Laminar environment metadata. The Linux runtime hostname is sent as the Laminar user association and explicit `hostname` metadata. The sanitized Git remote repository path is sent as `repo` metadata. The branch, repository, and hostname are identity metadata; they are not configurable through command-line flags.
 
 Workspace environments use the repository folder and export-time branch, normalized to lowercase safe characters and capped at 40 characters with the first six lowercase hexadecimal SHA-256 characters as a suffix. A detached Git checkout uses `detached`; a missing, non-Git, unreadable, or timed-out workspace uses `default`. The user association is the non-empty Linux runtime hostname. Hidden or encrypted reasoning blocks are omitted.
 
@@ -84,7 +86,7 @@ Root metadata includes deterministic turn summaries and compact provider insight
 
 ## Delivery and state
 
-The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, and a legacy `pending_scores[trace_id]` map. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
+The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, a legacy `pending_scores[trace_id]` map, and additive `turn_progress` checkpoints for accepted observation/model-call prefixes. A completed checkpoint removes its progress entry. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
 
 Older version 3 installations may have `pending_scores` entries from the previous Langfuse exporter. On upgrade, the watcher re-exports that turn as one full Laminar trace using its persisted environment. It clears the legacy entry only after the local Collector accepts the batch and the processed checkpoint is saved. Do not edit or reset the state file to force a retry.
 
@@ -111,22 +113,14 @@ Use `--turn-id <TURN_ID>` to select one turn from a manually selected source. Th
 
 ## Claude Code hook
 
-Configure the hook in Claude Code yourself; the installer does not edit Claude settings. The hook queues work and the systemd watcher sends it:
+Configure the hooks in Claude Code yourself; the installer does not edit Claude settings. Use the same command for `Stop`, `PostToolUse`, and `PostToolUseFailure`. Completed-tool events queue a snapshot, which is removed after its accepted steps are checkpointed; a future event queues another snapshot. There is no Claude directory polling. The systemd watcher sends the queued steps:
 
 ```json
 {
   "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.codex/bin/codex-langfuse-exporter --claude-hook --quiet"
-          }
-        ]
-      }
-    ]
+    "Stop": [{"hooks": [{"type": "command", "command": "~/.codex/bin/codex-langfuse-exporter --claude-hook --quiet"}]}],
+    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.codex/bin/codex-langfuse-exporter --claude-hook --quiet"}]}],
+    "PostToolUseFailure": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.codex/bin/codex-langfuse-exporter --claude-hook --quiet"}]}]
   }
 }
 ```

@@ -29,7 +29,7 @@ func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	spans := exporter.Snapshots()
-	if got, want := len(spans), len(turn.Observations)+2; got != want {
+	if got, want := len(spans), len(turn.Observations)+len(turn.ModelCalls)+2; got != want {
 		t.Fatalf("span count = %d want %d", got, want)
 	}
 
@@ -40,7 +40,7 @@ func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 	if root.SpanID != agenttrace.StableSpanID("codex-agent", turn.TraceID, turn.TurnID, "") || root.ParentSpanID != "" {
 		t.Fatalf("root identity is unstable: %#v", root)
 	}
-	if root.Attributes[spanTypeAttribute] != "PIPELINE" {
+	if root.Attributes[spanTypeAttribute] != "DEFAULT" {
 		t.Fatalf("root type = %q", root.Attributes[spanTypeAttribute])
 	}
 	if root.Attributes[spanInputAttribute] != jsonString(agenttrace.ExportText(turn.InputText())) || root.Attributes[spanOutputAttribute] != jsonString(agenttrace.ExportText(turn.OutputText())) {
@@ -73,14 +73,18 @@ func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 	}
 
 	transcript := spans.ByName("codex.transcript")
-	if transcript.ParentSpanID != root.SpanID || transcript.Attributes[spanTypeAttribute] != "LLM" {
+	if transcript.ParentSpanID != root.SpanID || transcript.Attributes[spanTypeAttribute] != "DEFAULT" {
 		t.Fatalf("transcript is not a Laminar LLM child of the root: %#v", transcript)
 	}
 	if transcript.Attributes["gen_ai.system"] != "openai" || transcript.Attributes["gen_ai.request.model"] == "" {
 		t.Fatalf("model identity missing: %#v", transcript.Attributes)
 	}
-	if transcript.Attributes["gen_ai.usage.input_tokens"] == "" || transcript.Attributes["gen_ai.usage.output_tokens"] == "" {
-		t.Fatalf("token usage missing: %#v", transcript.Attributes)
+	if transcript.Attributes["gen_ai.usage.input_tokens"] != "" || transcript.Attributes["gen_ai.usage.output_tokens"] != "" {
+		t.Fatalf("aggregate transcript duplicates model-step usage: %#v", transcript.Attributes)
+	}
+	call := spans.ByName("codex.model.call.1")
+	if call.Attributes[spanTypeAttribute] != "LLM" || call.ParentSpanID != root.SpanID || call.Attributes["gen_ai.usage.input_tokens"] == "" {
+		t.Fatalf("model-step usage or hierarchy missing: %#v", call)
 	}
 }
 
@@ -189,8 +193,8 @@ func TestLaminarHTTPExportAuthenticatesAndSendsOneOTLPBatch(t *testing.T) {
 			}
 		}
 	}
-	if spanCount != len(turn.Observations)+2 {
-		t.Fatalf("OTLP spans=%d want=%d", spanCount, len(turn.Observations)+2)
+	if spanCount != len(turn.Observations)+len(turn.ModelCalls)+2 {
+		t.Fatalf("OTLP spans=%d want=%d", spanCount, len(turn.Observations)+len(turn.ModelCalls)+2)
 	}
 	if got := otlpString(batch.ResourceSpans[0].Resource.Attributes, "service.name"); got != buildinfo.DefaultServiceName {
 		t.Fatalf("service.name = %q", got)

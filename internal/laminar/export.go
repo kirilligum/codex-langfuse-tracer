@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,13 +124,24 @@ func EmitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 }
 
 func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
-	if !turn.Completed || turn.TraceID == "" || turn.InputText() == "" || turn.OutputText() == "" {
+	if (!turn.Completed && !turn.ExportDelta) || turn.TraceID == "" || turn.InputText() == "" || (turn.Completed && turn.OutputText() == "") {
 		return fmt.Errorf("span projection requires a completed turn with non-empty input and output")
 	}
 	if environment == "" || userID == "" || serviceName == "" {
 		return fmt.Errorf("span projection requires environment, user id, and service name")
 	}
+	if turn.ExportDelta && (turn.FirstObservation < 0 || turn.FirstObservation > len(turn.Observations) || turn.FirstModelCall < 0 || turn.FirstModelCall > len(turn.ModelCalls)) {
+		return fmt.Errorf("span projection has an invalid completed-step checkpoint")
+	}
 	ids := spanIDs(turn)
+	traceID, err := trace.TraceIDFromHex(turn.TraceID)
+	if err != nil {
+		return err
+	}
+	rootID, err := trace.SpanIDFromHex(agenttrace.StableSpanID(turn.Profile().AgentSpanPrefix, turn.TraceID, turn.TurnID, ""))
+	if err != nil {
+		return err
+	}
 	res, err := resource.New(ctx, resource.WithAttributes(
 		attribute.String("service.name", serviceName),
 		attribute.String("service.version", buildinfo.Version),
@@ -147,19 +159,40 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 	profile := turn.Profile()
 	traceTags := agenttrace.BuildTraceTags(turn)
 
-	parentCtx, agent := tracer.Start(ctx, profile.AgentName,
-		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(rootAttributes(turn, environment, userID, traceTags)...),
-	)
-	_, transcript := tracer.Start(parentCtx, profile.TranscriptName,
-		trace.WithTimestamp(parseTime(turn.StartTS)),
-		trace.WithAttributes(transcriptAttributes(turn, environment, userID, traceTags)...),
-	)
-	transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
-	for _, observation := range turn.Observations {
+	parentCtx := trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: rootID, TraceFlags: trace.FlagsSampled, Remote: true}))
+	var agent trace.Span
+	if turn.Completed {
+		parentCtx, agent = tracer.Start(ctx, profile.AgentName,
+			trace.WithTimestamp(parseTime(turn.StartTS)),
+			trace.WithAttributes(rootAttributes(turn, environment, userID, traceTags)...),
+		)
+		setSpanPath(agent, rootID, profile.AgentName, profile.AgentName)
+		_, transcript := tracer.Start(parentCtx, profile.TranscriptName,
+			trace.WithTimestamp(parseTime(turn.StartTS)),
+			trace.WithAttributes(transcriptAttributes(turn, environment, userID, traceTags)...),
+		)
+		setSpanPath(transcript, rootID, profile.AgentName, profile.TranscriptName)
+		transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
+	}
+	firstObservation, firstCall := 0, 0
+	if turn.ExportDelta {
+		firstObservation, firstCall = turn.FirstObservation, turn.FirstModelCall
+	}
+	for _, observation := range turn.Observations[firstObservation:] {
 		emitObservation(parentCtx, tracer, turn, observation, environment, userID, traceTags)
 	}
-	agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
+	for index, call := range turn.ModelCalls[firstCall:] {
+		attrs := commonAttributes(turn, environment, userID, "LLM", call.Input, call.Output, traceTags)
+		attrs = append(attrs, attribute.String("gen_ai.request.model", call.Model), attribute.String("gen_ai.system", modelProvider(profile.Provider)), attribute.Int(laminarMetadataPrefix+"model_step", firstCall+index+1), attribute.String(laminarMetadataPrefix+"capture", "transcript_model_step"))
+		attrs = append(attrs, usageAttributes(call.Usage)...)
+		name := fmt.Sprintf("%s.model.call.%d", profile.Provider, firstCall+index+1)
+		_, span := tracer.Start(parentCtx, name, trace.WithTimestamp(parseTime(call.StartTS)), trace.WithAttributes(attrs...))
+		setSpanPath(span, rootID, profile.AgentName, name)
+		span.End(trace.WithTimestamp(parseTime(call.EndTS)))
+	}
+	if agent != nil {
+		agent.End(trace.WithTimestamp(parseTime(turn.EndTS)))
+	}
 	return provider.Shutdown(ctx)
 }
 
@@ -169,27 +202,51 @@ func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.T
 		trace.WithAttributes(observationAttributes(turn, observation, environment, userID, traceTags)...),
 	}
 	_, span := tracer.Start(ctx, observation.Name, options...)
+	setSpanPath(span, trace.SpanContextFromContext(ctx).SpanID(), turn.Profile().AgentName, observation.Name)
 	if status := failedObservationStatusMessage(observation); status != "" {
 		span.SetStatus(codes.Error, status)
 	}
 	span.End(trace.WithTimestamp(nsTime(observation.EndTimeUnixNS)))
 }
 
+func setSpanPath(span trace.Span, rootID trace.SpanID, rootName, name string) {
+	uuid := func(id trace.SpanID) string {
+		hex := id.String()
+		return "00000000-0000-0000-" + hex[:4] + "-" + hex[4:]
+	}
+	ids, names := []string{uuid(rootID)}, []string{rootName}
+	if span.SpanContext().SpanID() != rootID {
+		ids, names = append(ids, uuid(span.SpanContext().SpanID())), append(names, name)
+	}
+	span.SetAttributes(attribute.StringSlice("lmnr.span.ids_path", ids), attribute.StringSlice("lmnr.span.path", names))
+}
+
 func spanIDs(turn agenttrace.Turn) []string {
 	profile := turn.Profile()
 	ids := make([]string, 0, len(turn.Observations)+2)
-	ids = append(ids,
-		agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
-		agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
-	)
-	for index := range turn.Observations {
+	if turn.Completed {
+		ids = append(ids,
+			agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
+			agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
+		)
+	}
+	firstObservation, firstCall := 0, 0
+	if turn.ExportDelta {
+		firstObservation, firstCall = turn.FirstObservation, turn.FirstModelCall
+	}
+	for index := firstObservation; index < len(turn.Observations); index++ {
 		ids = append(ids, agenttrace.StableSpanID(profile.ObservationPrefix, turn.TraceID, turn.TurnID, strconv.Itoa(index)))
+	}
+	for index := firstCall; index < len(turn.ModelCalls); index++ {
+		ids = append(ids, agenttrace.StableSpanID(turn.Profile().Provider+"-model-call", turn.TraceID, turn.TurnID, strconv.Itoa(index)))
 	}
 	return ids
 }
 
 func rootAttributes(turn agenttrace.Turn, environment, userID string, tags []string) []attribute.KeyValue {
-	attrs := commonAttributes(turn, environment, userID, "PIPELINE", turn.InputText(), turn.OutputText(), tags)
+	attrs := commonAttributes(turn, environment, userID, "DEFAULT", turn.InputText(), turn.OutputText(), tags)
+	rollup := agenttrace.BuildInsightRollup(turn)
+	attrs = append(attrs, attribute.Int(laminarMetadataPrefix+"tool_count", rollup.ToolCount), attribute.Int(laminarMetadataPrefix+"command_count", rollup.CommandCount), attribute.Int(laminarMetadataPrefix+"failed_command_count", rollup.FailedCommandCount), attribute.Int(laminarMetadataPrefix+"changed_file_count", rollup.ChangedFileCount), attribute.Int(laminarMetadataPrefix+"verification_command_count", rollup.VerificationCommandCount), attribute.String(laminarMetadataPrefix+"verification_status", rollup.VerificationStatus), attribute.Int(laminarMetadataPrefix+"model_step_count", len(turn.ModelCalls)))
 	attrs = append(attrs, attribute.String("gen_ai.operation.name", "invoke_agent"))
 	attrs = append(attrs, insightMetadataAttributes(turn)...)
 	attrs = append(attrs, deterministicScoreAttributes(turn)...)
@@ -197,7 +254,11 @@ func rootAttributes(turn agenttrace.Turn, environment, userID string, tags []str
 }
 
 func transcriptAttributes(turn agenttrace.Turn, environment, userID string, tags []string) []attribute.KeyValue {
-	attrs := commonAttributes(turn, environment, userID, "LLM", turn.InputText(), turn.OutputText(), tags)
+	spanType := "LLM"
+	if len(turn.ModelCalls) > 0 {
+		spanType = "DEFAULT"
+	}
+	attrs := commonAttributes(turn, environment, userID, spanType, turn.InputText(), turn.OutputText(), tags)
 	attrs = append(attrs,
 		attribute.String("gen_ai.operation.name", "chat"),
 		attribute.String("gen_ai.system", modelProvider(turn.Profile().Provider)),
@@ -205,7 +266,15 @@ func transcriptAttributes(turn agenttrace.Turn, environment, userID string, tags
 	if turn.Model != "" {
 		attrs = append(attrs, attribute.String("gen_ai.request.model", turn.Model))
 	}
-	if usage := turn.TokenUsage; usage != nil {
+	if len(turn.ModelCalls) == 0 {
+		attrs = append(attrs, usageAttributes(turn.TokenUsage)...)
+	}
+	return attrs
+}
+
+func usageAttributes(usage *agenttrace.TokenUsage) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{}
+	if usage != nil {
 		if usage.InputTokens > 0 {
 			attrs = append(attrs, attribute.Int("gen_ai.usage.input_tokens", usage.InputTokens))
 		}
@@ -256,6 +325,11 @@ func commonAttributes(turn agenttrace.Turn, environment, userID, spanType, input
 		attribute.String(laminarMetadataPrefix+"provider", profile.Provider),
 		attribute.String(laminarMetadataPrefix+"turn_id", turn.TurnID),
 		attribute.String(laminarMetadataPrefix+"version", buildinfo.Version),
+	}
+	hostname, _ := os.Hostname()
+	attrs = append(attrs, attribute.String(laminarMetadataPrefix+"hostname", hostname))
+	if turn.Repository != "" {
+		attrs = append(attrs, attribute.String(laminarMetadataPrefix+"repo", turn.Repository))
 	}
 	if len(tags) > 0 {
 		attrs = append(attrs, attribute.StringSlice("lmnr.association.properties.tags", tags))
