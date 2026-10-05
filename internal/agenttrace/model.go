@@ -26,6 +26,7 @@ type Turn struct {
 	ExportDelta      bool        `json:"-"`
 	FirstObservation int         `json:"-"`
 	FirstModelCall   int         `json:"-"`
+	InputEmitted     bool        `json:"-"`
 }
 
 // ModelCall describes a model step reconstructed from the visible transcript.

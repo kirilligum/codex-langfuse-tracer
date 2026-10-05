@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TEST-703
+// TEST-703, TEST-002
 func TestVersion3State(t *testing.T) {
 	t.Parallel()
 
@@ -18,6 +18,7 @@ func TestVersion3State(t *testing.T) {
 		ScanWatermarkNS:   42,
 		ProcessedTraceIDs: []string{"b", "a", "a"},
 		PendingScores:     map[string]string{"score-trace": "repository--feature-one-a1b2c3"},
+		TurnProgress:      map[string]TurnProgress{"input-trace": {InputEmitted: true, Environment: "default"}},
 	}
 	if err := Save(context.Background(), path, state); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -28,6 +29,9 @@ func TestVersion3State(t *testing.T) {
 	}
 	if got.Version != Version || got.ScanWatermarkNS != 42 {
 		t.Fatalf("state scalar mismatch: %+v", got)
+	}
+	if !got.TurnProgress["input-trace"].InputEmitted {
+		t.Fatal("accepted input progress was not saved")
 	}
 	if got.HasProcessed("missing") || !got.HasProcessed("a") || !got.HasProcessed("b") {
 		t.Fatalf("dedupe lookup failed: %+v", got.ProcessedTraceIDs)
@@ -66,6 +70,16 @@ func TestVersion3State(t *testing.T) {
 	updated.AddProcessed("atomic-trace")
 	if updated.PendingScoreEnvironment("atomic-trace") != "" {
 		t.Fatalf("processed trace retained pending score: %+v", updated)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":3,"turn_progress":{"old":{"observation_count":1,"model_call_count":1,"environment":"default"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldState, err := Load(path)
+	if err != nil || oldState == nil {
+		t.Fatalf("load existing version 3 progress: %v", err)
+	}
+	if old := oldState.TurnProgress["old"]; old.InputEmitted || old.ObservationCount != 1 || old.ModelCallCount != 1 {
+		t.Fatalf("existing progress changed: %+v", old)
 	}
 
 	if err := os.WriteFile(path, []byte(`{"version":2}`), 0o600); err != nil {

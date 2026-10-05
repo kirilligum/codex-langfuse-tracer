@@ -25,6 +25,7 @@ type State struct {
 type TurnProgress struct {
 	ObservationCount int    `json:"observation_count"`
 	ModelCallCount   int    `json:"model_call_count"`
+	InputEmitted     bool   `json:"input_emitted,omitempty"`
 	Environment      string `json:"environment"`
 }
 
