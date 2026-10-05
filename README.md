@@ -74,7 +74,7 @@ Codex span names include `codex.agent`, `codex.transcript`, `codex.tool.command`
 
 Finished model/tool steps are sent during incomplete turns, with a stable remote parent ID. At completion, the root and transcript arrive under the same trace ID, without resending accepted steps. The watcher does not stream token deltas or unfinished tool observations.
 
-To also drive the pinned official Codex parser, install the reviewed patch and run `make live-capture` in `cli-llm-laminar-trace`. Its service drop-in supplies `--codex-plugin-hook` and `--codex-plugin-hook-sha256`. The bundle is verified before each invocation. Both projects retain separate parsers, checkpoints and Collector queues; no second watcher is created.
+To also drive the pinned Codex plugin parser, install the maintained source with `make install`, then run `make live-capture` in `cli-llm-laminar-trace`. Its service drop-in supplies `--codex-plugin-hook` and `--codex-plugin-hook-sha256`. The bundle is verified before each invocation. Both projects retain separate parsers, checkpoints and Collector queues; no second watcher is created.
 
 Deterministic turn summaries (`verification_run`, `verification_passed`, `had_failed_command`, `had_file_changes`, `changed_tests`, `docs_only`, `changed_file_count`, and `outcome`) are carried as typed span metadata with a data type and explanation. They are not submitted as native Laminar evaluator score records. They do not make additional model calls or calculate cost locally.
 
@@ -86,7 +86,7 @@ Root metadata includes deterministic turn summaries and compact provider insight
 
 ## Delivery and state
 
-The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, a legacy `pending_scores[trace_id]` map, and additive `turn_progress` checkpoints for accepted observation/model-call prefixes. A completed checkpoint removes its progress entry. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
+The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, a legacy `pending_scores[trace_id]` map, and additive `turn_progress` checkpoints for accepted input and observation/model-call prefixes. A completed checkpoint removes its progress entry. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
 
 Older version 3 installations may have `pending_scores` entries from the previous Langfuse exporter. On upgrade, the watcher re-exports that turn as one full Laminar trace using its persisted environment. It clears the legacy entry only after the local Collector accepts the batch and the processed checkpoint is saved. Do not edit or reset the state file to force a retry.
 

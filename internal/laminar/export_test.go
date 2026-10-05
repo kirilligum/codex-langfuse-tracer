@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// TEST-002: the new input child adds one span without changing existing usage.
 func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -29,7 +30,7 @@ func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 		t.Fatalf("EmitSpans: %v", err)
 	}
 	spans := exporter.Snapshots()
-	if got, want := len(spans), len(turn.Observations)+len(turn.ModelCalls)+2; got != want {
+	if got, want := len(spans), len(turn.Observations)+len(turn.ModelCalls)+3; got != want {
 		t.Fatalf("span count = %d want %d", got, want)
 	}
 
@@ -193,8 +194,8 @@ func TestLaminarHTTPExportAuthenticatesAndSendsOneOTLPBatch(t *testing.T) {
 			}
 		}
 	}
-	if spanCount != len(turn.Observations)+len(turn.ModelCalls)+2 {
-		t.Fatalf("OTLP spans=%d want=%d", spanCount, len(turn.Observations)+len(turn.ModelCalls)+2)
+	if spanCount != len(turn.Observations)+len(turn.ModelCalls)+3 {
+		t.Fatalf("OTLP spans=%d want=%d", spanCount, len(turn.Observations)+len(turn.ModelCalls)+3)
 	}
 	if got := otlpString(batch.ResourceSpans[0].Resource.Attributes, "service.name"); got != buildinfo.DefaultServiceName {
 		t.Fatalf("service.name = %q", got)

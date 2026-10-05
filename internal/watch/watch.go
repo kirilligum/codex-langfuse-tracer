@@ -329,7 +329,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 	if turn.Completed && !isExportable(turn) {
 		return state, 0, false, nil
 	}
-	if !isExportable(turn) && (turn.TraceID == "" || turn.InputText() == "" || (len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount)) {
+	if !isExportable(turn) && (turn.TraceID == "" || turn.InputText() == "" || (progress.InputEmitted && len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount)) {
 		return state, 0, false, nil
 	}
 	if progress.ObservationCount < 0 || progress.ModelCallCount < 0 || progress.ObservationCount > len(turn.Observations) || progress.ModelCallCount > len(turn.ModelCalls) {
@@ -368,6 +368,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 	turn.ExportDelta = true
 	turn.FirstObservation = progress.ObservationCount
 	turn.FirstModelCall = progress.ModelCallCount
+	turn.InputEmitted = progress.InputEmitted
 	status, err := opts.ExportSpans(ctx, turn, environment)
 	if err != nil {
 		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
@@ -383,7 +384,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 			if current.TurnProgress == nil {
 				current.TurnProgress = map[string]exportstate.TurnProgress{}
 			}
-			current.TurnProgress[traceID] = exportstate.TurnProgress{ObservationCount: len(turn.Observations), ModelCallCount: len(turn.ModelCalls), Environment: environment}
+			current.TurnProgress[traceID] = exportstate.TurnProgress{ObservationCount: len(turn.Observations), ModelCallCount: len(turn.ModelCalls), InputEmitted: true, Environment: environment}
 		}
 	})
 	if err != nil {

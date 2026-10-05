@@ -174,6 +174,21 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 		setSpanPath(transcript, rootID, profile.AgentName, profile.TranscriptName)
 		transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
 	}
+	if !turn.InputEmitted {
+		prompt := agenttrace.ExportText(turn.InputText())
+		preview := []rune(prompt)
+		if len(preview) > 2048 {
+			preview = preview[:2048]
+		}
+		attrs := commonAttributes(turn, environment, userID, "DEFAULT", "", "", traceTags)
+		attrs = append(attrs,
+			attribute.String(spanInputAttribute, jsonString(prompt)),
+			attribute.String(laminarMetadataPrefix+"cli_input_preview", string(preview)),
+		)
+		_, input := tracer.Start(parentCtx, "turn.input", trace.WithTimestamp(parseTime(turn.StartTS)), trace.WithAttributes(attrs...))
+		setSpanPath(input, rootID, profile.AgentName, "turn.input")
+		input.End(trace.WithTimestamp(parseTime(turn.StartTS)))
+	}
 	firstObservation, firstCall := 0, 0
 	if turn.ExportDelta {
 		firstObservation, firstCall = turn.FirstObservation, turn.FirstModelCall
@@ -223,12 +238,15 @@ func setSpanPath(span trace.Span, rootID trace.SpanID, rootName, name string) {
 
 func spanIDs(turn agenttrace.Turn) []string {
 	profile := turn.Profile()
-	ids := make([]string, 0, len(turn.Observations)+2)
+	ids := make([]string, 0, len(turn.Observations)+len(turn.ModelCalls)+3)
 	if turn.Completed {
 		ids = append(ids,
 			agenttrace.StableSpanID(profile.AgentSpanPrefix, turn.TraceID, turn.TurnID, ""),
 			agenttrace.StableSpanID(profile.TranscriptSpanPrefix, turn.TraceID, turn.TurnID, ""),
 		)
+	}
+	if !turn.InputEmitted {
+		ids = append(ids, agenttrace.StableSpanID("turn-input", turn.TraceID, turn.TurnID, ""))
 	}
 	firstObservation, firstCall := 0, 0
 	if turn.ExportDelta {

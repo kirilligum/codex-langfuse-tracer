@@ -67,6 +67,76 @@ func TestProgressiveCheckpointSurvivesRetryRestartAndCompletion(t *testing.T) {
 	}
 }
 
+// TEST-002: a prompt-only turn must pass the existing watcher checkpoint path.
+func TestPromptOnlyProgressSurvivesRetryRestartAndCompletion(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			_, statePath, path := watchFixture(t)
+			traceID := agenttrace.StableTraceID(provider, "s", "t")
+			turn := agenttrace.Turn{Provider: provider, SessionID: "s", TurnID: "t", TraceID: traceID,
+				StartTS: "2026-10-04T12:00:00Z", UserMessages: []string{"input"}}
+			state := exportstate.State{Version: exportstate.Version}
+			attempts := 0
+			fail := true
+			opts := ScanOptions{StatePath: statePath, Quiet: true, ResolveWorkspace: testWorkspace,
+				ExportSpans: func(_ context.Context, delta agenttrace.Turn, _ string) (int, error) {
+					attempts++
+					if delta.TraceID != traceID || !delta.ExportDelta {
+						t.Fatalf("wrong prompt delta: %+v", delta)
+					}
+					if delta.InputEmitted != (attempts == 3) {
+						t.Fatalf("wrong input acknowledgement on attempt %d: %+v", attempts, delta)
+					}
+					if fail {
+						return 503, fmt.Errorf("unavailable")
+					}
+					return 200, nil
+				},
+			}
+			attempted := false
+			var failed bool
+			var err error
+			state, _, failed, err = processTurn(context.Background(), opts, state, turn, path, &attempted)
+			if err != nil || !failed || len(state.TurnProgress) != 0 || attempts != 1 {
+				t.Fatalf("failed input advanced state: attempts=%d state=%+v err=%v", attempts, state, err)
+			}
+			fail = false
+			attempted = false
+			state, _, failed, err = processTurn(context.Background(), opts, state, turn, path, &attempted)
+			if err != nil || failed || attempts != 2 {
+				t.Fatalf("input not accepted: attempts=%d state=%+v err=%v", attempts, state, err)
+			}
+			if !state.TurnProgress[traceID].InputEmitted {
+				t.Fatal("accepted input was not checkpointed")
+			}
+			loaded, err := exportstate.Load(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded == nil {
+				t.Fatal("progress was not saved")
+			}
+			state = *loaded
+			if !state.TurnProgress[traceID].InputEmitted {
+				t.Fatal("accepted input was lost on restart")
+			}
+			attempted = false
+			state, _, failed, err = processTurn(context.Background(), opts, state, turn, path, &attempted)
+			if err != nil || failed || attempts != 2 {
+				t.Fatalf("unchanged input replayed: attempts=%d err=%v", attempts, err)
+			}
+			turn.Completed = true
+			turn.EndTS = "2026-10-04T12:00:01Z"
+			turn.AssistantTexts = []string{"done"}
+			attempted = false
+			state, completed, failed, err := processTurn(context.Background(), opts, state, turn, path, &attempted)
+			if err != nil || failed || completed != 1 || attempts != 3 || !state.HasProcessed(traceID) {
+				t.Fatalf("finalization: attempts=%d state=%+v err=%v", attempts, state, err)
+			}
+		})
+	}
+}
+
 func TestClaudeToolHookExportsStepsAndStopFinalizesWithoutPolling(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "claude.jsonl")
