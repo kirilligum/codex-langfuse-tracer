@@ -124,6 +124,9 @@ func EmitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 }
 
 func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, serviceName string, exporter sdktrace.SpanExporter) error {
+	if turn.Request != nil {
+		return emitRequestProjection(ctx, turn, environment, userID, serviceName, exporter)
+	}
 	if (!turn.Completed && !turn.ExportDelta) || turn.TraceID == "" || turn.InputText() == "" || (turn.Completed && turn.OutputText() == "") {
 		return fmt.Errorf("span projection requires a completed turn with non-empty input and output")
 	}
@@ -164,12 +167,12 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 	if turn.Completed {
 		parentCtx, agent = tracer.Start(ctx, profile.AgentName,
 			trace.WithTimestamp(parseTime(turn.StartTS)),
-			trace.WithAttributes(rootAttributes(turn, environment, userID, traceTags)...),
+			trace.WithAttributes(spanMetadataAttributes(rootAttributes(turn, environment, userID, traceTags))...),
 		)
 		setSpanPath(agent, rootID, profile.AgentName, profile.AgentName)
 		_, transcript := tracer.Start(parentCtx, profile.TranscriptName,
 			trace.WithTimestamp(parseTime(turn.StartTS)),
-			trace.WithAttributes(transcriptAttributes(turn, environment, userID, traceTags)...),
+			trace.WithAttributes(spanMetadataAttributes(transcriptAttributes(turn, environment, userID, traceTags))...),
 		)
 		setSpanPath(transcript, rootID, profile.AgentName, profile.TranscriptName)
 		transcript.End(trace.WithTimestamp(parseTime(turn.EndTS)))
@@ -201,7 +204,7 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 		attrs = append(attrs, attribute.String("gen_ai.request.model", call.Model), attribute.String("gen_ai.system", modelProvider(profile.Provider)), attribute.Int(laminarMetadataPrefix+"model_step", firstCall+index+1), attribute.String(laminarMetadataPrefix+"capture", "transcript_model_step"))
 		attrs = append(attrs, usageAttributes(call.Usage)...)
 		name := fmt.Sprintf("%s.model.call.%d", profile.Provider, firstCall+index+1)
-		_, span := tracer.Start(parentCtx, name, trace.WithTimestamp(parseTime(call.StartTS)), trace.WithAttributes(attrs...))
+		_, span := tracer.Start(parentCtx, name, trace.WithTimestamp(parseTime(call.StartTS)), trace.WithAttributes(spanMetadataAttributes(attrs)...))
 		setSpanPath(span, rootID, profile.AgentName, name)
 		span.End(trace.WithTimestamp(parseTime(call.EndTS)))
 	}
@@ -214,7 +217,7 @@ func emitSpans(ctx context.Context, turn agenttrace.Turn, environment, userID, s
 func emitObservation(ctx context.Context, tracer trace.Tracer, turn agenttrace.Turn, observation agenttrace.Observation, environment, userID string, traceTags []string) {
 	options := []trace.SpanStartOption{
 		trace.WithTimestamp(nsTime(observation.StartTimeUnixNS)),
-		trace.WithAttributes(observationAttributes(turn, observation, environment, userID, traceTags)...),
+		trace.WithAttributes(spanMetadataAttributes(observationAttributes(turn, observation, environment, userID, traceTags))...),
 	}
 	_, span := tracer.Start(ctx, observation.Name, options...)
 	setSpanPath(span, trace.SpanContextFromContext(ctx).SpanID(), turn.Profile().AgentName, observation.Name)
@@ -363,6 +366,18 @@ func commonAttributes(turn agenttrace.Turn, environment, userID, spanType, input
 	}
 	if text := agenttrace.ExportText(output); text != "" {
 		attrs = append(attrs, attribute.String(spanOutputAttribute, jsonString(text)))
+	}
+	return attrs
+}
+
+// Trace metadata is a whole-object SET in Laminar. The immutable input span
+// writes it once; all other spans retain their metadata as ordinary attributes.
+func spanMetadataAttributes(attrs []attribute.KeyValue) []attribute.KeyValue {
+	for i := range attrs {
+		key := string(attrs[i].Key)
+		if strings.HasPrefix(key, laminarMetadataPrefix) {
+			attrs[i].Key = attribute.Key("cli.metadata." + strings.TrimPrefix(key, laminarMetadataPrefix))
+		}
 	}
 	return attrs
 }

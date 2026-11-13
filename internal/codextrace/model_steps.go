@@ -9,6 +9,8 @@ type modelStep struct {
 	start      string
 	output     []string
 	toolOutput []string
+	input      string
+	model      string
 }
 
 func (s *modelStep) consume(turn *agenttrace.Turn, kind string, payload map[string]any, timestamp string) {
@@ -30,11 +32,16 @@ func (s *modelStep) consume(turn *agenttrace.Turn, kind string, payload map[stri
 		if text != "" {
 			if s.start == "" {
 				s.start = timestamp
+				s.input = turn.InputText()
+				if len(turn.ModelMessages) > 0 {
+					s.input = strings.Join(turn.ModelMessages, "\n\n")
+				}
+				s.model = turn.Model
 			}
 			s.output = append(s.output, text)
 		}
 	}
-	complete := kind == "event_msg" && (typ == "token_count" || typ == "task_complete")
+	complete := kind == "event_msg" && (typ == "token_count" || typ == "task_complete" || typ == "turn_aborted")
 	if !complete || len(s.output) == 0 {
 		return
 	}
@@ -45,11 +52,11 @@ func (s *modelStep) consume(turn *agenttrace.Turn, kind string, payload map[stri
 			usage = parseTokenUsage(last)
 		}
 	}
-	input := turn.InputText()
+	input := s.input
 	if len(turn.ModelCalls) > 0 && len(s.toolOutput) > 0 {
 		input = strings.Join(s.toolOutput, "\n\n")
 	}
-	turn.ModelCalls = append(turn.ModelCalls, agenttrace.ModelCall{StartTS: s.start, EndTS: timestamp, Model: turn.Model, Input: input, Output: strings.Join(s.output, "\n\n"), Usage: usage})
+	turn.ModelCalls = append(turn.ModelCalls, agenttrace.ModelCall{StartTS: s.start, EndTS: timestamp, Model: s.model, Input: input, Output: strings.Join(s.output, "\n\n"), Usage: usage})
 	s.start = ""
 	s.output = nil
 	s.toolOutput = nil

@@ -37,9 +37,31 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 	turnOrder := []string{}
 	turnsByID := map[string]*agenttrace.Turn{}
 	skippedTurnIDs := map[string]bool{}
+	resolvedTraceIDs := map[string]string{}
+	pendingStarts := map[string]string{}
+	var pendingOrder []string
 	pendingCalls := map[string]map[string]any{}
 	coveredCallIDs := map[string]bool{}
 	modelSteps := map[string]*modelStep{}
+	requests := newRequestCorrelation(include)
+	startTurn := func(turnID, traceID, timestamp, cwd, model string) {
+		start := timestamp
+		if value, ok := pendingStarts[turnID]; ok {
+			start = value
+			delete(pendingStarts, turnID)
+		}
+		resolvedTraceIDs[turnID] = traceID
+		if include != nil && !include(traceID) {
+			skippedTurnIDs[turnID] = true
+			return
+		}
+		turnsByID[turnID] = &agenttrace.Turn{Provider: agenttrace.ProviderCodex, SessionID: sessionID,
+			TurnID: turnID, TraceID: traceID, StartTS: timestampOrNow(start), EndTS: timestampOrNow(timestamp), CWD: cwd, Model: model}
+		turnOrder = append(turnOrder, turnID)
+		if observeRetained != nil {
+			observeRetained(traceID)
+		}
+	}
 
 	reader := bufio.NewReader(file)
 	lineNumber := 0
@@ -68,6 +90,18 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 		itemType := agenttrace.StringValue(item["type"])
 		timestamp := agenttrace.StringValue(item["timestamp"])
 		payload := agenttrace.MapValue(item["payload"])
+		attributedExecution := requests.observe(itemType, payload, timestamp, sessionID)
+		if itemType == "event_msg" && agenttrace.StringValue(payload["type"]) == "task_started" && attributedExecution != "" {
+			currentTurnID = attributedExecution
+			// Context follows task_started and may supply the authoritative ID.
+			// Defer selection until context or the first body, retaining only this
+			// header rather than model/tool data for an already accepted execution.
+			if _, pending := pendingStarts[currentTurnID]; !pending && resolvedTraceIDs[currentTurnID] == "" {
+				pendingStarts[currentTurnID] = timestamp
+				pendingOrder = append(pendingOrder, currentTurnID)
+			}
+			continue
+		}
 
 		switch itemType {
 		case "session_meta":
@@ -89,19 +123,21 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 				currentTurnID = ""
 				continue
 			}
-			if skippedTurnIDs[turnID] {
-				currentTurnID = turnID
-				continue
-			}
 			traceID := agenttrace.StringValue(payload["trace_id"])
 			if traceID == "" {
-				traceID = agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID)
+				traceID = resolvedTraceIDs[turnID]
+				if traceID == "" {
+					traceID = agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID)
+				}
+			}
+			if resolved := resolvedTraceIDs[turnID]; resolved != "" && resolved != traceID {
+				return nil, fmt.Errorf("%s:%d execution trace identity changed after selection", path, lineNumber)
 			}
 			currentTurnID = turnID
+			if skippedTurnIDs[turnID] {
+				continue
+			}
 			if existing := turnsByID[turnID]; existing != nil {
-				if existing.TraceID == "" {
-					existing.TraceID = traceID
-				}
 				if existing.CWD == "" {
 					existing.CWD = agenttrace.StringOr(payload["cwd"], sessionCWD)
 				}
@@ -110,33 +146,21 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 				}
 				continue
 			}
-			if include != nil && !include(traceID) {
-				skippedTurnIDs[turnID] = true
-				currentTurnID = turnID
-				continue
-			}
-			if observeRetained != nil {
-				observeRetained(traceID)
-			}
-			turn := &agenttrace.Turn{
-				Provider:  agenttrace.ProviderCodex,
-				SessionID: sessionID,
-				TurnID:    turnID,
-				TraceID:   traceID,
-				StartTS:   timestampOrNow(timestamp),
-				EndTS:     timestampOrNow(timestamp),
-				CWD:       agenttrace.StringOr(payload["cwd"], sessionCWD),
-				Model:     agenttrace.StringOr(payload["model"], sessionModel),
-			}
-			turnOrder = append(turnOrder, turnID)
-			turnsByID[turnID] = turn
+			startTurn(turnID, traceID, timestamp, agenttrace.StringOr(payload["cwd"], sessionCWD), agenttrace.StringOr(payload["model"], sessionModel))
 			continue
 		}
 
-		if currentTurnID == "" {
+		targetTurnID := currentTurnID
+		if attributedExecution != "" {
+			targetTurnID = attributedExecution
+		}
+		if targetTurnID == "" {
 			continue
 		}
-		turn := turnsByID[currentTurnID]
+		if _, pending := pendingStarts[targetTurnID]; pending {
+			startTurn(targetTurnID, agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, targetTurnID), timestamp, sessionCWD, sessionModel)
+		}
+		turn := turnsByID[targetTurnID]
 		if turn == nil {
 			continue
 		}
@@ -144,26 +168,38 @@ func parseTurnsFiltered(path string, include func(traceID string) bool, observeR
 			observeRetained(turn.TraceID)
 		}
 
+		observationStart := len(turn.Observations)
+		wasCompleted := turn.Completed
 		switch itemType {
 		case "event_msg":
 			parseEventMessage(turn, payload, timestamp, pendingCalls, coveredCallIDs)
 		case "response_item":
 			parseResponseItem(turn, payload, timestamp, pendingCalls, coveredCallIDs)
 		}
-		step := modelSteps[currentTurnID]
+		if wasCompleted {
+			for i := observationStart; i < len(turn.Observations); i++ {
+				turn.Observations[i].Metadata["late_result"] = true
+			}
+		}
+		step := modelSteps[targetTurnID]
 		if step == nil {
 			step = &modelStep{}
-			modelSteps[currentTurnID] = step
+			modelSteps[targetTurnID] = step
 		}
 		step.consume(turn, itemType, payload, timestamp)
 
 	}
 
+	for _, turnID := range pendingOrder {
+		if start, pending := pendingStarts[turnID]; pending {
+			startTurn(turnID, agenttrace.StableTraceID(agenttrace.ProviderCodex, sessionID, turnID), start, sessionCWD, sessionModel)
+		}
+	}
 	turns := make([]agenttrace.Turn, 0, len(turnOrder))
 	for _, turnID := range turnOrder {
 		turns = append(turns, *turnsByID[turnID])
 	}
-	return turns, nil
+	return requests.project(turns, sessionModel, sessionCWD), nil
 }
 
 func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp string, pendingCalls map[string]map[string]any, coveredCallIDs map[string]bool) {
@@ -176,11 +212,12 @@ func parseEventMessage(turn *agenttrace.Turn, payload map[string]any, timestamp 
 			message := agenttrace.StringValue(payload["message"])
 			agenttrace.AddObservation(turn, "codex.message.commentary", timestamp, "", message, map[string]any{"phase": agenttrace.StringValue(payload["phase"])}, "span", nil)
 		}
-	case "task_complete":
+	case "task_complete", "turn_aborted":
 		if timestamp != "" {
 			turn.EndTS = timestamp
 		}
 		turn.Completed = true
+		turn.Aborted = agenttrace.StringValue(payload["type"]) == "turn_aborted"
 	case "exec_command_end":
 		callID := agenttrace.StringValue(payload["call_id"])
 		if callID != "" {
@@ -255,9 +292,7 @@ func parseResponseItem(turn *agenttrace.Turn, payload map[string]any, timestamp 
 	case "message":
 		switch agenttrace.StringValue(payload["role"]) {
 		case "user":
-			if message := textFromContent(payload["content"], "input_text"); message != "" {
-				turn.UserMessages = []string{message}
-			}
+			recordUserMessage(turn, payload)
 		case "assistant":
 			if agenttrace.StringValue(payload["phase"]) == "final_answer" {
 				if message := textFromContent(payload["content"], "output_text"); message != "" {

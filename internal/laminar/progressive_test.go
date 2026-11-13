@@ -85,6 +85,40 @@ func TestTurnInputPreviewIsBoundedAfterRedaction(t *testing.T) {
 	}
 }
 
+// TEST-HUMAN-INPUT: later child/root delivery cannot replace the preview object.
+func TestOnlyInputOwnsTraceMetadataAcrossProgressiveCompletion(t *testing.T) {
+	turn := completeTurn(t)
+	partial := turn
+	partial.Completed, partial.ExportDelta = false, true
+	partial.ModelCalls = turn.ModelCalls[:1]
+	partial.Observations = turn.Observations[:1]
+	exporter := &memoryExporter{}
+	if err := EmitSpans(context.Background(), partial, "workspace", "host", buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatal(err)
+	}
+	turn.ExportDelta, turn.InputEmitted = true, true
+	turn.FirstModelCall, turn.FirstObservation = 1, 1
+	if err := EmitSpans(context.Background(), turn, "workspace", "host", buildinfo.DefaultServiceName, exporter); err != nil {
+		t.Fatal(err)
+	}
+	writers := 0
+	for _, span := range exporter.Snapshots() {
+		writes := false
+		for key := range span.Attributes {
+			writes = writes || strings.HasPrefix(key, laminarMetadataPrefix)
+		}
+		if writes {
+			writers++
+			if span.Name != "turn.input" || span.Attributes[laminarMetadataPrefix+"cli_input_preview"] == "" || span.Attributes[laminarMetadataPrefix+"environment"] != "workspace" {
+				t.Fatalf("unexpected trace metadata writer: %s", span.Name)
+			}
+		}
+	}
+	if writers != 1 {
+		t.Fatalf("trace metadata writers = %d, want one immutable input owner", writers)
+	}
+}
+
 func TestProgressiveStepsResolveUnderFinalRootWithoutDuplicateSpans(t *testing.T) {
 	turn := completeTurn(t)
 	full := &memoryExporter{}

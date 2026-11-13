@@ -226,7 +226,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	exportable := agenttrace.ExportableTurns(turns)
 	if len(exportable) == 0 {
 		if !opts.Quiet {
-			fmt.Fprintf(stderr, "No completed %s turns with visible input/output found in %s\n", providers.DisplayName(opts.Provider), sessionPath)
+			fmt.Fprintf(stderr, "No exportable completed %s work found in %s\n", providers.DisplayName(opts.Provider), sessionPath)
 		}
 		return 1
 	}
@@ -241,7 +241,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		turn = resolvedTurn
 		if !opts.JSON && !opts.Quiet {
-			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TraceID, preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
+			fmt.Fprintf(stdout, "turn=%s trace=%s input=%q output=%q observations=%d\n", turn.TurnID, turn.TelemetryTraceID(), preview(agenttrace.ExportText(turn.InputText())), preview(agenttrace.ExportText(turn.OutputText())), len(turn.Observations))
 		}
 		status, err := laminar.ExportSpans(ctx, cfg, turn, environment, userID, opts.ServiceName)
 		if err != nil {
@@ -252,11 +252,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Provider:        turn.Profile().Provider,
 			SessionFile:     sessionPath,
 			TurnID:          turn.TurnID,
-			TraceID:         turn.TraceID,
+			TraceID:         turn.TelemetryTraceID(),
 			CollectorStatus: status,
 		}
 		if !opts.JSON && !opts.Quiet {
-			fmt.Fprintf(stdout, "collector_accepted trace=%s status=%d\n", turn.TraceID, status)
+			fmt.Fprintf(stdout, "collector_accepted trace=%s status=%d\n", turn.TelemetryTraceID(), status)
 		}
 		if opts.JSON {
 			if err := writeJSONLine(stdout, result); err != nil {

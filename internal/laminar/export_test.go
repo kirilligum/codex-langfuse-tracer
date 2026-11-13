@@ -47,19 +47,19 @@ func TestLaminarSpanProjectionPreservesTraceContextAndMetadata(t *testing.T) {
 	if root.Attributes[spanInputAttribute] != jsonString(agenttrace.ExportText(turn.InputText())) || root.Attributes[spanOutputAttribute] != jsonString(agenttrace.ExportText(turn.OutputText())) {
 		t.Fatal("root input/output does not match redacted canonical turn text")
 	}
-	if root.Attributes["lmnr.association.properties.user_id"] != "shaman" || root.Attributes[laminarMetadataPrefix+"environment"] != "repo--main-a1b2c3" {
+	if root.Attributes["lmnr.association.properties.user_id"] != "shaman" || root.Attributes["cli.metadata."+"environment"] != "repo--main-a1b2c3" {
 		t.Fatalf("root identity metadata mismatch: %#v", root.Attributes)
 	}
 	if !strings.Contains(root.Attributes["lmnr.association.properties.tags"], "tool:command") {
 		t.Fatalf("trace tags missing expected navigation tag: %q", root.Attributes["lmnr.association.properties.tags"])
 	}
-	if root.Attributes[laminarMetadataPrefix+"codex_insight_navigation"] == "" {
+	if root.Attributes["cli.metadata."+"codex_insight_navigation"] == "" {
 		t.Fatalf("insight navigation missing: %#v", root.Attributes)
 	}
-	if root.Attributes[laminarMetadataPrefix+"codex_score_had_file_changes"] != "true" {
+	if root.Attributes["cli.metadata."+"codex_score_had_file_changes"] != "true" {
 		t.Fatalf("boolean deterministic score not typed as boolean: %#v", root.Attributes)
 	}
-	if root.Attributes[laminarMetadataPrefix+"codex_score_had_file_changes_data_type"] != agenttrace.ScoreDataTypeBoolean || root.Attributes[laminarMetadataPrefix+"codex_score_had_file_changes_comment"] == "" {
+	if root.Attributes["cli.metadata."+"codex_score_had_file_changes_data_type"] != agenttrace.ScoreDataTypeBoolean || root.Attributes["cli.metadata."+"codex_score_had_file_changes_comment"] == "" {
 		t.Fatalf("deterministic score type or explanation missing: %#v", root.Attributes)
 	}
 	if root.ResourceAttrs["service.name"] != buildinfo.DefaultServiceName || root.ResourceAttrs["deployment.environment.name"] != "repo--main-a1b2c3" {
@@ -110,7 +110,7 @@ func TestLaminarToolProjectionPreservesInputsOutputsAndErrors(t *testing.T) {
 	if failed.StatusCode != "Error" || failed.StatusDescription != "nonzero_exit" {
 		t.Fatalf("tool OTel status = %s %q", failed.StatusCode, failed.StatusDescription)
 	}
-	if failed.Attributes[laminarMetadataPrefix+"observation_failure_type"] != "nonzero_exit" {
+	if failed.Attributes["cli.metadata."+"observation_failure_type"] != "nonzero_exit" {
 		t.Fatalf("tool metadata did not retain failure type: %#v", failed.Attributes)
 	}
 }

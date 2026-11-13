@@ -64,6 +64,7 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 	var spanEnvironments []string
 	var spanUserIDs []string
 	var scoreCount int
+	var metadataOwners int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/traces" || r.Header.Get("Authorization") != "Bearer "+testReceiverToken {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -79,9 +80,16 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 		for _, resourceSpans := range request.ResourceSpans {
 			for _, scopeSpans := range resourceSpans.ScopeSpans {
 				for _, span := range scopeSpans.Spans {
-					spanEnvironments = append(spanEnvironments, testOTLPString(span.Attributes, "lmnr.association.properties.metadata.environment"))
+					environmentKey := "cli.metadata.environment"
+					if span.Name == "turn.input" {
+						environmentKey = "lmnr.association.properties.metadata.environment"
+					}
+					if testOTLPString(span.Attributes, "lmnr.association.properties.metadata.environment") != "" {
+						metadataOwners++
+					}
+					spanEnvironments = append(spanEnvironments, testOTLPString(span.Attributes, environmentKey))
 					spanUserIDs = append(spanUserIDs, testOTLPString(span.Attributes, "lmnr.association.properties.user_id"))
-					if span.Name == "codex.agent" && testOTLPBool(span.Attributes, "lmnr.association.properties.metadata.codex_score_had_file_changes") {
+					if span.Name == "codex.agent" && testOTLPBool(span.Attributes, "cli.metadata.codex_score_had_file_changes") {
 						scoreCount++
 					}
 				}
@@ -100,8 +108,8 @@ func TestManualWorkspaceIdentity(t *testing.T) {
 	if hostnameCalls != 1 {
 		t.Fatalf("hostname calls = %d, want 1", hostnameCalls)
 	}
-	if len(spanEnvironments) == 0 || scoreCount != 1 {
-		t.Fatalf("missing environment or deterministic score metadata: environments=%v score_count=%d", spanEnvironments, scoreCount)
+	if len(spanEnvironments) == 0 || scoreCount != 1 || metadataOwners != 1 {
+		t.Fatalf("missing environment/score or competing trace metadata writers: environments=%v score_count=%d metadata_writers=%d", spanEnvironments, scoreCount, metadataOwners)
 	}
 	for _, environment := range spanEnvironments {
 		if environment != wantEnvironment {
@@ -152,20 +160,27 @@ func TestManualProviderExportCLIIntegration(t *testing.T) {
 					t.Fatal(err)
 				}
 				found := false
+				inputMetadataOwners := 0
 				for _, resourceSpans := range request.ResourceSpans {
 					for _, scopeSpans := range resourceSpans.ScopeSpans {
 						for _, span := range scopeSpans.Spans {
 							if span.Name == tc.wantTrace {
 								found = true
-								if testOTLPString(span.Attributes, "lmnr.association.properties.metadata.provider") != tc.provider {
+								if testOTLPString(span.Attributes, "cli.metadata.provider") != tc.provider {
 									t.Fatalf("%s root provider metadata missing", tc.name)
 								}
+							}
+							if provider := testOTLPString(span.Attributes, "lmnr.association.properties.metadata.provider"); provider != "" {
+								if span.Name != "turn.input" || provider != tc.provider {
+									t.Errorf("unexpected trace metadata owner %s for %s", span.Name, provider)
+								}
+								inputMetadataOwners++
 							}
 						}
 					}
 				}
-				if !found {
-					t.Fatalf("%s root span missing", tc.name)
+				if !found || inputMetadataOwners != 1 {
+					t.Errorf("%s root/input metadata contract: root=%v input_writers=%d", tc.name, found, inputMetadataOwners)
 				}
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -235,7 +250,7 @@ func TestManualExportCLINoExportableTurns(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("run succeeded for incomplete rollout stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("No completed Codex turns with visible input/output found")) {
+	if !bytes.Contains(stderr.Bytes(), []byte("No exportable completed Codex work found")) {
 		t.Fatalf("missing no-exportable error stderr=%s", stderr.String())
 	}
 }

@@ -27,6 +27,46 @@ type Turn struct {
 	FirstObservation int         `json:"-"`
 	FirstModelCall   int         `json:"-"`
 	InputEmitted     bool        `json:"-"`
+	// Authorship and model-role context are independent. These source details
+	// belong to capture state, not the legacy serialized turn contract.
+	SourceMessageIDs   []string `json:"-"`
+	ModelMessages      []string `json:"-"`
+	InputOrigin        string   `json:"-"`
+	LegacyUserMessages []string `json:"-"`
+	Request            *Request `json:"-"`
+	RequestRoot        bool     `json:"-"`
+	RequestInputOnly   bool     `json:"-"`
+	ExecutionTrigger   string   `json:"-"`
+	AfterCompletion    bool     `json:"-"`
+	Aborted            bool     `json:"-"`
+	FirstHumanInput    int      `json:"-"`
+	PendingToolCount   int      `json:"-"`
+	ExecutionEmitted   bool     `json:"-"`
+}
+
+// Request describes the source-observed human operation independently of a
+// runtime execution. Its root is a separate export work item, using the same
+// watcher/checkpoint path as executions rather than holding completed bodies.
+type Request struct {
+	ID            string
+	TraceID       string
+	StartTS       string
+	EndTS         string
+	FinishedAt    string
+	State         string
+	Inputs        []HumanInput
+	LateInputs    []HumanInput
+	Output        string
+	GoalKey       string
+	GoalStatus    string
+	ExecutionIDs  []string
+	HasHumanInput bool
+}
+
+type HumanInput struct {
+	ID        string
+	Text      string
+	Timestamp string
 }
 
 // ModelCall describes a model step reconstructed from the visible transcript.
@@ -139,6 +179,15 @@ func (t Turn) OutputText() string {
 	return joinedText(t.AssistantTexts)
 }
 
+// TelemetryTraceID is the physical Laminar trace. TraceID remains the stable
+// work-item identity used by existing watcher checkpoints.
+func (t Turn) TelemetryTraceID() string {
+	if t.Request != nil {
+		return t.Request.TraceID
+	}
+	return t.TraceID
+}
+
 func joinedText(values []string) string {
 	clean := make([]string, 0, len(values))
 	for _, value := range values {
@@ -169,7 +218,7 @@ func StableSpanID(prefix, traceID, turnID, key string) string {
 func ExportableTurns(turns []Turn) []Turn {
 	exportable := make([]Turn, 0, len(turns))
 	for _, turn := range turns {
-		if turn.Completed && turn.TraceID != "" && turn.InputText() != "" && turn.OutputText() != "" {
+		if turn.Completed && turn.TraceID != "" && (turn.Request != nil || (turn.InputText() != "" && turn.OutputText() != "")) {
 			exportable = append(exportable, turn)
 		}
 	}

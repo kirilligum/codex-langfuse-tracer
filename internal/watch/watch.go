@@ -116,12 +116,24 @@ func InitializeState(ctx context.Context, statePath string, now time.Time, stdou
 		now = time.Now()
 	}
 	state := exportstate.State{
-		Version:         exportstate.Version,
-		ScanWatermarkNS: now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano(),
+		Version:          exportstate.Version,
+		ScanWatermarkNS:  now.Add(-time.Duration(buildinfo.DefaultInitialLookbackSecs) * time.Second).UnixNano(),
+		RequestCutoverNS: now.UnixNano(),
 	}
 	state, created, err := exportstate.LoadOrCreate(ctx, statePath, state)
 	if err != nil {
 		return exportstate.State{}, false, err
+	}
+	if state.RequestCutoverNS == 0 {
+		state, err = exportstate.Update(ctx, statePath, func(current *exportstate.State) error {
+			if current.RequestCutoverNS == 0 {
+				current.RequestCutoverNS = now.UnixNano()
+			}
+			return nil
+		})
+		if err != nil {
+			return exportstate.State{}, false, err
+		}
 	}
 	if created && !quiet {
 		fmt.Fprintln(writerOrDiscard(stdout), "initialized watch state; historical turns before the initial watermark will not be exported")
@@ -323,19 +335,48 @@ func hasPendingScore(turns []agenttrace.Turn, processed map[string]struct{}, sta
 }
 
 func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State, turn agenttrace.Turn, sourcePath string, attemptedExport *bool) (exportstate.State, int, bool, error) {
+	if turn.Request != nil && state.RequestCutoverNS > 0 {
+		started, err := time.Parse(time.RFC3339Nano, turn.Request.StartTS)
+		if err != nil || started.UnixNano() < state.RequestCutoverNS {
+			if turn.RequestRoot {
+				return state, 0, false, nil
+			}
+			turn.Request = nil
+			if len(turn.LegacyUserMessages) > 0 {
+				turn.UserMessages = turn.LegacyUserMessages
+			}
+		}
+	}
 	traceID := turn.TraceID
+	traceLogID := traceID
+	if turn.Request != nil && turn.Request.TraceID != traceID {
+		traceLogID = turn.Request.TraceID + " work_item=" + traceID
+	}
 	environment := state.PendingScoreEnvironment(traceID)
 	progress := state.TurnProgress[traceID]
+	if turn.Request != nil && !turn.RequestRoot && turn.Completed && progress.ExecutionEmitted && len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount {
+		if turn.PendingToolCount == 0 {
+			// A matching response can close a pending tool already represented by
+			// an accepted command/MCP event. Only its local checkpoint remains.
+			updated, err := mutateState(ctx, opts, state, func(current *exportstate.State) { current.AddProcessed(traceID) })
+			return updated, 0, false, err
+		}
+		return state, 0, false, nil
+	}
+	if turn.Request != nil && !turn.RequestRoot && !turn.Completed && len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount {
+		return state, 0, false, nil
+	}
 	if turn.Completed && !isExportable(turn) {
 		return state, 0, false, nil
 	}
-	if !isExportable(turn) && (turn.TraceID == "" || turn.InputText() == "" || (progress.InputEmitted && len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount)) {
+	hasNewInput := turn.RequestRoot && turn.Request != nil && len(turn.Request.Inputs) > progress.HumanInputCount
+	if !isExportable(turn) && (turn.TraceID == "" || (turn.Request == nil && turn.InputText() == "") || (!hasNewInput && progress.InputEmitted && len(turn.Observations) == progress.ObservationCount && len(turn.ModelCalls) == progress.ModelCallCount) || (turn.RequestRoot && !hasNewInput)) {
 		return state, 0, false, nil
 	}
-	if progress.ObservationCount < 0 || progress.ModelCallCount < 0 || progress.ObservationCount > len(turn.Observations) || progress.ModelCallCount > len(turn.ModelCalls) {
+	if progress.ObservationCount < 0 || progress.ModelCallCount < 0 || progress.ObservationCount > len(turn.Observations) || progress.ModelCallCount > len(turn.ModelCalls) || (turn.RequestRoot && (progress.HumanInputCount < 0 || progress.HumanInputCount > len(turn.Request.Inputs))) {
 		// A fork can carry a shorter copy of an already observed parent turn.
 		// Preserve its checkpoint and let other turns and sources make progress.
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: observation_prefix_shrank trace=%s path=%s observations=%d checkpoint_observations=%d model_calls=%d checkpoint_model_calls=%d checkpoint_preserved=true\n", traceID, sourcePath, len(turn.Observations), progress.ObservationCount, len(turn.ModelCalls), progress.ModelCallCount)
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: observation_prefix_shrank trace=%s path=%s observations=%d checkpoint_observations=%d model_calls=%d checkpoint_model_calls=%d checkpoint_preserved=true\n", traceLogID, sourcePath, len(turn.Observations), progress.ObservationCount, len(turn.ModelCalls), progress.ModelCallCount)
 		return state, 0, true, nil
 	}
 	if progress.Environment != "" {
@@ -343,7 +384,7 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 	}
 
 	if opts.ResolveWorkspace == nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", traceID, sourcePath)
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to resolve workspace trace=%s path=%s: missing workspace resolver callback\n", traceLogID, sourcePath)
 		return state, 0, true, nil
 	}
 	resolvedTurn, resolvedEnvironment, err := opts.ResolveWorkspace(ctx, turn)
@@ -365,46 +406,55 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 	*attemptedExport = true
 
 	if opts.ExportSpans == nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceID, sourcePath)
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: missing span export callback\n", traceLogID, sourcePath)
 		return state, 0, true, nil
 	}
 	turn.ExportDelta = true
 	turn.FirstObservation = progress.ObservationCount
 	turn.FirstModelCall = progress.ModelCallCount
 	turn.InputEmitted = progress.InputEmitted
+	turn.FirstHumanInput = progress.HumanInputCount
+	turn.ExecutionEmitted = progress.ExecutionEmitted
 	status, err := opts.ExportSpans(ctx, turn, environment)
 	if err != nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceID, sourcePath, err)
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: failed to export trace=%s path=%s: %v\n", traceLogID, sourcePath, err)
 		return state, 0, true, nil
 	}
 	if !opts.Quiet {
-		fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceID, status)
+		fmt.Fprintf(writerOrDiscard(opts.Stdout), "span_export_succeeded trace=%s status=%d checkpoint=pending\n", traceLogID, status)
 	}
 	state, err = mutateState(ctx, opts, state, func(current *exportstate.State) {
-		if turn.Completed {
+		if turn.Completed && (turn.Request == nil || turn.RequestRoot || turn.PendingToolCount == 0) {
 			current.AddProcessed(traceID)
 		} else {
 			if current.TurnProgress == nil {
 				current.TurnProgress = map[string]exportstate.TurnProgress{}
 			}
-			current.TurnProgress[traceID] = exportstate.TurnProgress{ObservationCount: len(turn.Observations), ModelCallCount: len(turn.ModelCalls), InputEmitted: true, Environment: environment}
+			humanCount := 0
+			if turn.RequestRoot {
+				humanCount = len(turn.Request.Inputs)
+			}
+			current.TurnProgress[traceID] = exportstate.TurnProgress{ObservationCount: len(turn.Observations), ModelCallCount: len(turn.ModelCalls), InputEmitted: true, Environment: environment, HumanInputCount: humanCount, ExecutionEmitted: turn.Completed || progress.ExecutionEmitted}
 		}
 	})
 	if err != nil {
-		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceID)
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: span_checkpoint_unconfirmed trace=%s export_result=success replay_possible=true\n", traceLogID)
 		return state, 1, false, err
 	}
 	if !opts.Quiet {
-		if turn.Completed {
-			fmt.Fprintf(writerOrDiscard(opts.Stdout), "processed trace=%s path=%s\n", traceID, sourcePath)
+		if state.HasProcessed(traceID) {
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "processed trace=%s path=%s\n", traceLogID, sourcePath)
 		} else {
-			fmt.Fprintf(writerOrDiscard(opts.Stdout), "progress trace=%s observations=%d model_calls=%d\n", traceID, len(turn.Observations), len(turn.ModelCalls))
+			fmt.Fprintf(writerOrDiscard(opts.Stdout), "progress trace=%s observations=%d model_calls=%d\n", traceLogID, len(turn.Observations), len(turn.ModelCalls))
 		}
 	}
 	return state, boolToInt(turn.Completed), false, nil
 }
 
 func isExportable(turn agenttrace.Turn) bool {
+	if turn.Request != nil {
+		return turn.Completed && turn.TraceID != ""
+	}
 	return turn.Completed && turn.TraceID != "" && turn.InputText() != "" && turn.OutputText() != ""
 }
 
@@ -432,7 +482,7 @@ func drainQueue(ctx context.Context, opts ScanOptions, state exportstate.State, 
 		requestComplete := true
 		hasExportableTurn := false
 		for _, turn := range turns {
-			if turn.TraceID == "" || turn.InputText() == "" {
+			if turn.TraceID == "" || (turn.Request == nil && turn.InputText() == "") {
 				continue
 			}
 			hasExportableTurn = true

@@ -1,6 +1,6 @@
 # Codex and Claude Code Tracer for Laminar
 
-This Go service exports completed Codex CLI and Claude Code model/tool steps as OpenTelemetry spans through the authenticated, host-local Laminar receiver. It watches Codex rollout files, drains Claude hook requests, and finalizes each turn with its full transcript.
+This Go service exports Codex CLI and Claude Code model/tool steps as OpenTelemetry spans through the authenticated, host-local Laminar receiver. It watches Codex rollout files, drains Claude hook requests, and finalizes each turn with its full transcript. Attributed Codex executions are grouped beneath their human request; legacy Codex and Claude captures retain their turn-based hierarchy.
 
 The repository, executable, systemd unit, and state filenames retain their historical `codex-langfuse-*` names so existing installs and hooks keep working. The exporter now targets Laminar only.
 
@@ -10,7 +10,7 @@ The repository, executable, systemd unit, and state filenames retain their histo
 - Supports one Linux `systemd --user` watcher for Codex polling and queued Claude exports.
 - Uses the transcript-specific local Laminar OTLP/HTTP receiver at
   `127.0.0.1:14320` by default.
-- Sends completed steps during an active turn and finalizes turns with non-empty canonical input and output.
+- Sends completed steps during active work. Attributed Codex requests preserve human Input, explicit continuation/recovery lineage, and the recorded final answer; cancellation can have no answer.
 - Requires the official host-local Laminar receiver and persistent Collector to be installed and running separately.
 
 Codex and Claude transcript formats are not stable public APIs. Run the focused parser and local receiver tests after upgrading either client.
@@ -66,6 +66,8 @@ A successful receiver check proves that the local endpoint accepted the authenti
 
 ## How exports work
 
+For legacy Codex and Claude sources, the service finalizes turns with non-empty canonical input and output.
+
 `codex-langfuse-watch.service` runs `~/.codex/bin/codex-langfuse-exporter --watch`. The watcher scans `~/.codex/sessions/` for eligible Codex rollout files, retains only bounded parsed-file metadata in memory, and exports completed steps. Claude Code's Stop and completed-tool hooks queue the transcript path and do not export it directly; the watcher performs the export.
 
 Each completed turn has a parent `DEFAULT` span, a canonical transcript span, per-model-call `LLM` spans, and child observation spans. The transcript is `DEFAULT` when model calls exist, and carries legacy aggregate LLM usage only when no per-call data exists. The spans share a stable trace ID and deterministic span IDs. The exporter sends canonical redacted input/output, tool activity, model and token usage, workspace identity, tags, and provider insight metadata through OTLP/HTTP. Laminar attributes use `lmnr.span.type`, `lmnr.span.input`, `lmnr.span.output`, `lmnr.association.properties.*`, and OpenTelemetry `gen_ai.*` conventions, including `gen_ai.usage.*` token fields.
@@ -84,7 +86,56 @@ Workspace environments use the repository folder and export-time branch, normali
 
 Root metadata includes deterministic turn summaries and compact provider insight fields such as `verification_status`, `verification_command_count`, `changed_file_count`, `changed_extensions`, `touched_test_files`, `command_kind`, `duration_ms`, and `failure_type`. Navigation is emitted as `codex_insight.navigation` or `claude_insight.navigation`; reusable low-cardinality tags such as `files:changed`, `verification:not_run`, `tool:command`, `tool:file_change`, `tool:web_search`, and `mcp:<server>` use `lmnr.association.properties.tags`. The exact MCP tool names, prompt text, output text, paths, and session IDs are not used as tags.
 
-## Delivery and state
+### Human requests in attributed Codex sources
+
+When the source includes execution attribution, each request has one trace with
+execution spans beneath it. Model calls, tools, and the execution transcript
+belong to their execution. Model calls alone contribute usage. Model input
+describes the visible transcript context, not a capture of the provider request.
+
+The request's Input contains human text identified by per-content provenance.
+The model's `user` role alone does not establish authorship. Human steering keeps
+its source identity and order; injected context stays in execution/model spans.
+A human goal control is paired with its structured goal snapshot. An objective
+created by an agent tool is not itself treated as human input.
+
+New user-triggered executions start new requests. Recovery follows explicit
+execution ancestry; goal continuations follow the recorded goal identity.
+Unresolved lineage stays explicit. Goal completion requires a structured
+`thread_goal_updated` event or the matching core goal API result, followed by
+the final execution ending. Assistant wording and arbitrary tool output do not
+establish goal completion. Missing structured evidence leaves the request open.
+
+Human input and completed operations are exported while the request is active.
+The request root ends once, at source completion, with the recorded final-phase
+answer. A cancellation can have no output. Later recovery keeps the original
+trace identity and marks its execution `cli.request.after_completion`; it does
+not rewrite the completed root. Pending tools keep their execution checkpoint
+until their results arrive. Late results are marked `cli.capture.late_result`
+and do not re-emit the execution root, transcript, or accepted model usage.
+Human messages attributed to an already completed request are preserved as
+`human.input` children with `cli.request.after_completion`. Each uses its source
+message identity and the existing processed-work checkpoint, so late messages
+survive restart without reopening the root or changing its Input/Output.
+
+Execution selection waits for the recorded `turn_context` identity after
+`task_started`. Sources without a context keep the deterministic fallback.
+A contradictory trace identity after selection fails the scan and preserves
+checkpoints instead of silently replaying or omitting an execution.
+
+Only the initial human-input span writes trace metadata, including the immutable
+`cli_input_preview`. Other spans retain metadata under `cli.metadata.*`. This
+avoids overwriting the preview on backends with whole-object metadata replacement.
+The completed request Input contains all pre-completion human submissions.
+
+The existing version 3 state gains `request_cutover_ns` at watcher initialization.
+Requests started before that boundary retain their legacy projection and span
+identities; accepted progress and queued work are preserved. Restarting does not
+move the boundary. Work-item checkpoint identities remain execution-specific;
+logs expose the physical Laminar identity as `trace` and the checkpoint identity
+as `work_item` when they differ.
+
+### Delivery and state
 
 The version 3 state file is `~/.codex/langfuse-export-state.json`; its advisory lock sidecar is `~/.codex/langfuse-export-state.json.lock`. Keep both in place during upgrades. The state file stores `processed_trace_ids`, queued Claude hook requests in `queue`, `scan_watermark_ns`, a legacy `pending_scores[trace_id]` map, and additive `turn_progress` checkpoints for accepted input and observation/model-call prefixes. A completed checkpoint removes its progress entry. During an upgrade from the older `O_EXCL` lock protocol, pause new Claude Stop-hook invocations and any other independent state writers until the installer has stopped the watcher and promoted the new binary. Never delete or rename the `.lock` sidecar during install, restart, or uninstall.
 

@@ -13,6 +13,43 @@ import (
 	"github.com/kirilligum/codex-langfuse-tracer/internal/tracecontract"
 )
 
+// TEST-HUMAN-INPUT: source provenance beats model role and text prefixes.
+func TestRecordedHumanInputAndSteering(t *testing.T) {
+	t.Parallel()
+	message := func(id string, texts, kinds, authors []string) map[string]any {
+		content, metadata, kindValues := []any{}, []any{}, []any{}
+		for i, text := range texts {
+			content = append(content, map[string]any{"type": "input_text", "text": text})
+			metadata = append(metadata, map[string]any{"provenance": map[string]any{"type": authors[i]}})
+			kindValues = append(kindValues, kinds[i])
+		}
+		return map[string]any{"id": id, "content": content, "internal_chat_message_metadata_passthrough": map[string]any{"content_item_kinds": kindValues, "content_item_metadata": metadata}}
+	}
+	turn := agenttrace.Turn{}
+	first := message("human-1", []string{"Internal instructions", "Check the build"}, []string{"agents_md.instructions", "user.text"}, []string{"agents_md", "user"})
+	recordUserMessage(&turn, first)
+	recordUserMessage(&turn, first)
+	recordUserMessage(&turn, message("machine-1", []string{"Continue the goal"}, []string{"goal.internal_context"}, []string{"harness"}))
+	recordUserMessage(&turn, message("human-2", []string{"Check the build"}, []string{"user.text"}, []string{"user"}))
+	if got, want := turn.InputText(), "Check the build\n\nCheck the build"; got != want {
+		t.Fatalf("human input = %q, want distinct human submissions %q", got, want)
+	}
+	if len(turn.ModelMessages) != 3 || !strings.Contains(strings.Join(turn.ModelMessages, "\n"), "Continue the goal") {
+		t.Fatal("model context must retain internal instructions without duplicating a source message")
+	}
+	quoted := `<codex_internal_context source="goal">Please explain this example</codex_internal_context>`
+	recordUserMessage(&turn, message("human-3", []string{quoted}, []string{"user.text"}, []string{"user"}))
+	if !strings.Contains(turn.InputText(), quoted) {
+		t.Fatal("explicit human authorship must preserve a quoted harness envelope")
+	}
+	before := turn.InputText()
+	recordUserMessage(&turn, message("unknown-1", []string{"Unknown"}, []string{"new.kind"}, []string{"unknown"}))
+	recordUserMessage(&turn, message("machine-2", []string{"Internal"}, []string{"user.text"}, []string{"harness"}))
+	if turn.InputText() != before {
+		t.Fatal("unknown or explicitly non-human provenance became human Input")
+	}
+}
+
 func validateCompletedAndIncompleteTurns(t *testing.T) {
 	t.Helper()
 	turns, err := ParseTurns(filepath.Join("..", "..", "testdata", "sources", "codex", "complete-tools.jsonl"))
@@ -256,6 +293,103 @@ func TestStableIDs(t *testing.T) {
 	second := agenttrace.StableSpanID("prefix", traceID, "turn", "b")
 	if len(first) != 16 || first == second {
 		t.Fatalf("span ids not distinct and stable: %q %q", first, second)
+	}
+}
+
+// TEST-HUMAN-INPUT: selection uses the recorded execution identity, before
+// retaining any model/tool bodies, even when task_started arrives first.
+func TestAttributedExecutionUsesExplicitContextIdentity(t *testing.T) {
+	const explicit = "66666666666666666666666666666666"
+	generated := agenttrace.StableTraceID(agenttrace.ProviderCodex, "context-session", "e1")
+	for _, excluded := range []string{"", generated, explicit} {
+		t.Run("excluded="+excluded, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			source := strings.Join([]string{
+				`{"timestamp":"2026-11-13T12:00:00Z","type":"session_meta","payload":{"id":"context-session"}}`,
+				`{"timestamp":"2026-11-13T12:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"e1","turn_attribution":{"turn_trigger":"user","root_turn_id":"e1"}}}`,
+				`{"timestamp":"2026-11-13T12:00:02Z","type":"turn_context","payload":{"turn_id":"e1","trace_id":"` + explicit + `","model":"context-model","cwd":"/tmp/context"}}`,
+				`{"timestamp":"2026-11-13T12:00:03Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"retained work"}}`,
+				`{"timestamp":"2026-11-13T12:00:04Z","type":"turn_context","payload":{"turn_id":"e1"}}`,
+				`{"timestamp":"2026-11-13T12:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"e1"}}`,
+				"",
+			}, "\n")
+			if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			retained := map[string]int{}
+			turns, err := parseTurnsFiltered(path, func(id string) bool { return id != excluded }, func(id string) { retained[id]++ })
+			if err != nil {
+				t.Fatal(err)
+			}
+			executions := 0
+			for _, turn := range turns {
+				if turn.RequestRoot {
+					continue
+				}
+				executions++
+				if turn.TraceID != explicit || len(turn.Observations) != 1 || !turn.Completed || turn.StartTS != "2026-11-13T12:00:01Z" || turn.Model != "context-model" {
+					t.Fatalf("explicit context did not preserve execution: %+v", turn)
+				}
+			}
+			want := 1
+			if excluded == explicit {
+				want = 0
+			}
+			if executions != want || retained[generated] != 0 || (excluded == explicit && retained[explicit] != 0) {
+				t.Fatalf("executions=%d want=%d retained=%v", executions, want, retained)
+			}
+		})
+	}
+}
+
+// TEST-HUMAN-INPUT: context-free sources retain their stable fallback identity;
+// a later contradictory identity cannot silently bypass a processed checkpoint.
+func TestAttributedExecutionFallbackAndIdentityConflict(t *testing.T) {
+	base := []string{
+		`{"timestamp":"2026-11-13T12:00:00Z","type":"session_meta","payload":{"id":"context-session"}}`,
+		`{"timestamp":"2026-11-13T12:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"e1","turn_attribution":{"turn_trigger":"user","root_turn_id":"e1"}}}`,
+	}
+	for _, complete := range []bool{false, true} {
+		for _, selected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("complete=%t/selected=%t", complete, selected), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "rollout.jsonl")
+				rows := append([]string{}, base...)
+				if complete {
+					rows = append(rows, `{"timestamp":"2026-11-13T12:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"e1"}}`)
+				}
+				write := func() {
+					t.Helper()
+					if err := os.WriteFile(path, []byte(strings.Join(rows, "\n")+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				write()
+				include := func(string) bool { return selected }
+				turns, err := ParseTurnsFiltered(path, include)
+				if err != nil {
+					t.Fatal(err)
+				}
+				executions := 0
+				for _, turn := range turns {
+					if !turn.RequestRoot {
+						executions++
+						if turn.TraceID != agenttrace.StableTraceID(agenttrace.ProviderCodex, "context-session", "e1") || turn.Completed != complete {
+							t.Fatalf("fallback execution changed: %+v", turn)
+						}
+					}
+				}
+				if (executions == 1) != selected || executions > 1 {
+					t.Fatalf("executions=%d selected=%t", executions, selected)
+				}
+				if complete {
+					rows = append(rows, `{"timestamp":"2026-11-13T12:00:03Z","type":"turn_context","payload":{"turn_id":"e1","trace_id":"66666666666666666666666666666666"}}`)
+					write()
+					if turns, err = ParseTurnsFiltered(path, include); err == nil || len(turns) != 0 {
+						t.Fatal("contradictory identity silently changed a selected/processed execution")
+					}
+				}
+			})
+		}
 	}
 }
 

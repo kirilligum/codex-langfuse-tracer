@@ -20,6 +20,7 @@ type State struct {
 	PendingScores     map[string]string       `json:"pending_scores,omitempty"`
 	Queue             []QueueRequest          `json:"queue,omitempty"`
 	TurnProgress      map[string]TurnProgress `json:"turn_progress,omitempty"`
+	RequestCutoverNS  int64                   `json:"request_cutover_ns,omitempty"`
 }
 
 type TurnProgress struct {
@@ -27,6 +28,8 @@ type TurnProgress struct {
 	ModelCallCount   int    `json:"model_call_count"`
 	InputEmitted     bool   `json:"input_emitted,omitempty"`
 	Environment      string `json:"environment"`
+	HumanInputCount  int    `json:"human_input_count,omitempty"`
+	ExecutionEmitted bool   `json:"execution_emitted,omitempty"`
 }
 
 type QueueRequest struct {

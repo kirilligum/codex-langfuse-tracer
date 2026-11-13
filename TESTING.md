@@ -66,6 +66,24 @@ The matrix uses the same version 3 source/state for processed history followed b
 
 ## Local live acceptance
 
+The attributed-request regression tests run synthetic source records through the
+parser, watcher, real span projection, and serialized checkpoint reloads:
+
+```sh
+go test ./internal/watch -run '^TestHumanRequest' -count=1
+```
+
+They cover human-only input, goal continuations, steering, explicit recovery,
+cancellation without an answer, a lost acknowledgement with unchanged retry
+identities, late tool results after cancellation, and cutover preserving accepted
+legacy prefixes. Late human input is checked before and after root acceptance,
+through lost acknowledgements and checkpoint reloads, without reopening the root
+or changing usage. Parser checks cover explicit context IDs, processed-body
+filtering, context-free fallback and conflicting identities. These tests qualify
+producer behavior. They do not establish
+duplicate-safe backend aggregation; that requires a real lost-acknowledgement
+probe with readback of both unique span identities and usage totals.
+
 These checks use the installed local receiver and the real Laminar backend. Do not print credentials, transcript contents, prompt text, state JSON, or raw service logs in issue comments.
 
 1. Run `~/.codex/bin/codex-langfuse-exporter --doctor`. Require authenticated local receiver acceptance, Collector health/metrics endpoints, an active watcher, an empty queue, no pending legacy checkpoints, and no recent watcher errors.
