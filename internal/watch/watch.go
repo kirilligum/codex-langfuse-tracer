@@ -333,7 +333,10 @@ func processTurn(ctx context.Context, opts ScanOptions, state exportstate.State,
 		return state, 0, false, nil
 	}
 	if progress.ObservationCount < 0 || progress.ModelCallCount < 0 || progress.ObservationCount > len(turn.Observations) || progress.ModelCallCount > len(turn.ModelCalls) {
-		return state, 0, false, fmt.Errorf("observation prefix shrank for trace %s", traceID)
+		// A fork can carry a shorter copy of an already observed parent turn.
+		// Preserve its checkpoint and let other turns and sources make progress.
+		fmt.Fprintf(writerOrDiscard(opts.Stderr), "ERROR: observation_prefix_shrank trace=%s path=%s observations=%d checkpoint_observations=%d model_calls=%d checkpoint_model_calls=%d checkpoint_preserved=true\n", traceID, sourcePath, len(turn.Observations), progress.ObservationCount, len(turn.ModelCalls), progress.ModelCallCount)
+		return state, 0, true, nil
 	}
 	if progress.Environment != "" {
 		environment = progress.Environment

@@ -94,6 +94,8 @@ Delivery is at-least-once. A timeout after Collector acceptance, or process term
 
 An incomplete discovery, unreadable source, source change during a scan, or failed export keeps the scan watermark in place. Healthy turns in the same scan can still be checkpointed. The watcher prints an `ERROR: watch_scan_incomplete ... watermark_advanced=false` diagnostic even in quiet mode. The doctor reports a queued hook request, a pending legacy checkpoint, an unavailable receiver/Collector endpoint, an inactive watcher, or recent watcher errors as unhealthy.
 
+A forked rollout may contain a shorter copy of a parent turn whose later steps have already been accepted. The watcher reports `observation_prefix_shrank` with the source path and observed/checkpoint counts, preserves that turn's checkpoint, and continues processing other turns. It leaves the source eligible for retry and does not replay accepted steps or reset state to conceal the mismatch.
+
 `span_export_succeeded ... checkpoint=pending` means the local receiver accepted a batch and the processed checkpoint is not yet durable. `span_checkpoint_unconfirmed` means checkpoint persistence failed after receiver acceptance, so replay is possible. These local diagnostics do not prove the backend has indexed the trace.
 
 Discovery uses visible paths and modification time. A source file restored after its mtime falls behind an advanced watermark is outside automatic recovery. A rewrite that preserves file identity, size, and mtime is also not detectable. Keep source transcripts intact and use the normal watcher recovery path; do not delete state to clear a warning.
